@@ -1,0 +1,215 @@
+"""HUD, cards, faction info panels, phase indicators, event log."""
+
+import pygame
+from shared.constants import (
+    Phase, AgendaType, IdolType, FACTION_COLORS, FACTION_DISPLAY_NAMES,
+)
+
+
+class Button:
+    def __init__(self, rect: pygame.Rect, text: str, color=(80, 80, 120),
+                 text_color=(255, 255, 255), hover_color=(100, 100, 150)):
+        self.rect = rect
+        self.text = text
+        self.color = color
+        self.text_color = text_color
+        self.hover_color = hover_color
+        self.hovered = False
+        self.enabled = True
+
+    def draw(self, surface: pygame.Surface, font: pygame.font.Font):
+        color = self.hover_color if self.hovered else self.color
+        if not self.enabled:
+            color = (60, 60, 60)
+        pygame.draw.rect(surface, color, self.rect, border_radius=6)
+        pygame.draw.rect(surface, (200, 200, 200), self.rect, 1, border_radius=6)
+        text_surf = font.render(self.text, True, self.text_color if self.enabled else (120, 120, 120))
+        text_rect = text_surf.get_rect(center=self.rect.center)
+        surface.blit(text_surf, text_rect)
+
+    def update(self, mouse_pos):
+        self.hovered = self.rect.collidepoint(mouse_pos)
+
+    def clicked(self, mouse_pos) -> bool:
+        return self.enabled and self.rect.collidepoint(mouse_pos)
+
+
+class UIRenderer:
+    """Draws all HUD and UI elements."""
+
+    def __init__(self):
+        self._font = None
+        self._small_font = None
+        self._title_font = None
+
+    def _get_font(self, size=16):
+        return pygame.font.SysFont("consolas", size)
+
+    @property
+    def font(self):
+        if self._font is None:
+            self._font = self._get_font(16)
+        return self._font
+
+    @property
+    def small_font(self):
+        if self._small_font is None:
+            self._small_font = self._get_font(13)
+        return self._small_font
+
+    @property
+    def title_font(self):
+        if self._title_font is None:
+            self._title_font = self._get_font(24)
+        return self._title_font
+
+    def draw_hud(self, surface: pygame.Surface, phase: str, turn: int,
+                 spirits: dict, my_spirit_id: str):
+        """Draw the top HUD bar: phase, turn, VP totals."""
+        bar_rect = pygame.Rect(0, 0, surface.get_width(), 40)
+        pygame.draw.rect(surface, (20, 20, 30), bar_rect)
+        pygame.draw.line(surface, (60, 60, 80), (0, 40), (surface.get_width(), 40))
+
+        phase_text = self.font.render(f"Turn {turn} | {phase.replace('_', ' ').title()}", True, (200, 200, 220))
+        surface.blit(phase_text, (10, 10))
+
+        # VP display
+        x = 300
+        for sid, spirit in spirits.items():
+            color = (255, 255, 100) if sid == my_spirit_id else (180, 180, 200)
+            name = spirit.get("name", sid[:6])
+            vp = spirit.get("victory_points", 0)
+            text = self.small_font.render(f"{name}: {vp}VP", True, color)
+            surface.blit(text, (x, 12))
+            x += text.get_width() + 20
+
+    def draw_faction_panel(self, surface: pygame.Surface, faction_data: dict,
+                           x: int, y: int, width: int = 220):
+        """Draw faction info panel."""
+        if not faction_data:
+            return
+
+        fid = faction_data.get("faction_id", "")
+        color = tuple(faction_data.get("color", (150, 150, 150)))
+        gold = faction_data.get("gold", 0)
+        territories = faction_data.get("territories", [])
+        regard = faction_data.get("regard", {})
+        modifiers = faction_data.get("change_modifiers", {})
+        possessing = faction_data.get("possessing_spirit")
+        presence = faction_data.get("presence_spirit")
+
+        panel_h = 200 + len(regard) * 18
+        panel_rect = pygame.Rect(x, y, width, panel_h)
+        pygame.draw.rect(surface, (30, 30, 40), panel_rect, border_radius=4)
+        pygame.draw.rect(surface, color, panel_rect, 2, border_radius=4)
+
+        dy = y + 8
+        name = FACTION_DISPLAY_NAMES.get(fid, fid)
+        name_text = self.font.render(name, True, color)
+        surface.blit(name_text, (x + 10, dy))
+        dy += 24
+
+        info_lines = [
+            f"Gold: {gold}",
+            f"Territories: {len(territories)}",
+            f"Possessing: {possessing or 'none'}",
+            f"Presence: {presence or 'none'}",
+        ]
+        for line in info_lines:
+            text = self.small_font.render(line, True, (180, 180, 200))
+            surface.blit(text, (x + 10, dy))
+            dy += 18
+
+        if regard:
+            dy += 4
+            text = self.small_font.render("Regard:", True, (150, 150, 170))
+            surface.blit(text, (x + 10, dy))
+            dy += 18
+            for other_fid, val in regard.items():
+                r_color = (100, 255, 100) if val > 0 else (255, 100, 100) if val < 0 else (180, 180, 200)
+                other_name = FACTION_DISPLAY_NAMES.get(other_fid, other_fid)
+                text = self.small_font.render(f"  {other_name}: {val:+d}", True, r_color)
+                surface.blit(text, (x + 10, dy))
+                dy += 18
+
+        if any(v > 0 for v in modifiers.values()):
+            dy += 4
+            text = self.small_font.render("Modifiers:", True, (150, 150, 170))
+            surface.blit(text, (x + 10, dy))
+            dy += 18
+            for mod, val in modifiers.items():
+                if val > 0:
+                    text = self.small_font.render(f"  {mod}: +{val}", True, (150, 200, 255))
+                    surface.blit(text, (x + 10, dy))
+                    dy += 18
+
+    def draw_card_hand(self, surface: pygame.Surface, hand: list[dict],
+                       selected_index: int, x: int, y: int) -> list[pygame.Rect]:
+        """Draw clickable agenda cards. Returns list of card rects."""
+        rects = []
+        card_w, card_h = 100, 140
+        spacing = 10
+
+        for i, card in enumerate(hand):
+            cx = x + i * (card_w + spacing)
+            rect = pygame.Rect(cx, y, card_w, card_h)
+            rects.append(rect)
+
+            bg_color = (60, 80, 120) if i == selected_index else (40, 40, 55)
+            border_color = (200, 200, 255) if i == selected_index else (80, 80, 100)
+
+            pygame.draw.rect(surface, bg_color, rect, border_radius=6)
+            pygame.draw.rect(surface, border_color, rect, 2, border_radius=6)
+
+            agenda_type = card.get("agenda_type", "?")
+            name_text = self.font.render(agenda_type.title(), True, (220, 220, 240))
+            surface.blit(name_text, (cx + card_w // 2 - name_text.get_width() // 2, y + 20))
+
+            # Short description
+            descriptions = {
+                "steal": "Steal gold\nfrom neighbors",
+                "bond": "Improve\nregard",
+                "trade": "Gain gold\nfrom trade",
+                "expand": "Claim new\nterritory",
+                "change": "Modify an\nagenda type",
+            }
+            desc = descriptions.get(agenda_type, "")
+            for j, line in enumerate(desc.split("\n")):
+                desc_text = self.small_font.render(line, True, (160, 160, 180))
+                surface.blit(desc_text, (cx + card_w // 2 - desc_text.get_width() // 2, y + 60 + j * 16))
+
+        return rects
+
+    def draw_event_log(self, surface: pygame.Surface, events: list[str],
+                       x: int, y: int, width: int, height: int):
+        """Draw scrollable event log."""
+        panel_rect = pygame.Rect(x, y, width, height)
+        pygame.draw.rect(surface, (20, 20, 30), panel_rect, border_radius=4)
+        pygame.draw.rect(surface, (60, 60, 80), panel_rect, 1, border_radius=4)
+
+        header = self.small_font.render("Event Log", True, (150, 150, 170))
+        surface.blit(header, (x + 8, y + 4))
+
+        clip_rect = pygame.Rect(x + 4, y + 22, width - 8, height - 26)
+        surface.set_clip(clip_rect)
+
+        dy = y + 22
+        # Show most recent events first
+        visible_events = events[-((height - 26) // 16):]
+        for event_text in visible_events:
+            text = self.small_font.render(event_text, True, (160, 160, 180))
+            surface.blit(text, (x + 8, dy))
+            dy += 16
+
+        surface.set_clip(None)
+
+    def draw_waiting_overlay(self, surface: pygame.Surface, waiting_for: list[str],
+                             spirits: dict):
+        """Draw overlay showing who we're waiting for."""
+        if not waiting_for:
+            return
+        names = [spirits.get(sid, {}).get("name", sid[:6]) for sid in waiting_for]
+        text = f"Waiting for: {', '.join(names)}"
+        text_surf = self.font.render(text, True, (200, 200, 100))
+        x = surface.get_width() // 2 - text_surf.get_width() // 2
+        surface.blit(text_surf, (x, 50))

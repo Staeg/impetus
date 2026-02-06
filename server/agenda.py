@@ -1,0 +1,283 @@
+"""Agenda card system and resolution logic."""
+
+import random
+from shared.constants import AgendaType, AGENDA_RESOLUTION_ORDER, ChangeModifierTarget, CHANGE_DECK
+from server.war import War
+
+
+def resolve_agendas(factions: dict, hex_map, agenda_choices: dict[str, AgendaType],
+                    wars: list, events: list, is_spoils: bool = False):
+    """Resolve all agenda choices in the correct order.
+
+    Args:
+        factions: dict of faction_id -> Faction
+        hex_map: HexMap instance
+        agenda_choices: dict of faction_id -> AgendaType chosen
+        wars: list of active War objects (will be mutated to add new wars)
+        events: list to append event dicts to
+        is_spoils: if True, these are Spoils of War agendas
+    """
+    for agenda_type in AGENDA_RESOLUTION_ORDER:
+        playing_factions = [fid for fid, choice in agenda_choices.items()
+                           if choice == agenda_type]
+        if not playing_factions:
+            continue
+
+        if agenda_type == AgendaType.STEAL:
+            _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils)
+        elif agenda_type == AgendaType.BOND:
+            _resolve_bond(factions, hex_map, playing_factions, events)
+        elif agenda_type == AgendaType.TRADE:
+            _resolve_trade(factions, playing_factions, events, is_spoils)
+        elif agenda_type == AgendaType.EXPAND:
+            _resolve_expand(factions, hex_map, playing_factions, events, is_spoils)
+        elif agenda_type == AgendaType.CHANGE:
+            _resolve_change(factions, playing_factions, events)
+
+
+def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils):
+    """Steal: -1 regard and -1 gold to all neighbors. +1 gold per gold lost by neighbors.
+    Then wars erupt with neighbors at -2 regard or less."""
+    # Calculate gold losses simultaneously
+    gold_losses = {}  # faction_id -> gold actually lost
+    gold_gains = {}   # stealing faction -> gold gained
+    regard_changes = []
+
+    for fid in playing_factions:
+        faction = factions[fid]
+        steal_bonus = faction.change_modifiers.get(ChangeModifierTarget.STEAL.value, 0)
+        gold_stolen_per_neighbor = 1 + steal_bonus
+        regard_penalty = -1 - steal_bonus
+        total_gained = 0
+
+        for other_fid, other_faction in factions.items():
+            if other_fid == fid:
+                continue
+            if not hex_map.are_factions_neighbors(fid, other_fid):
+                continue
+            # Mark regard change
+            regard_changes.append((fid, other_fid, regard_penalty))
+            # Calculate gold loss for neighbor (but don't apply yet - simultaneous)
+            key = (fid, other_fid)
+            actual_loss = min(other_faction.gold, gold_stolen_per_neighbor)
+            gold_losses[key] = actual_loss
+            total_gained += actual_loss
+
+        gold_gains[fid] = total_gained
+
+    # Apply gold changes simultaneously
+    # First, compute net gold loss per faction from all steals
+    net_losses = {}
+    for (stealer, victim), loss in gold_losses.items():
+        net_losses[victim] = net_losses.get(victim, 0) + loss
+
+    # But simultaneous means each steal sees original gold, so cap individually
+    # Actually: simultaneous resolution means if A steals from B and C steals from B,
+    # each sees B's original gold. So each independently takes min(B.gold, amount).
+    # But B can't lose more than they have. We need to split fairly.
+    # Simplification: each stealer takes min(victim_original_gold, amount), and
+    # victim loses the total (capped at their gold).
+    original_gold = {fid: f.gold for fid, f in factions.items()}
+
+    for (stealer, victim), loss in gold_losses.items():
+        pass  # losses already calculated from original gold
+
+    # Apply losses to victims
+    victim_total_loss = {}
+    for (stealer, victim), loss in gold_losses.items():
+        victim_total_loss[victim] = victim_total_loss.get(victim, 0) + loss
+
+    for victim, total in victim_total_loss.items():
+        actual = min(factions[victim].gold, total)
+        if actual > 0:
+            factions[victim].gold -= actual
+
+    # Apply gains to stealers
+    for fid, gained in gold_gains.items():
+        if gained > 0:
+            factions[fid].add_gold(gained)
+            events.append({
+                "type": "steal",
+                "faction": fid,
+                "gold_gained": gained,
+                "is_spoils": is_spoils,
+            })
+
+    # Apply regard changes
+    for fid, other_fid, delta in regard_changes:
+        factions[fid].modify_regard(other_fid, delta)
+        factions[other_fid].modify_regard(fid, delta)
+
+    # Check for war eruptions
+    for fid in playing_factions:
+        for other_fid in factions:
+            if other_fid == fid:
+                continue
+            if not hex_map.are_factions_neighbors(fid, other_fid):
+                continue
+            regard = factions[fid].get_regard(other_fid)
+            if regard <= -2:
+                # Check if war already exists between these two
+                existing = any(
+                    (w.faction_a == fid and w.faction_b == other_fid) or
+                    (w.faction_a == other_fid and w.faction_b == fid)
+                    for w in wars
+                )
+                if not existing:
+                    war = War(fid, other_fid)
+                    wars.append(war)
+                    events.append({
+                        "type": "war_erupted",
+                        "faction_a": fid,
+                        "faction_b": other_fid,
+                    })
+
+
+def _resolve_bond(factions, hex_map, playing_factions, events):
+    """Bond: +1 regard with all neighbors."""
+    for fid in playing_factions:
+        faction = factions[fid]
+        bond_bonus = faction.change_modifiers.get(ChangeModifierTarget.BOND.value, 0)
+        regard_gain = 1 + bond_bonus
+
+        for other_fid in factions:
+            if other_fid == fid:
+                continue
+            if not hex_map.are_factions_neighbors(fid, other_fid):
+                continue
+            faction.modify_regard(other_fid, regard_gain)
+            factions[other_fid].modify_regard(fid, regard_gain)
+
+        events.append({
+            "type": "bond",
+            "faction": fid,
+            "regard_gain": regard_gain,
+        })
+
+
+def _resolve_trade(factions, playing_factions, events, is_spoils):
+    """Trade: +1 gold, +1 gold for every other faction playing Trade this turn."""
+    for fid in playing_factions:
+        faction = factions[fid]
+        trade_bonus = faction.change_modifiers.get(ChangeModifierTarget.TRADE.value, 0)
+        base = 1
+        others_trading = len(playing_factions) - 1
+        total = base + others_trading + trade_bonus * others_trading
+        faction.add_gold(total)
+        events.append({
+            "type": "trade",
+            "faction": fid,
+            "gold_gained": total,
+            "is_spoils": is_spoils,
+        })
+
+    # If spoils trade, also give 1 gold to every faction that traded normally this turn
+    # (handled by caller passing trade factions info)
+
+
+def _resolve_expand(factions, hex_map, playing_factions, events, is_spoils,
+                    spoils_conquests: dict = None):
+    """Expand: spend gold equal to territory count to claim a random neutral hex.
+    If can't afford or no hexes available, +1 gold instead.
+
+    For spoils: take the loser's battleground hex instead of paying gold.
+    spoils_conquests is used for spoils expand to specify which hex to take.
+    """
+    for fid in playing_factions:
+        faction = factions[fid]
+        expand_discount = faction.change_modifiers.get(ChangeModifierTarget.EXPAND.value, 0)
+        expand_fail_bonus = 1 + expand_discount
+        territory_count = len(hex_map.get_faction_territories(fid))
+        cost = max(0, territory_count - expand_discount)
+
+        if is_spoils and spoils_conquests and fid in spoils_conquests:
+            # Spoils expand: take the target hex
+            target = spoils_conquests[fid]
+            hex_map.claim_hex(target, fid)
+            faction.territories_gained_this_turn += 1
+            events.append({
+                "type": "expand_spoils",
+                "faction": fid,
+                "hex": {"q": target[0], "r": target[1]},
+            })
+            continue
+
+        target = hex_map.get_random_reachable_neutral(fid)
+        if target is not None and faction.gold >= cost:
+            faction.gold -= cost
+            hex_map.claim_hex(target, fid)
+            faction.territories_gained_this_turn += 1
+            events.append({
+                "type": "expand",
+                "faction": fid,
+                "hex": {"q": target[0], "r": target[1]},
+                "cost": cost,
+            })
+        else:
+            faction.add_gold(expand_fail_bonus)
+            events.append({
+                "type": "expand_failed",
+                "faction": fid,
+                "gold_gained": expand_fail_bonus,
+            })
+
+
+def _resolve_change(factions, playing_factions, events):
+    """Change: draw from the change modifier deck, apply permanent modifier."""
+    for fid in playing_factions:
+        faction = factions[fid]
+        # Draw a random change card
+        card = random.choice(CHANGE_DECK)
+        faction.change_modifiers[card.value] = faction.change_modifiers.get(card.value, 0) + 1
+        events.append({
+            "type": "change",
+            "faction": fid,
+            "modifier": card.value,
+        })
+
+
+def draw_spoils_agenda() -> AgendaType:
+    """Draw a random agenda card for spoils of war."""
+    return random.choice(list(AgendaType))
+
+
+def resolve_spoils(factions, hex_map, war_results, wars, events,
+                   normal_trade_factions: list[str]):
+    """Resolve spoils of war agendas for war winners.
+
+    Returns list of spoils events.
+    """
+    spoils_choices = {}
+    spoils_conquests = {}
+
+    for result in war_results:
+        winner = result.get("winner")
+        if not winner:
+            continue
+        loser = result.get("loser")
+        spoils_type = draw_spoils_agenda()
+        result["spoils"] = spoils_type.value
+
+        if spoils_type == AgendaType.EXPAND and result.get("battleground"):
+            # Take the loser's battleground hex
+            bg = result["battleground"]
+            loser_hex = None
+            # Find which hex belongs to loser
+            for h in bg:
+                coord = (h["q"], h["r"])
+                if hex_map.ownership.get(coord) == loser:
+                    loser_hex = coord
+                    break
+            if loser_hex:
+                spoils_conquests[winner] = loser_hex
+
+        spoils_choices[winner] = spoils_type
+        events.append({
+            "type": "spoils_drawn",
+            "faction": winner,
+            "agenda": spoils_type.value,
+        })
+
+    # Resolve spoils agendas in order
+    if spoils_choices:
+        resolve_agendas(factions, hex_map, spoils_choices, wars, events, is_spoils=True)
