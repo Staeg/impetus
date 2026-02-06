@@ -36,7 +36,8 @@ class HexRenderer:
     def draw_hex_grid(self, surface: pygame.Surface, hex_ownership: dict,
                       camera, screen_w: int, screen_h: int,
                       idols: list = None, wars: list = None,
-                      selected_hex=None, highlight_hexes=None):
+                      selected_hex=None, highlight_hexes=None,
+                      spirit_index_map: dict = None):
         """Draw the complete hex map.
 
         Args:
@@ -46,6 +47,7 @@ class HexRenderer:
             wars: list of WarState objects
             selected_hex: (q, r) tuple to highlight
             highlight_hexes: set of (q, r) tuples to highlight (e.g., valid targets)
+            spirit_index_map: dict of spirit_id -> player index for idol positioning
         """
         font = self._get_font()
 
@@ -100,28 +102,30 @@ class HexRenderer:
 
         # Draw idols
         if idols:
-            self._draw_idols(surface, idols, camera, screen_w, screen_h)
+            self._draw_idols(surface, idols, camera, screen_w, screen_h,
+                             spirit_index_map or {})
 
-    def _draw_idols(self, surface, idols, camera, screen_w, screen_h):
-        """Draw idol icons on their hexes."""
+    def _draw_idols(self, surface, idols, camera, screen_w, screen_h,
+                    spirit_index_map):
+        """Draw idol icons on their hexes, offset radially by owner."""
         font = self._get_font(12)
-        # Group idols by hex
-        by_hex = {}
-        for idol in idols:
-            key = (idol.position.q, idol.position.r)
-            by_hex.setdefault(key, []).append(idol)
+        dist = self.hex_size / 2  # halfway to hex vertex
 
-        for (q, r), hex_idols in by_hex.items():
-            wx, wy = axial_to_pixel(q, r, self.hex_size)
-            for i, idol in enumerate(hex_idols):
-                offset_x = (i - len(hex_idols) / 2 + 0.5) * 10
-                ix, iy = camera.world_to_screen(wx + offset_x, wy, screen_w, screen_h)
-                idol_color = IDOL_COLORS.get(idol.type, (255, 255, 255))
-                pygame.draw.circle(surface, idol_color, (ix, iy), max(4, int(5 * camera.zoom)))
-                # Draw letter
-                symbol = IDOL_SYMBOLS.get(idol.type, "?")
-                text = font.render(symbol, True, (0, 0, 0))
-                surface.blit(text, (ix - text.get_width() // 2, iy - text.get_height() // 2))
+        for idol in idols:
+            wx, wy = axial_to_pixel(idol.position.q, idol.position.r, self.hex_size)
+            # Radial offset based on player index
+            player_idx = spirit_index_map.get(getattr(idol, 'owner_spirit', None), 0)
+            angle = math.radians(-90 + player_idx * 60)
+            offset_x = math.cos(angle) * dist
+            offset_y = math.sin(angle) * dist
+            ix, iy = camera.world_to_screen(wx + offset_x, wy + offset_y,
+                                            screen_w, screen_h)
+            idol_color = IDOL_COLORS.get(idol.type, (255, 255, 255))
+            pygame.draw.circle(surface, idol_color, (ix, iy), max(4, int(5 * camera.zoom)))
+            # Draw letter
+            symbol = IDOL_SYMBOLS.get(idol.type, "?")
+            text = font.render(symbol, True, (0, 0, 0))
+            surface.blit(text, (ix - text.get_width() // 2, iy - text.get_height() // 2))
 
     def get_hex_at_screen(self, sx: int, sy: int, camera, screen_w: int, screen_h: int,
                           valid_hexes: set = None) -> tuple[int, int] | None:

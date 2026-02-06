@@ -294,6 +294,9 @@ class GameServer:
         # Now at a phase that needs player input
         if gs.phase in (Phase.VAGRANT_PHASE, Phase.AGENDA_PHASE):
             await self._send_phase_options(room)
+            # If no spirit actually needs input, resolve immediately
+            if gs.all_inputs_received():
+                await self._resolve_and_advance(room)
 
     async def _broadcast_phase_result(self, room: GameRoom, events: list):
         gs = room.game_state

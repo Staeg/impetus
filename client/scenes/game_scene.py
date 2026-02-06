@@ -429,6 +429,7 @@ class GameScene:
                         'q': idol_data['position']['q'],
                         'r': idol_data['position']['r'],
                     })(),
+                    'owner_spirit': idol_data.get('owner_spirit'),
                 })())
 
         # Parse wars for rendering
@@ -448,12 +449,18 @@ class GameScene:
         if self.vagrant_action == "place_idol":
             highlight = {h for h, o in self.hex_ownership.items() if o is None}
 
+        # Build spirit_id -> player_index mapping (sorted for stability)
+        spirit_index_map = {
+            sid: i for i, sid in enumerate(sorted(self.spirits.keys()))
+        }
+
         self.hex_renderer.draw_hex_grid(
             screen, self.hex_ownership,
             self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT,
             idols=render_idols, wars=render_wars,
             selected_hex=self.selected_hex,
             highlight_hexes=highlight,
+            spirit_index_map=spirit_index_map,
         )
 
         # Draw HUD
