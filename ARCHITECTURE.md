@@ -93,9 +93,9 @@ Axial coordinate system (flat-top hexagons):
 ```
 
 - `shared/hex_utils.py` - Pure math: coordinate conversions (axial ↔ pixel ↔ cube), neighbor directions, distance, line drawing, ring/spiral iteration. Used by both client (for click-to-hex picking) and server.
-- `server/hex_map.py` - Game-specific map state: generates the side-7 hex grid, tracks ownership (faction or neutral), idol placement per hex, and provides queries like "neutral hexes reachable by faction X" or "border hexes between factions X and Y."
+- `server/hex_map.py` - Game-specific map state: generates the side-5 hex grid, tracks ownership (faction or neutral), idol placement per hex, and provides queries like "neutral hexes reachable by faction X" or "border hexes between factions X and Y."
 
-The six factions start on the six hexes surrounding center (0,0). Center is empty/neutral. All other hexes start neutral.
+The six factions start on the six hexes surrounding center (0,0). Center is empty/neutral. All other hexes start neutral. During setup, each faction draws and resolves a random Change modifier, then a single autopilot turn is played where all factions draw and resolve a random agenda card without player input.
 
 ### 2. Game State Machine (`server/game_state.py`)
 

@@ -3,7 +3,7 @@
 from enum import Enum
 
 # Map
-MAP_SIDE_LENGTH = 7
+MAP_SIDE_LENGTH = 5
 
 # Factions
 FACTION_NAMES = ["mountain", "mesa", "sand", "plains", "river", "jungle"]

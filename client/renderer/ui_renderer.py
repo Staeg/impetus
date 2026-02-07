@@ -90,7 +90,7 @@ class UIRenderer:
             # Render faction tag in faction color
             if faction_id:
                 faction_color = FACTION_COLORS.get(faction_id, (150, 150, 150))
-                faction_tag = f" [{FACTION_DISPLAY_NAMES.get(faction_id, faction_id)[:3].upper()}]"
+                faction_tag = f" [{FACTION_DISPLAY_NAMES.get(faction_id, faction_id)}]"
                 tag_surf = self.small_font.render(faction_tag, True, faction_color)
                 surface.blit(tag_surf, (x, 12))
                 x += tag_surf.get_width()
@@ -127,8 +127,8 @@ class UIRenderer:
         war_lookup = {}
         if wars:
             for war in wars:
-                fa_abbr = FACTION_DISPLAY_NAMES.get(war.faction_a, war.faction_a)[:3].upper()
-                fb_abbr = FACTION_DISPLAY_NAMES.get(war.faction_b, war.faction_b)[:3].upper()
+                fa_abbr = FACTION_DISPLAY_NAMES.get(war.faction_a, war.faction_a)
+                fb_abbr = FACTION_DISPLAY_NAMES.get(war.faction_b, war.faction_b)
                 war_lookup.setdefault(war.faction_a, []).append((fb_abbr, war.is_ripe))
                 war_lookup.setdefault(war.faction_b, []).append((fa_abbr, war.is_ripe))
 
@@ -146,8 +146,8 @@ class UIRenderer:
             bg = tuple(max(c // 5, 8) for c in fc)
             pygame.draw.rect(surface, bg, pygame.Rect(cx + 3, strip_y, cell_w - 3, strip_h))
 
-            # Faction abbreviation (3 chars)
-            abbr = FACTION_DISPLAY_NAMES.get(fid, fid)[:3].upper()
+            # Faction name
+            abbr = FACTION_DISPLAY_NAMES.get(fid, fid)
             abbr_surf = self.small_font.render(abbr, True, fc)
             surface.blit(abbr_surf, (cx + 6, strip_y + 4))
 
@@ -177,7 +177,7 @@ class UIRenderer:
             presence_id = fd.get("presence_spirit") if isinstance(fd, dict) else getattr(fd, "presence_spirit", None)
             if presence_id:
                 p_name = spirits.get(presence_id, {}).get("name", presence_id[:6])
-                p_surf = self.small_font.render(f"P:{p_name}", True, (140, 200, 180))
+                p_surf = self.small_font.render(f"Presence: {p_name}", True, (140, 200, 180))
                 surface.blit(p_surf, (cx + cell_w - p_surf.get_width() - 6, strip_y + 22))
 
     def draw_faction_panel(self, surface: pygame.Surface, faction_data: dict,

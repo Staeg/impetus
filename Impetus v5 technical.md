@@ -1,18 +1,20 @@
 ## Impetus v5 technical
 
-* Setup (triggered only once at the start of the game)  
-  * A hexagonal map of side length 7 is generated  
-  * The map itself is made of hexes  
-  * The middle hex of the map is empty  
-  * All the hexes surrounding the middle hex are each controlled by a different Faction  
-    * Color coded red: Mountain Faction  
-    * Color coded orange: Mesa Faction  
-    * Color coded yellow: Sand Faction  
-    * Color coded green: Plains Faction  
-    * Color coded blue: River Faction  
-    * Color coded purple: Jungle Faction  
-  * All the other hexes start empty  
-  * Empty hexes are considered Neutral  
+* Setup (triggered only once at the start of the game)
+  * A hexagonal map of side length 5 is generated
+  * The map itself is made of hexes
+  * The middle hex of the map is empty
+  * All the hexes surrounding the middle hex are each controlled by a different Faction
+    * Color coded red: Mountain Faction
+    * Color coded orange: Mesa Faction
+    * Color coded yellow: Sand Faction
+    * Color coded green: Plains Faction
+    * Color coded blue: River Faction
+    * Color coded purple: Jungle Faction
+  * All the other hexes start empty
+  * Empty hexes are considered Neutral
+  * Each Faction draws and resolves a random Change modifier
+  * A single setup turn is played where each Faction draws and resolves a random Agenda card (players have no input during this turn)  
 * Vagrant Phase  
   * Spirits choose their actions  
   * After all Spirits have confirmed their actions, reveal them  

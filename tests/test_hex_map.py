@@ -46,13 +46,13 @@ class TestHexUtils:
         # 1 + 6 + 12 = 19
         assert len(spiral) == 19
 
-    def test_generate_hex_grid_side7(self):
-        grid = generate_hex_grid(7)
-        # Side 7 hex grid: 3*7^2 - 3*7 + 1 = 127
-        assert len(grid) == 127
+    def test_generate_hex_grid_side5(self):
+        grid = generate_hex_grid(5)
+        # Side 5 hex grid: 3*5^2 - 3*5 + 1 = 61
+        assert len(grid) == 61
 
     def test_generate_hex_grid_center(self):
-        grid = generate_hex_grid(7)
+        grid = generate_hex_grid(5)
         assert (0, 0) in grid
 
     def test_pixel_roundtrip(self):
@@ -88,8 +88,8 @@ class TestHexMap:
     def test_neutral_hexes_count(self):
         hm = HexMap()
         neutral = hm.get_neutral_hexes()
-        # 127 total - 6 faction starts = 121 neutral
-        assert len(neutral) == 121
+        # 61 total - 6 faction starts = 55 neutral
+        assert len(neutral) == 55
 
     def test_reachable_neutral(self):
         hm = HexMap()

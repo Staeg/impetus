@@ -37,11 +37,13 @@ class GameState:
         # Spoils of war choice pending (spirit_id -> pending data)
         self.spoils_pending: dict[str, dict] = {}
 
-    def setup_game(self, player_info: list[dict]):
-        """Initialize the game with the given players.
+    def setup_game(self, player_info: list[dict]) -> list[dict]:
+        """Initialize the game with the given players. Returns setup events.
 
         player_info: list of {spirit_id, name}
         """
+        events = []
+
         # Create factions
         for faction_id in FACTION_NAMES:
             faction = Faction(faction_id)
@@ -56,8 +58,44 @@ class GameState:
             spirit = Spirit(info["spirit_id"], info["name"])
             self.spirits[spirit.spirit_id] = spirit
 
+        # --- Setup: each faction draws and resolves a random Change modifier ---
+        events.append({"type": "setup_start"})
+        for fid, faction in self.factions.items():
+            card = random.choice(CHANGE_DECK)
+            faction.change_modifiers[card.value] = faction.change_modifiers.get(card.value, 0) + 1
+            events.append({
+                "type": "change",
+                "faction": fid,
+                "modifier": card.value,
+            })
+
+        # --- Setup turn: all factions resolve a random agenda (no player input) ---
+        agenda_choices = {}
+        for fid, faction in self.factions.items():
+            card = faction.draw_random_agenda()
+            agenda_choices[fid] = card.agenda_type
+            events.append({
+                "type": "agenda_random",
+                "faction": fid,
+                "agenda": card.agenda_type.value,
+            })
+
+        self.normal_trade_factions = [
+            fid for fid, at in agenda_choices.items()
+            if at == AgendaType.TRADE
+        ]
+
+        resolve_agendas(self.factions, self.hex_map, agenda_choices,
+                        self.wars, events)
+
+        # Cleanup the setup turn
+        for faction in self.factions.values():
+            faction.cleanup_deck()
+            faction.reset_turn_tracking()
+
         self.turn = 1
         self.phase = Phase.VAGRANT_PHASE
+        return events
 
     def get_snapshot(self) -> GameStateSnapshot:
         return GameStateSnapshot(

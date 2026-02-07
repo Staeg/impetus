@@ -257,10 +257,14 @@ class GameServer:
             for s in room.players.values()
         ]
         room.game_state = GameState()
-        room.game_state.setup_game(player_info)
+        setup_events = room.game_state.setup_game(player_info)
 
         snapshot = room.game_state.get_snapshot()
         await room.broadcast(create_message(MessageType.GAME_START, snapshot.to_dict()))
+
+        # Broadcast setup events so players see what happened during setup
+        if setup_events:
+            await self._broadcast_phase_result(room, setup_events)
 
         # Send phase options to each player
         await self._send_phase_options(room)

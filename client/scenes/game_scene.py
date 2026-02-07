@@ -470,8 +470,10 @@ class GameScene:
             winner = event.get("winner")
             if winner:
                 wname = FACTION_DISPLAY_NAMES.get(winner, winner)
+                loser = event.get("loser", "?")
+                lname = FACTION_DISPLAY_NAMES.get(loser, loser)
                 self.event_log.append(
-                    f"{wname} won war! (Roll: {event.get('roll_a', '?')}+{event.get('power_a', '?')} vs "
+                    f"{wname} won war against {lname}! (Roll: {event.get('roll_a', '?')}+{event.get('power_a', '?')} vs "
                     f"{event.get('roll_b', '?')}+{event.get('power_b', '?')})")
             else:
                 self.event_log.append("War ended in a tie!")
@@ -511,6 +513,8 @@ class GameScene:
             name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
             self.event_log.append(f"{name} gained presence in {fname}")
+        elif etype == "setup_start":
+            self.event_log.append("--- Setup ---")
         elif etype == "turn_start":
             self.event_log.append(f"--- Turn {event.get('turn', '?')} ---")
             self.faction_agendas_this_turn.clear()
