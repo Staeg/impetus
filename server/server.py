@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import traceback
 import uuid
 import string
 import random
@@ -99,7 +100,15 @@ class GameServer:
                     if room_code and spirit_id:
                         self.ws_to_room[ws] = (room_code, spirit_id)
                 elif room_code and spirit_id:
-                    await self._handle_game_message(room_code, spirit_id, msg_type, payload)
+                    try:
+                        await self._handle_game_message(room_code, spirit_id, msg_type, payload)
+                    except Exception as e:
+                        print(f"[server] Error handling {msg_type.value} from {spirit_id}: {e}")
+                        traceback.print_exc()
+                        room = self.rooms.get(room_code)
+                        if room:
+                            await room.send_to(spirit_id, create_message(MessageType.ERROR,
+                                {"message": "Server error processing action"}))
                 else:
                     await ws.send(create_message(MessageType.ERROR, {"message": "Not in a room"}))
         except websockets.exceptions.ConnectionClosed:

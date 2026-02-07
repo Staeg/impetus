@@ -573,6 +573,13 @@ class GameState:
             faction.cleanup_deck()
             faction.reset_turn_tracking()
 
+        # Clear all transient per-turn state
+        self.pending_actions.clear()
+        self.drawn_hands.clear()
+        self.change_pending.clear()
+        self.ejection_pending.clear()
+        self.spoils_pending.clear()
+
         self.turn += 1
         self.phase = Phase.VAGRANT_PHASE
         events.append({"type": "turn_start", "turn": self.turn})
@@ -595,4 +602,4 @@ class GameState:
         return None, events
 
     def has_pending_sub_choices(self) -> bool:
-        return bool(self.change_pending) or bool(self.ejection_pending) or bool(self.spoils_pending)
+        return bool(self.change_pending) or bool(self.ejection_pending)

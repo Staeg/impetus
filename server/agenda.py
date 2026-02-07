@@ -6,7 +6,8 @@ from server.war import War
 
 
 def resolve_agendas(factions: dict, hex_map, agenda_choices: dict[str, AgendaType],
-                    wars: list, events: list, is_spoils: bool = False):
+                    wars: list, events: list, is_spoils: bool = False,
+                    spoils_conquests: dict = None):
     """Resolve all agenda choices in the correct order.
 
     Args:
@@ -30,7 +31,7 @@ def resolve_agendas(factions: dict, hex_map, agenda_choices: dict[str, AgendaTyp
         elif agenda_type == AgendaType.TRADE:
             _resolve_trade(factions, playing_factions, events, is_spoils)
         elif agenda_type == AgendaType.EXPAND:
-            _resolve_expand(factions, hex_map, playing_factions, events, is_spoils)
+            _resolve_expand(factions, hex_map, playing_factions, events, is_spoils, spoils_conquests)
         elif agenda_type == AgendaType.CHANGE:
             _resolve_change(factions, playing_factions, events)
 
@@ -306,7 +307,7 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
 
     # Resolve auto-resolved spoils agendas in order
     if spoils_choices:
-        resolve_agendas(factions, hex_map, spoils_choices, wars, events, is_spoils=True)
+        resolve_agendas(factions, hex_map, spoils_choices, wars, events, is_spoils=True, spoils_conquests=spoils_conquests)
 
     return spoils_pending
 
@@ -336,5 +337,5 @@ def resolve_spoils_choice(factions, hex_map, wars, events, spirit_id,
         "agenda": chosen.value,
     })
 
-    resolve_agendas(factions, hex_map, {winner: chosen}, wars, events, is_spoils=True)
+    resolve_agendas(factions, hex_map, {winner: chosen}, wars, events, is_spoils=True, spoils_conquests=spoils_conquests)
     del spoils_pending[spirit_id]
