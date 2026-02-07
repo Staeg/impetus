@@ -31,6 +31,7 @@ class GameScene:
         self.hex_ownership: dict[tuple[int, int], str | None] = {}
         self.waiting_for: list[str] = []
         self.event_log: list[str] = []
+        self.event_log_scroll_offset: int = 0
 
         # Faction overview tracking
         self.faction_agendas_this_turn: dict[str, str] = {}
@@ -100,6 +101,17 @@ class GameScene:
 
     def handle_event(self, event):
         self.input_handler.handle_camera_event(event)
+
+        if event.type == pygame.MOUSEWHEEL:
+            log_rect = pygame.Rect(
+                SCREEN_WIDTH - 300, SCREEN_HEIGHT - 200, 290, 190
+            )
+            mx, my = pygame.mouse.get_pos()
+            if log_rect.collidepoint(mx, my):
+                visible_count = (190 - 26) // 16
+                max_offset = max(0, len(self.event_log) - visible_count)
+                self.event_log_scroll_offset += event.y
+                self.event_log_scroll_offset = max(0, min(self.event_log_scroll_offset, max_offset))
 
         if event.type == pygame.MOUSEMOTION:
             for btn in self.action_buttons + self.faction_buttons + self.idol_buttons:
@@ -363,11 +375,25 @@ class GameScene:
             rects.append(pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h))
         return rects
 
+    def _has_neutral_idol(self) -> bool:
+        """Check if current spirit has an idol on a neutral hex."""
+        my_id = self.app.my_spirit_id
+        for idol_data in self.all_idols:
+            if isinstance(idol_data, dict) and idol_data.get("owner_spirit") == my_id:
+                pos = idol_data.get("position", {})
+                hex_key = (pos.get("q"), pos.get("r"))
+                if self.hex_ownership.get(hex_key) is None and hex_key in self.hex_ownership:
+                    return True
+        return False
+
     def _log_event(self, event: dict):
         etype = event.get("type", "")
         if etype == "idol_placed":
             name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
             self.event_log.append(f"{name} placed {event['idol_type']} idol")
+        elif etype == "idol_removed":
+            name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
+            self.event_log.append(f"{name}'s {event['idol_type']} idol was removed (neutral limit)")
         elif etype == "possessed":
             name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
@@ -516,6 +542,7 @@ class GameScene:
         self.ui_renderer.draw_faction_overview(
             screen, self.factions, self.faction_agendas_this_turn,
             wars=render_wars,
+            spirits=self.spirits,
         )
 
         # Draw faction panel (right side)
@@ -534,7 +561,8 @@ class GameScene:
         # Draw event log (bottom right)
         self.ui_renderer.draw_event_log(
             screen, self.event_log,
-            SCREEN_WIDTH - 300, SCREEN_HEIGHT - 200, 290, 190
+            SCREEN_WIDTH - 300, SCREEN_HEIGHT - 200, 290, 190,
+            scroll_offset=self.event_log_scroll_offset,
         )
 
         # Draw waiting indicator
@@ -578,6 +606,13 @@ class GameScene:
             else:
                 text = self.small_font.render("Select idol type, then click a neutral hex", True, (140, 140, 160))
                 screen.blit(text, (20, y))
+
+            # Warning if spirit already has a neutral idol
+            if self._has_neutral_idol():
+                warn = self.small_font.render(
+                    "Warning: Your existing neutral idol will be removed",
+                    True, (255, 180, 60))
+                screen.blit(warn, (20, y + 18))
 
         # Submit button
         if self.submit_button:

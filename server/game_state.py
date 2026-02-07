@@ -238,11 +238,24 @@ class GameState:
             elif action["action_type"] == "place_idol":
                 idol_placements.append((spirit_id, action))
 
-        # Resolve idol placements (always succeed)
+        # Resolve idol placements (always succeed, but limit 1 neutral idol per spirit)
         for spirit_id, action in idol_placements:
             spirit = self.spirits[spirit_id]
             idol_type = IdolType(action["idol_type"])
             pos = HexCoord(action["q"], action["r"])
+
+            # Remove existing neutral idol if any
+            existing_neutral = self.hex_map.get_spirit_idols_in_neutral(spirit_id)
+            for old_idol in existing_neutral:
+                self.hex_map.idols.remove(old_idol)
+                spirit.idols.remove(old_idol)
+                events.append({
+                    "type": "idol_removed",
+                    "spirit": spirit_id,
+                    "idol_type": old_idol.type.value,
+                    "hex": old_idol.position.to_dict(),
+                })
+
             idol = spirit.place_idol(idol_type, pos)
             self.hex_map.place_idol(idol)
             events.append({

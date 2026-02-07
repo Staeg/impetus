@@ -89,8 +89,10 @@ class UIRenderer:
             x += text.get_width() + 20
 
     def draw_faction_overview(self, surface: pygame.Surface, factions: dict,
-                              faction_agendas: dict[str, str], wars=None):
-        """Draw a compact overview strip showing all factions' gold, agenda, and wars."""
+                              faction_agendas: dict[str, str], wars=None,
+                              spirits: dict = None):
+        """Draw a compact overview strip showing all factions' gold, agenda, wars, and presence."""
+        spirits = spirits or {}
         strip_y = 42
         strip_h = 42
         sw = surface.get_width()
@@ -150,7 +152,7 @@ class UIRenderer:
                 a_surf = self.small_font.render(a_label, True, a_color)
                 surface.blit(a_surf, (cx + cell_w - a_surf.get_width() - 6, strip_y + 4))
 
-            # War indicators (second row)
+            # War indicators (second row, left side)
             if fid in war_lookup:
                 wx = cx + 6
                 for opponent_abbr, is_ripe in war_lookup[fid]:
@@ -158,6 +160,13 @@ class UIRenderer:
                     war_surf = self.small_font.render(f"vs {opponent_abbr}", True, war_color)
                     surface.blit(war_surf, (wx, strip_y + 22))
                     wx += war_surf.get_width() + 6
+
+            # Presence indicator (second row, right side)
+            presence_id = fd.get("presence_spirit") if isinstance(fd, dict) else getattr(fd, "presence_spirit", None)
+            if presence_id:
+                p_name = spirits.get(presence_id, {}).get("name", presence_id[:6])
+                p_surf = self.small_font.render(f"P:{p_name}", True, (140, 200, 180))
+                surface.blit(p_surf, (cx + cell_w - p_surf.get_width() - 6, strip_y + 22))
 
     def draw_faction_panel(self, surface: pygame.Surface, faction_data: dict,
                            x: int, y: int, width: int = 220, spirits: dict = None):
@@ -261,7 +270,8 @@ class UIRenderer:
         return rects
 
     def draw_event_log(self, surface: pygame.Surface, events: list[str],
-                       x: int, y: int, width: int, height: int):
+                       x: int, y: int, width: int, height: int,
+                       scroll_offset: int = 0):
         """Draw scrollable event log."""
         panel_rect = pygame.Rect(x, y, width, height)
         pygame.draw.rect(surface, (20, 20, 30), panel_rect, border_radius=4)
@@ -270,18 +280,39 @@ class UIRenderer:
         header = self.small_font.render("Event Log", True, (150, 150, 170))
         surface.blit(header, (x + 8, y + 4))
 
+        visible_count = (height - 26) // 16
+        total = len(events)
+
+        # Slice events using scroll_offset (offset scrolls up from bottom)
+        if scroll_offset > 0:
+            end = total - scroll_offset
+            start = max(0, end - visible_count)
+            visible_events = events[start:end]
+        else:
+            visible_events = events[-visible_count:] if total > visible_count else events
+
         clip_rect = pygame.Rect(x + 4, y + 22, width - 8, height - 26)
         surface.set_clip(clip_rect)
 
         dy = y + 22
-        # Show most recent events first
-        visible_events = events[-((height - 26) // 16):]
         for event_text in visible_events:
             text = self.small_font.render(event_text, True, (160, 160, 180))
             surface.blit(text, (x + 8, dy))
             dy += 16
 
         surface.set_clip(None)
+
+        # Scroll indicators
+        if total > visible_count:
+            indicator_x = x + width - 14
+            if scroll_offset < total - visible_count:
+                # Can scroll up (older events)
+                arrow_up = self.small_font.render("\u25b2", True, (120, 120, 150))
+                surface.blit(arrow_up, (indicator_x, y + 22))
+            if scroll_offset > 0:
+                # Can scroll down (newer events)
+                arrow_down = self.small_font.render("\u25bc", True, (120, 120, 150))
+                surface.blit(arrow_down, (indicator_x, y + height - 18))
 
     def draw_waiting_overlay(self, surface: pygame.Surface, waiting_for: list[str],
                              spirits: dict):
