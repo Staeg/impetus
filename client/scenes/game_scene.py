@@ -47,11 +47,12 @@ class GameScene:
         self.agenda_hand: list[dict] = []
         self.selected_agenda_index: int = -1
 
-        # Change/ejection state
+        # Change/ejection/spoils state
         self.change_cards: list[str] = []
         self.ejection_pending = False
         self.ejection_faction = ""
         self.selected_ejection_type: str | None = None
+        self.spoils_cards: list[str] = []
 
         # UI buttons
         self.action_buttons: list[Button] = []
@@ -159,6 +160,14 @@ class GameScene:
                         self._submit_change_choice(i)
                         return
 
+            # Check spoils card clicks
+            if self.spoils_cards:
+                card_rects = self._get_spoils_card_rects()
+                for i, rect in enumerate(card_rects):
+                    if rect.collidepoint(event.pos):
+                        self._submit_spoils_choice(i)
+                        return
+
             # Hex click
             hex_coord = self.hex_renderer.get_hex_at_screen(
                 event.pos[0], event.pos[1], self.input_handler,
@@ -235,6 +244,12 @@ class GameScene:
         })
         self.change_cards = []
 
+    def _submit_spoils_choice(self, index: int):
+        self.app.network.send(MessageType.SUBMIT_SPOILS_CHOICE, {
+            "card_index": index,
+        })
+        self.spoils_cards = []
+
     def _clear_selection(self):
         self.vagrant_action = None
         self.selected_faction = None
@@ -304,6 +319,9 @@ class GameScene:
 
         elif self.phase == "change_choice":
             self.change_cards = payload_cards if (payload_cards := self.phase_options.get("cards")) else []
+
+        elif self.phase == "spoils_choice":
+            self.spoils_cards = payload_cards if (payload_cards := self.phase_options.get("cards")) else []
 
         elif self.phase == "ejection_choice":
             self.ejection_pending = True
@@ -375,6 +393,17 @@ class GameScene:
             rects.append(pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h))
         return rects
 
+    def _get_spoils_card_rects(self) -> list[pygame.Rect]:
+        rects = []
+        card_w, card_h = 120, 60
+        spacing = 10
+        total_w = len(self.spoils_cards) * (card_w + spacing) - spacing
+        start_x = SCREEN_WIDTH // 2 - total_w // 2
+        y = SCREEN_HEIGHT // 2 - card_h // 2
+        for i in range(len(self.spoils_cards)):
+            rects.append(pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h))
+        return rects
+
     def _has_neutral_idol(self) -> bool:
         """Check if current spirit has an idol on a neutral hex."""
         my_id = self.app.my_spirit_id
@@ -411,13 +440,15 @@ class GameScene:
             self.faction_agendas_this_turn[event["faction"]] = event["agenda"]
         elif etype == "steal":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"{fname} stole {event.get('gold_gained', 0)} gold")
+            prefix = "Spoils: " if event.get("is_spoils") else ""
+            self.event_log.append(f"{prefix}{fname} stole {event.get('gold_gained', 0)} gold")
         elif etype == "bond":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
             self.event_log.append(f"{fname} improved relations")
         elif etype == "trade":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"{fname} traded for {event.get('gold_gained', 0)} gold")
+            prefix = "Spoils: " if event.get("is_spoils") else ""
+            self.event_log.append(f"{prefix}{fname} traded for {event.get('gold_gained', 0)} gold")
         elif etype == "expand":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
             self.event_log.append(f"{fname} expanded territory")
@@ -444,6 +475,16 @@ class GameScene:
                     f"{event.get('roll_b', '?')}+{event.get('power_b', '?')})")
             else:
                 self.event_log.append("War ended in a tie!")
+        elif etype == "spoils_drawn":
+            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
+            self.event_log.append(f"Spoils: {fname} drew {event.get('agenda', '?')}")
+        elif etype == "spoils_choice":
+            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
+            cards = event.get("cards", [])
+            self.event_log.append(f"Spoils: {fname} choosing from {', '.join(cards)}")
+        elif etype == "expand_spoils":
+            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
+            self.event_log.append(f"Spoils: {fname} conquered enemy territory")
         elif etype == "vp_scored":
             name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
             self.event_log.append(f"{name} scored {event.get('vp_gained', 0)} VP (total: {event.get('total_vp', 0)})")
@@ -578,6 +619,8 @@ class GameScene:
             self._render_change_ui(screen)
         elif self.phase == "ejection_choice":
             self._render_ejection_ui(screen)
+        elif self.phase == "spoils_choice":
+            self._render_spoils_ui(screen)
 
     def _render_vagrant_ui(self, screen):
         # Action buttons
@@ -676,3 +719,17 @@ class GameScene:
         if self.submit_button:
             self.submit_button.enabled = self.selected_ejection_type is not None
             self.submit_button.draw(screen, self.font)
+
+    def _render_spoils_ui(self, screen):
+        if not self.spoils_cards:
+            return
+        title = self.font.render("Spoils of War - Choose an agenda:", True, (255, 200, 100))
+        screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, SCREEN_HEIGHT // 2 - 60))
+
+        rects = self._get_spoils_card_rects()
+        for i, (card, rect) in enumerate(zip(self.spoils_cards, rects)):
+            pygame.draw.rect(screen, (70, 50, 30), rect, border_radius=6)
+            pygame.draw.rect(screen, (200, 160, 60), rect, 2, border_radius=6)
+            text = self.font.render(card.title(), True, (255, 220, 140))
+            screen.blit(text, (rect.centerx - text.get_width() // 2,
+                               rect.centery - text.get_height() // 2))

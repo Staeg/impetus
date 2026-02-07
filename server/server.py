@@ -233,6 +233,23 @@ class GameServer:
                     await self._broadcast_phase_result(room, events)
                     await self._auto_resolve_phases(room)
 
+        elif msg_type == MessageType.SUBMIT_SPOILS_CHOICE:
+            if room.game_state:
+                error, events = room.game_state.submit_spoils_choice(
+                    spirit_id, payload.get("card_index", 0))
+                if error:
+                    await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
+                else:
+                    await self._broadcast_phase_result(room, events)
+                    if not room.game_state.spoils_pending:
+                        await self._auto_resolve_phases(room)
+                    else:
+                        # Still waiting for other spoils choices
+                        waiting_for = list(room.game_state.spoils_pending.keys())
+                        await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                            "players_remaining": waiting_for,
+                        }))
+
     async def _start_game(self, room: GameRoom):
         room.started = True
         player_info = [
@@ -305,6 +322,19 @@ class GameServer:
             events = gs.resolve_current_phase()
             await self._broadcast_phase_result(room, events)
             if gs.phase == Phase.GAME_OVER:
+                return
+            # If spoils choices are pending, send options and stop
+            if gs.spoils_pending:
+                for sid, pending in gs.spoils_pending.items():
+                    await room.send_to(sid, create_message(MessageType.PHASE_START, {
+                        "phase": "spoils_choice",
+                        "turn": gs.turn,
+                        "options": {"cards": [c.value for c in pending["cards"]]},
+                    }))
+                waiting_for = list(gs.spoils_pending.keys())
+                await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                    "players_remaining": waiting_for,
+                }))
                 return
 
         # Now at a phase that needs player input

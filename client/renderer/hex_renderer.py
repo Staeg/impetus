@@ -66,7 +66,7 @@ class HexRenderer:
             sx, sy = camera.world_to_screen(wx, wy, screen_w, screen_h)
 
             # Skip off-screen hexes
-            margin = self.hex_size * 2 * camera.zoom
+            margin = self.hex_size * 2
             if sx < -margin or sx > screen_w + margin or sy < -margin or sy > screen_h + margin:
                 continue
 
@@ -126,7 +126,7 @@ class HexRenderer:
             ix, iy = camera.world_to_screen(wx + offset_x, wy + offset_y,
                                             screen_w, screen_h)
             idol_color = IDOL_COLORS.get(idol.type, (255, 255, 255))
-            pygame.draw.circle(surface, idol_color, (ix, iy), max(4, int(5 * camera.zoom)))
+            pygame.draw.circle(surface, idol_color, (ix, iy), 5)
             # Draw letter
             symbol = IDOL_SYMBOLS.get(idol.type, "?")
             text = font.render(symbol, True, (0, 0, 0))
@@ -186,8 +186,8 @@ class HexRenderer:
         p1 = (s1[0] + dx * 0.3, s1[1] + dy * 0.3)
         p2 = (s2[0] - dx * 0.3, s2[1] - dy * 0.3)
 
-        scaled_head = max(3, head_size * camera.zoom)
-        scaled_width = max(1, int(width * camera.zoom))
+        scaled_head = head_size
+        scaled_width = width
 
         pygame.draw.line(surface, color,
                          (int(p1[0]), int(p1[1])),

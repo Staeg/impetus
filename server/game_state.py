@@ -11,7 +11,7 @@ from server.hex_map import HexMap
 from server.faction import Faction
 from server.spirit import Spirit
 from server.war import War
-from server.agenda import resolve_agendas, draw_spoils_agenda, resolve_spoils
+from server.agenda import resolve_agendas, draw_spoils_agenda, resolve_spoils, resolve_spoils_choice
 from server.scoring import calculate_scoring
 
 
@@ -34,6 +34,8 @@ class GameState:
         self.change_pending: dict[str, list] = {}  # spirit_id -> drawn change cards
         # Track trade factions for spoils
         self.normal_trade_factions: list[str] = []
+        # Spoils of war choice pending (spirit_id -> pending data)
+        self.spoils_pending: dict[str, dict] = {}
 
     def setup_game(self, player_info: list[dict]):
         """Initialize the game with the given players.
@@ -488,10 +490,15 @@ class GameState:
 
         # Resolve spoils of war
         if war_results:
-            resolve_spoils(self.factions, self.hex_map, war_results, self.wars,
-                          events, self.normal_trade_factions)
+            self.spoils_pending = resolve_spoils(
+                self.factions, self.hex_map, war_results, self.wars,
+                events, self.normal_trade_factions, spirits=self.spirits)
+        else:
+            self.spoils_pending = {}
 
-        self.phase = Phase.SCORING
+        if not self.spoils_pending:
+            self.phase = Phase.SCORING
+        # Otherwise stay in WAR_PHASE until spoils choices are submitted
         return events
 
     def _resolve_scoring(self) -> list[dict]:
@@ -533,5 +540,21 @@ class GameState:
         events.append({"type": "turn_start", "turn": self.turn})
         return events
 
+    def submit_spoils_choice(self, spirit_id: str, card_index: int) -> tuple[Optional[str], list[dict]]:
+        """Submit a spoils of war card choice. Returns (error, events)."""
+        if spirit_id not in self.spoils_pending:
+            return "No spoils pending", []
+        cards = self.spoils_pending[spirit_id]["cards"]
+        if card_index < 0 or card_index >= len(cards):
+            return f"Invalid card index: {card_index}", []
+        events = []
+        resolve_spoils_choice(self.factions, self.hex_map, self.wars, events,
+                              spirit_id, card_index, self.spoils_pending,
+                              self.spirits)
+        # If all spoils resolved, advance to scoring
+        if not self.spoils_pending:
+            self.phase = Phase.SCORING
+        return None, events
+
     def has_pending_sub_choices(self) -> bool:
-        return bool(self.change_pending) or bool(self.ejection_pending)
+        return bool(self.change_pending) or bool(self.ejection_pending) or bool(self.spoils_pending)

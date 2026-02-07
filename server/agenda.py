@@ -242,27 +242,52 @@ def draw_spoils_agenda() -> AgendaType:
 
 
 def resolve_spoils(factions, hex_map, war_results, wars, events,
-                   normal_trade_factions: list[str]):
+                   normal_trade_factions: list[str], spirits: dict = None):
     """Resolve spoils of war agendas for war winners.
 
-    Returns list of spoils events.
+    If the winning faction is possessed by a spirit, draw multiple spoils
+    cards (1 + influence) and let the spirit choose.  Returns spoils_pending
+    dict (spirit_id -> list of AgendaType) for any choices that need player
+    input; empty dict means all spoils were auto-resolved.
     """
+    spirits = spirits or {}
     spoils_choices = {}
     spoils_conquests = {}
+    spoils_pending = {}  # spirit_id -> {"cards": [...], "winner": fid, "loser": fid, "battleground": ...}
 
     for result in war_results:
         winner = result.get("winner")
         if not winner:
             continue
         loser = result.get("loser")
+        faction = factions[winner]
+
+        # Check if winner is possessed by a spirit with influence
+        if faction.possessing_spirit and faction.possessing_spirit in spirits:
+            spirit = spirits[faction.possessing_spirit]
+            draw_count = 1 + spirit.influence
+            cards = [draw_spoils_agenda() for _ in range(draw_count)]
+            spoils_pending[faction.possessing_spirit] = {
+                "cards": cards,
+                "winner": winner,
+                "loser": loser,
+                "battleground": result.get("battleground"),
+            }
+            events.append({
+                "type": "spoils_choice",
+                "spirit": faction.possessing_spirit,
+                "faction": winner,
+                "cards": [c.value for c in cards],
+            })
+            continue
+
+        # Non-possessed: auto-resolve with single random draw
         spoils_type = draw_spoils_agenda()
         result["spoils"] = spoils_type.value
 
         if spoils_type == AgendaType.EXPAND and result.get("battleground"):
-            # Take the loser's battleground hex
             bg = result["battleground"]
             loser_hex = None
-            # Find which hex belongs to loser
             for h in bg:
                 coord = (h["q"], h["r"])
                 if hex_map.ownership.get(coord) == loser:
@@ -279,6 +304,37 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
             "agenda": spoils_type.value,
         })
 
-    # Resolve spoils agendas in order
+    # Resolve auto-resolved spoils agendas in order
     if spoils_choices:
         resolve_agendas(factions, hex_map, spoils_choices, wars, events, is_spoils=True)
+
+    return spoils_pending
+
+
+def resolve_spoils_choice(factions, hex_map, wars, events, spirit_id,
+                          card_index, spoils_pending, spirits):
+    """Resolve a spirit's spoils card choice after player input."""
+    pending = spoils_pending[spirit_id]
+    cards = pending["cards"]
+    chosen = cards[card_index]
+    winner = pending["winner"]
+    loser = pending["loser"]
+    battleground = pending.get("battleground")
+
+    spoils_conquests = {}
+    if chosen == AgendaType.EXPAND and battleground:
+        for h in battleground:
+            coord = (h["q"], h["r"])
+            if hex_map.ownership.get(coord) == loser:
+                spoils_conquests[winner] = coord
+                break
+
+    factions[winner].add_spoils_card(chosen)
+    events.append({
+        "type": "spoils_drawn",
+        "faction": winner,
+        "agenda": chosen.value,
+    })
+
+    resolve_agendas(factions, hex_map, {winner: chosen}, wars, events, is_spoils=True)
+    del spoils_pending[spirit_id]

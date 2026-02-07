@@ -81,12 +81,24 @@ class UIRenderer:
             name = spirit.get("name", sid[:6])
             vp = spirit.get("victory_points", 0)
             faction_id = spirit.get("possessed_faction")
-            faction_tag = ""
+
+            # Render name
+            name_surf = self.small_font.render(name, True, color)
+            surface.blit(name_surf, (x, 12))
+            x += name_surf.get_width()
+
+            # Render faction tag in faction color
             if faction_id:
+                faction_color = FACTION_COLORS.get(faction_id, (150, 150, 150))
                 faction_tag = f" [{FACTION_DISPLAY_NAMES.get(faction_id, faction_id)[:3].upper()}]"
-            text = self.small_font.render(f"{name}{faction_tag}: {vp}VP", True, color)
-            surface.blit(text, (x, 12))
-            x += text.get_width() + 20
+                tag_surf = self.small_font.render(faction_tag, True, faction_color)
+                surface.blit(tag_surf, (x, 12))
+                x += tag_surf.get_width()
+
+            # Render VP
+            vp_surf = self.small_font.render(f": {vp}VP", True, color)
+            surface.blit(vp_surf, (x, 12))
+            x += vp_surf.get_width() + 20
 
     def draw_faction_overview(self, surface: pygame.Surface, factions: dict,
                               faction_agendas: dict[str, str], wars=None,
