@@ -80,15 +80,19 @@ class UIRenderer:
             color = (255, 255, 100) if sid == my_spirit_id else (180, 180, 200)
             name = spirit.get("name", sid[:6])
             vp = spirit.get("victory_points", 0)
-            text = self.small_font.render(f"{name}: {vp}VP", True, color)
+            faction_id = spirit.get("possessed_faction")
+            faction_tag = ""
+            if faction_id:
+                faction_tag = f" [{FACTION_DISPLAY_NAMES.get(faction_id, faction_id)[:3].upper()}]"
+            text = self.small_font.render(f"{name}{faction_tag}: {vp}VP", True, color)
             surface.blit(text, (x, 12))
             x += text.get_width() + 20
 
     def draw_faction_overview(self, surface: pygame.Surface, factions: dict,
-                              faction_agendas: dict[str, str]):
-        """Draw a compact overview strip showing all factions' gold and agenda."""
+                              faction_agendas: dict[str, str], wars=None):
+        """Draw a compact overview strip showing all factions' gold, agenda, and wars."""
         strip_y = 42
-        strip_h = 28
+        strip_h = 42
         sw = surface.get_width()
         cell_w = sw // len(FACTION_NAMES) if FACTION_NAMES else sw
 
@@ -104,6 +108,15 @@ class UIRenderer:
             "expand": (80, 220, 80),
             "change": (200, 140, 255),
         }
+
+        # Build war lookup: faction_id -> list of (opponent_abbr, is_ripe)
+        war_lookup = {}
+        if wars:
+            for war in wars:
+                fa_abbr = FACTION_DISPLAY_NAMES.get(war.faction_a, war.faction_a)[:3].upper()
+                fb_abbr = FACTION_DISPLAY_NAMES.get(war.faction_b, war.faction_b)[:3].upper()
+                war_lookup.setdefault(war.faction_a, []).append((fb_abbr, war.is_ripe))
+                war_lookup.setdefault(war.faction_b, []).append((fa_abbr, war.is_ripe))
 
         for i, fid in enumerate(FACTION_NAMES):
             fd = factions.get(fid)
@@ -122,12 +135,12 @@ class UIRenderer:
             # Faction abbreviation (3 chars)
             abbr = FACTION_DISPLAY_NAMES.get(fid, fid)[:3].upper()
             abbr_surf = self.small_font.render(abbr, True, fc)
-            surface.blit(abbr_surf, (cx + 6, strip_y + 7))
+            surface.blit(abbr_surf, (cx + 6, strip_y + 4))
 
             # Gold amount
             gold = fd.get("gold", 0) if isinstance(fd, dict) else getattr(fd, "gold", 0)
             gold_text = self.small_font.render(f"{gold}g", True, (255, 220, 60))
-            surface.blit(gold_text, (cx + 6 + abbr_surf.get_width() + 6, strip_y + 7))
+            surface.blit(gold_text, (cx + 6 + abbr_surf.get_width() + 6, strip_y + 4))
 
             # Agenda name (right-aligned)
             agenda_str = faction_agendas.get(fid, "")
@@ -135,10 +148,19 @@ class UIRenderer:
                 a_label = agenda_str.title()
                 a_color = agenda_colors.get(agenda_str, (160, 160, 180))
                 a_surf = self.small_font.render(a_label, True, a_color)
-                surface.blit(a_surf, (cx + cell_w - a_surf.get_width() - 6, strip_y + 7))
+                surface.blit(a_surf, (cx + cell_w - a_surf.get_width() - 6, strip_y + 4))
+
+            # War indicators (second row)
+            if fid in war_lookup:
+                wx = cx + 6
+                for opponent_abbr, is_ripe in war_lookup[fid]:
+                    war_color = (255, 50, 50) if is_ripe else (180, 60, 60)
+                    war_surf = self.small_font.render(f"vs {opponent_abbr}", True, war_color)
+                    surface.blit(war_surf, (wx, strip_y + 22))
+                    wx += war_surf.get_width() + 6
 
     def draw_faction_panel(self, surface: pygame.Surface, faction_data: dict,
-                           x: int, y: int, width: int = 220):
+                           x: int, y: int, width: int = 220, spirits: dict = None):
         """Draw faction info panel."""
         if not faction_data:
             return
@@ -151,6 +173,10 @@ class UIRenderer:
         modifiers = faction_data.get("change_modifiers", {})
         possessing = faction_data.get("possessing_spirit")
         presence = faction_data.get("presence_spirit")
+
+        spirits = spirits or {}
+        possessing_name = spirits.get(possessing, {}).get("name", possessing) if possessing else "none"
+        presence_name = spirits.get(presence, {}).get("name", presence) if presence else "none"
 
         panel_h = 200 + len(regard) * 18
         panel_rect = pygame.Rect(x, y, width, panel_h)
@@ -166,8 +192,8 @@ class UIRenderer:
         info_lines = [
             f"Gold: {gold}",
             f"Territories: {len(territories)}",
-            f"Possessing: {possessing or 'none'}",
-            f"Presence: {presence or 'none'}",
+            f"Possessing: {possessing_name}",
+            f"Presence: {presence_name}",
         ]
         for line in info_lines:
             text = self.small_font.render(line, True, (180, 180, 200))
@@ -266,4 +292,4 @@ class UIRenderer:
         text = f"Waiting for: {', '.join(names)}"
         text_surf = self.font.render(text, True, (200, 200, 100))
         x = surface.get_width() // 2 - text_surf.get_width() // 2
-        surface.blit(text_surf, (x, 78))
+        surface.blit(text_surf, (x, 92))

@@ -4,6 +4,7 @@ import pygame
 from shared.constants import (
     MessageType, Phase, AgendaType, IdolType,
     SCREEN_WIDTH, SCREEN_HEIGHT, HEX_SIZE, FACTION_DISPLAY_NAMES, FACTION_COLORS,
+    BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPREAD_IDOL_VP,
 )
 from shared.models import GameStateSnapshot, HexCoord, Idol, WarState
 from client.renderer.hex_renderer import HexRenderer
@@ -49,6 +50,7 @@ class GameScene:
         self.change_cards: list[str] = []
         self.ejection_pending = False
         self.ejection_faction = ""
+        self.selected_ejection_type: str | None = None
 
         # UI buttons
         self.action_buttons: list[Button] = []
@@ -155,7 +157,8 @@ class GameScene:
 
     def _handle_action_button(self, text: str):
         if self.ejection_pending:
-            self._submit_ejection_choice(text.lower())
+            self.selected_ejection_type = text.lower()
+            return
         elif text == "Possess":
             self.vagrant_action = "possess"
             self.idol_buttons = []
@@ -206,6 +209,13 @@ class GameScene:
                     "agenda_index": self.selected_agenda_index,
                 })
                 self._clear_selection()
+        elif self.phase == "ejection_choice":
+            if self.selected_ejection_type:
+                self.app.network.send(MessageType.SUBMIT_EJECTION_AGENDA, {
+                    "agenda_type": self.selected_ejection_type,
+                })
+                self._clear_selection()
+                self.ejection_pending = False
 
     def _submit_change_choice(self, index: int):
         self.app.network.send(MessageType.SUBMIT_CHANGE_CHOICE, {
@@ -213,18 +223,13 @@ class GameScene:
         })
         self.change_cards = []
 
-    def _submit_ejection_choice(self, agenda_type: str):
-        self.app.network.send(MessageType.SUBMIT_EJECTION_AGENDA, {
-            "agenda_type": agenda_type,
-        })
-        self.ejection_pending = False
-
     def _clear_selection(self):
         self.vagrant_action = None
         self.selected_faction = None
         self.selected_hex = None
         self.selected_idol_type = None
         self.selected_agenda_index = -1
+        self.selected_ejection_type = None
         self.agenda_hand = []
         self.action_buttons = []
         self.faction_buttons = []
@@ -272,7 +277,7 @@ class GameScene:
                 Button(pygame.Rect(150, y, 120, 36), "Place Idol", (60, 80, 130)),
             ]
             self.submit_button = Button(
-                pygame.Rect(SCREEN_WIDTH - 150, SCREEN_HEIGHT - 60, 130, 40),
+                pygame.Rect(20, SCREEN_HEIGHT - 60, 130, 40),
                 "Confirm", (60, 130, 60)
             )
 
@@ -281,7 +286,7 @@ class GameScene:
             self.agenda_hand = hand
             self.selected_agenda_index = -1
             self.submit_button = Button(
-                pygame.Rect(SCREEN_WIDTH - 150, SCREEN_HEIGHT - 60, 130, 40),
+                pygame.Rect(20, SCREEN_HEIGHT - 60, 130, 40),
                 "Confirm", (60, 130, 60)
             )
 
@@ -291,6 +296,7 @@ class GameScene:
         elif self.phase == "ejection_choice":
             self.ejection_pending = True
             self.ejection_faction = self.phase_options.get("faction", "")
+            self.selected_ejection_type = None
             # Build ejection buttons
             y = SCREEN_HEIGHT - 200
             self.action_buttons = []
@@ -300,6 +306,10 @@ class GameScene:
                     at.value.title(), (80, 60, 130)
                 )
                 self.action_buttons.append(btn)
+            self.submit_button = Button(
+                pygame.Rect(20, SCREEN_HEIGHT - 60, 130, 40),
+                "Confirm", (60, 130, 60)
+            )
 
     def _build_faction_buttons(self):
         available = self.phase_options.get("available_factions", [])
@@ -411,6 +421,21 @@ class GameScene:
         elif etype == "vp_scored":
             name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
             self.event_log.append(f"{name} scored {event.get('vp_gained', 0)} VP (total: {event.get('total_vp', 0)})")
+            b_idols = event.get("battle_idols", 0)
+            b_wars = event.get("wars_won", 0)
+            if b_idols:
+                b_vp = b_idols * BATTLE_IDOL_VP * b_wars
+                self.event_log.append(f"  Battle: {b_idols} idol x {b_wars} wars = {b_vp:.1f}")
+            a_idols = event.get("affluence_idols", 0)
+            a_gold = event.get("gold_gained", 0)
+            if a_idols:
+                a_vp = a_idols * AFFLUENCE_IDOL_VP * a_gold
+                self.event_log.append(f"  Affluence: {a_idols} idol x {a_gold} gold = {a_vp:.1f}")
+            s_idols = event.get("spread_idols", 0)
+            s_terr = event.get("territories_gained", 0)
+            if s_idols:
+                s_vp = s_idols * SPREAD_IDOL_VP * s_terr
+                self.event_log.append(f"  Spread: {s_idols} idol x {s_terr} terr = {s_vp:.1f}")
         elif etype == "ejected":
             name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
@@ -449,14 +474,20 @@ class GameScene:
         # Parse wars for rendering
         render_wars = []
         for w in self.wars:
-            if isinstance(w, dict) and w.get("battleground"):
-                bg = w["battleground"]
-                render_wars.append(type('War', (), {
-                    'battleground': (
+            if isinstance(w, dict):
+                war_obj = type('War', (), {
+                    'faction_a': w.get('faction_a', ''),
+                    'faction_b': w.get('faction_b', ''),
+                    'is_ripe': w.get('is_ripe', False),
+                    'battleground': None,
+                })()
+                if w.get("battleground"):
+                    bg = w["battleground"]
+                    war_obj.battleground = (
                         type('H', (), {'q': bg[0]['q'], 'r': bg[0]['r']})(),
                         type('H', (), {'q': bg[1]['q'], 'r': bg[1]['r']})(),
                     )
-                })())
+                render_wars.append(war_obj)
 
         # Draw hex grid
         highlight = None
@@ -481,9 +512,10 @@ class GameScene:
         self.ui_renderer.draw_hud(screen, self.phase, self.turn,
                                    self.spirits, self.app.my_spirit_id)
 
-        # Draw faction overview strip
+        # Draw faction overview strip (with war indicators)
         self.ui_renderer.draw_faction_overview(
-            screen, self.factions, self.faction_agendas_this_turn
+            screen, self.factions, self.faction_agendas_this_turn,
+            wars=render_wars,
         )
 
         # Draw faction panel (right side)
@@ -495,7 +527,8 @@ class GameScene:
         if panel_faction and panel_faction in self.factions:
             self.ui_renderer.draw_faction_panel(
                 screen, self.factions[panel_faction],
-                SCREEN_WIDTH - 240, 78, 230
+                SCREEN_WIDTH - 240, 92, 230,
+                spirits=self.spirits,
             )
 
         # Draw event log (bottom right)
@@ -590,8 +623,21 @@ class GameScene:
         title = self.font.render("Choose an Agenda card to add to the faction's deck:", True, (200, 200, 220))
         screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, SCREEN_HEIGHT // 2 - 80))
 
+        # Highlight selected button
         for btn in self.action_buttons:
+            if self.selected_ejection_type and btn.text.lower() == self.selected_ejection_type:
+                btn.color = (120, 80, 180)
+            else:
+                btn.color = (80, 60, 130)
             btn.draw(screen, self.font)
 
-        # Handle click on ejection buttons
-        # (clicks handled in handle_event via action_buttons)
+        # Selection feedback
+        if self.selected_ejection_type:
+            sel_text = self.font.render(
+                f"Selected: {self.selected_ejection_type.title()}", True, (200, 200, 220))
+            screen.blit(sel_text, (20, SCREEN_HEIGHT - 110))
+
+        # Confirm button
+        if self.submit_button:
+            self.submit_button.enabled = self.selected_ejection_type is not None
+            self.submit_button.draw(screen, self.font)

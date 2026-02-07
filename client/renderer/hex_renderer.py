@@ -2,7 +2,7 @@
 
 import pygame
 import math
-from shared.hex_utils import axial_to_pixel, hex_vertices
+from shared.hex_utils import axial_to_pixel, hex_vertices, hex_neighbors
 from shared.constants import (
     FACTION_COLORS, NEUTRAL_COLOR, HEX_SIZE, IdolType,
 )
@@ -100,6 +100,11 @@ class HexRenderer:
             else:
                 pygame.draw.polygon(surface, border_color, screen_verts, 1)
 
+        # Draw war arrows
+        if wars:
+            self._draw_war_arrows(surface, wars, hex_ownership, camera,
+                                  screen_w, screen_h)
+
         # Draw idols
         if idols:
             self._draw_idols(surface, idols, camera, screen_w, screen_h,
@@ -126,6 +131,86 @@ class HexRenderer:
             symbol = IDOL_SYMBOLS.get(idol.type, "?")
             text = font.render(symbol, True, (0, 0, 0))
             surface.blit(text, (ix - text.get_width() // 2, iy - text.get_height() // 2))
+
+    def _draw_war_arrows(self, surface, wars, hex_ownership, camera,
+                         screen_w, screen_h):
+        """Draw bidirectional arrows for all wars."""
+        for war in wars:
+            if war.is_ripe and war.battleground:
+                # Bright red arrow on the battleground border only
+                h1 = (war.battleground[0].q, war.battleground[0].r)
+                h2 = (war.battleground[1].q, war.battleground[1].r)
+                self._draw_hex_arrow(surface, h1, h2, (255, 50, 50),
+                                     camera, screen_w, screen_h,
+                                     width=3, head_size=8)
+            else:
+                # Faint red arrows between all neighboring border hexes
+                pairs = self._get_border_pairs(hex_ownership,
+                                               war.faction_a, war.faction_b)
+                for h1, h2 in pairs:
+                    self._draw_hex_arrow(surface, h1, h2, (180, 60, 60),
+                                         camera, screen_w, screen_h,
+                                         width=1, head_size=5)
+
+    def _get_border_pairs(self, hex_ownership, faction_a, faction_b):
+        """Find all adjacent hex pairs where one is faction_a and other is faction_b."""
+        seen = set()
+        pairs = []
+        for (q, r), owner in hex_ownership.items():
+            if owner == faction_a:
+                for nq, nr in hex_neighbors(q, r):
+                    if hex_ownership.get((nq, nr)) == faction_b:
+                        key = (min((q, r), (nq, nr)), max((q, r), (nq, nr)))
+                        if key not in seen:
+                            seen.add(key)
+                            pairs.append(((q, r), (nq, nr)))
+        return pairs
+
+    def _draw_hex_arrow(self, surface, h1, h2, color, camera, screen_w, screen_h,
+                        width=2, head_size=6):
+        """Draw a bidirectional arrow between two hex centers."""
+        w1x, w1y = axial_to_pixel(h1[0], h1[1], self.hex_size)
+        w2x, w2y = axial_to_pixel(h2[0], h2[1], self.hex_size)
+        s1 = camera.world_to_screen(w1x, w1y, screen_w, screen_h)
+        s2 = camera.world_to_screen(w2x, w2y, screen_w, screen_h)
+
+        dx = s2[0] - s1[0]
+        dy = s2[1] - s1[1]
+        length = math.sqrt(dx * dx + dy * dy)
+        if length < 1:
+            return
+        ux = dx / length
+        uy = dy / length
+
+        # Shorten line to middle portion (30% inward from each end)
+        p1 = (s1[0] + dx * 0.3, s1[1] + dy * 0.3)
+        p2 = (s2[0] - dx * 0.3, s2[1] - dy * 0.3)
+
+        scaled_head = max(3, head_size * camera.zoom)
+        scaled_width = max(1, int(width * camera.zoom))
+
+        pygame.draw.line(surface, color,
+                         (int(p1[0]), int(p1[1])),
+                         (int(p2[0]), int(p2[1])), scaled_width)
+
+        # Perpendicular vector
+        px, py = -uy, ux
+
+        # Arrowhead at p2 (pointing towards h2)
+        tip = p2
+        left = (tip[0] - ux * scaled_head + px * scaled_head * 0.5,
+                tip[1] - uy * scaled_head + py * scaled_head * 0.5)
+        right = (tip[0] - ux * scaled_head - px * scaled_head * 0.5,
+                 tip[1] - uy * scaled_head - py * scaled_head * 0.5)
+        pygame.draw.polygon(surface, color, [tip, left, right])
+
+        # Arrowhead at p1 (pointing towards h1)
+        tip = p1
+        left = (tip[0] + ux * scaled_head + px * scaled_head * 0.5,
+                tip[1] + uy * scaled_head + py * scaled_head * 0.5)
+        right = (tip[0] + ux * scaled_head - px * scaled_head * 0.5,
+                 tip[1] + uy * scaled_head - py * scaled_head * 0.5)
+        pygame.draw.polygon(surface, color, [tip, left, right])
 
     def get_hex_at_screen(self, sx: int, sy: int, camera, screen_w: int, screen_h: int,
                           valid_hexes: set = None) -> tuple[int, int] | None:

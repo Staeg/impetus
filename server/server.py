@@ -148,6 +148,13 @@ class GameServer:
             room = GameRoom(room_code)
             self.rooms[room_code] = room
 
+        # Check for duplicate name in lobby
+        for existing in room.players.values():
+            if existing.player_name.lower() == player_name.lower():
+                await ws.send(create_message(MessageType.ERROR,
+                    {"message": f"Name '{player_name}' is already taken"}))
+                return None, None
+
         spirit_id = str(uuid.uuid4())[:8]
         session = PlayerSession(ws, player_name, spirit_id)
         room.add_player(session)
