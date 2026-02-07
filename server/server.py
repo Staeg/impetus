@@ -9,7 +9,7 @@ from typing import Optional
 import websockets
 from websockets.asyncio.server import serve, ServerConnection
 
-from shared.constants import MessageType, Phase
+from shared.constants import MessageType, Phase, AgendaType
 from shared.protocol import create_message, parse_message
 from server.game_state import GameState
 
@@ -270,14 +270,23 @@ class GameServer:
             for spirit_id, cards in gs.change_pending.items():
                 await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
                     "phase": "change_choice",
-                    "cards": [c.value for c in cards],
+                    "turn": gs.turn,
+                    "options": {"cards": [c.value for c in cards]},
                 }))
             for spirit_id, faction_id in gs.ejection_pending.items():
                 await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
                     "phase": "ejection_choice",
-                    "faction": faction_id,
-                    "agenda_types": [at.value for at in AgendaType],
+                    "turn": gs.turn,
+                    "options": {
+                        "faction": faction_id,
+                        "agenda_types": [at.value for at in AgendaType],
+                    },
                 }))
+            # Broadcast who we're waiting for so other players see the wait state
+            waiting_for = list(gs.change_pending.keys()) + list(gs.ejection_pending.keys())
+            await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                "players_remaining": waiting_for,
+            }))
             return
 
         await self._auto_resolve_phases(room)

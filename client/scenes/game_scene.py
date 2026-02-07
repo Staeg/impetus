@@ -31,6 +31,9 @@ class GameScene:
         self.waiting_for: list[str] = []
         self.event_log: list[str] = []
 
+        # Faction overview tracking
+        self.faction_agendas_this_turn: dict[str, str] = {}
+
         # Phase-specific state
         self.phase_options: dict = {}
         self.selected_faction: str | None = None
@@ -151,11 +154,18 @@ class GameScene:
                 self._handle_hex_click(hex_coord)
 
     def _handle_action_button(self, text: str):
-        if text == "Possess":
+        if self.ejection_pending:
+            self._submit_ejection_choice(text.lower())
+        elif text == "Possess":
             self.vagrant_action = "possess"
+            self.idol_buttons = []
+            self.selected_hex = None
+            self.selected_idol_type = None
             self._build_faction_buttons()
         elif text == "Place Idol":
             self.vagrant_action = "place_idol"
+            self.faction_buttons = []
+            self.selected_faction = None
             self._build_idol_buttons()
 
     def _handle_faction_select(self, faction_id: str):
@@ -215,6 +225,7 @@ class GameScene:
         self.selected_hex = None
         self.selected_idol_type = None
         self.selected_agenda_index = -1
+        self.agenda_hand = []
         self.action_buttons = []
         self.faction_buttons = []
         self.idol_buttons = []
@@ -357,9 +368,11 @@ class GameScene:
         elif etype == "agenda_chosen":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
             self.event_log.append(f"{fname} plays {event['agenda']}")
+            self.faction_agendas_this_turn[event["faction"]] = event["agenda"]
         elif etype == "agenda_random":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
             self.event_log.append(f"{fname} randomly plays {event['agenda']}")
+            self.faction_agendas_this_turn[event["faction"]] = event["agenda"]
         elif etype == "steal":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
             self.event_log.append(f"{fname} stole {event.get('gold_gained', 0)} gold")
@@ -408,6 +421,7 @@ class GameScene:
             self.event_log.append(f"{name} gained presence in {fname}")
         elif etype == "turn_start":
             self.event_log.append(f"--- Turn {event.get('turn', '?')} ---")
+            self.faction_agendas_this_turn.clear()
         elif etype == "game_over":
             winners = event.get("winners", [])
             names = [self.spirits.get(w, {}).get("name", w[:6]) for w in winners]
@@ -467,6 +481,11 @@ class GameScene:
         self.ui_renderer.draw_hud(screen, self.phase, self.turn,
                                    self.spirits, self.app.my_spirit_id)
 
+        # Draw faction overview strip
+        self.ui_renderer.draw_faction_overview(
+            screen, self.factions, self.faction_agendas_this_turn
+        )
+
         # Draw faction panel (right side)
         panel_faction = self.selected_faction
         if not panel_faction:
@@ -476,7 +495,7 @@ class GameScene:
         if panel_faction and panel_faction in self.factions:
             self.ui_renderer.draw_faction_panel(
                 screen, self.factions[panel_faction],
-                SCREEN_WIDTH - 240, 50, 230
+                SCREEN_WIDTH - 240, 78, 230
             )
 
         # Draw event log (bottom right)

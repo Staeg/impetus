@@ -272,6 +272,7 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
                 spoils_conquests[winner] = loser_hex
 
         spoils_choices[winner] = spoils_type
+        factions[winner].add_spoils_card(spoils_type)
         events.append({
             "type": "spoils_drawn",
             "faction": winner,

@@ -3,6 +3,7 @@
 import pygame
 from shared.constants import (
     Phase, AgendaType, IdolType, FACTION_COLORS, FACTION_DISPLAY_NAMES,
+    FACTION_NAMES,
 )
 
 
@@ -82,6 +83,59 @@ class UIRenderer:
             text = self.small_font.render(f"{name}: {vp}VP", True, color)
             surface.blit(text, (x, 12))
             x += text.get_width() + 20
+
+    def draw_faction_overview(self, surface: pygame.Surface, factions: dict,
+                              faction_agendas: dict[str, str]):
+        """Draw a compact overview strip showing all factions' gold and agenda."""
+        strip_y = 42
+        strip_h = 28
+        sw = surface.get_width()
+        cell_w = sw // len(FACTION_NAMES) if FACTION_NAMES else sw
+
+        # Background
+        pygame.draw.rect(surface, (15, 15, 22), pygame.Rect(0, strip_y, sw, strip_h))
+        pygame.draw.line(surface, (40, 40, 55), (0, strip_y + strip_h),
+                         (sw, strip_y + strip_h))
+
+        agenda_colors = {
+            "steal": (255, 80, 80),
+            "bond": (100, 200, 255),
+            "trade": (255, 220, 60),
+            "expand": (80, 220, 80),
+            "change": (200, 140, 255),
+        }
+
+        for i, fid in enumerate(FACTION_NAMES):
+            fd = factions.get(fid)
+            if not fd:
+                continue
+            cx = i * cell_w
+            fc = tuple(FACTION_COLORS.get(fid, (150, 150, 150)))
+
+            # Color accent bar
+            pygame.draw.rect(surface, fc, pygame.Rect(cx, strip_y, 3, strip_h))
+
+            # Darkened background
+            bg = tuple(max(c // 5, 8) for c in fc)
+            pygame.draw.rect(surface, bg, pygame.Rect(cx + 3, strip_y, cell_w - 3, strip_h))
+
+            # Faction abbreviation (3 chars)
+            abbr = FACTION_DISPLAY_NAMES.get(fid, fid)[:3].upper()
+            abbr_surf = self.small_font.render(abbr, True, fc)
+            surface.blit(abbr_surf, (cx + 6, strip_y + 7))
+
+            # Gold amount
+            gold = fd.get("gold", 0) if isinstance(fd, dict) else getattr(fd, "gold", 0)
+            gold_text = self.small_font.render(f"{gold}g", True, (255, 220, 60))
+            surface.blit(gold_text, (cx + 6 + abbr_surf.get_width() + 6, strip_y + 7))
+
+            # Agenda name (right-aligned)
+            agenda_str = faction_agendas.get(fid, "")
+            if agenda_str:
+                a_label = agenda_str.title()
+                a_color = agenda_colors.get(agenda_str, (160, 160, 180))
+                a_surf = self.small_font.render(a_label, True, a_color)
+                surface.blit(a_surf, (cx + cell_w - a_surf.get_width() - 6, strip_y + 7))
 
     def draw_faction_panel(self, surface: pygame.Surface, faction_data: dict,
                            x: int, y: int, width: int = 220):
@@ -212,4 +266,4 @@ class UIRenderer:
         text = f"Waiting for: {', '.join(names)}"
         text_surf = self.font.render(text, True, (200, 200, 100))
         x = surface.get_width() // 2 - text_surf.get_width() // 2
-        surface.blit(text_surf, (x, 50))
+        surface.blit(text_surf, (x, 78))

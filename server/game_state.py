@@ -96,11 +96,14 @@ class GameState:
                 return {"action": "none", "reason": "vagrant"}
             if spirit.possessed_faction is None:
                 return {"action": "none", "reason": "no_faction"}
-            # Draw cards
-            faction = self.factions[spirit.possessed_faction]
-            draw_count = 1 + spirit.influence
-            hand = faction.draw_agenda_cards(draw_count)
-            self.drawn_hands[spirit_id] = hand
+            # Guard against double-draw on reconnection
+            if spirit_id in self.drawn_hands:
+                hand = self.drawn_hands[spirit_id]
+            else:
+                faction = self.factions[spirit.possessed_faction]
+                draw_count = 1 + spirit.influence
+                hand = faction.draw_agenda_cards(draw_count)
+                self.drawn_hands[spirit_id] = hand
             return {
                 "action": "choose_agenda",
                 "hand": [c.to_dict() for c in hand],
@@ -314,6 +317,9 @@ class GameState:
             idx = action["agenda_index"]
             chosen = hand[idx]
             agenda_choices[spirit.possessed_faction] = chosen.agenda_type
+            # Track all drawn cards for return to deck during cleanup
+            faction = self.factions[spirit.possessed_faction]
+            faction.played_agenda_this_turn.extend(hand)
             events.append({
                 "type": "agenda_chosen",
                 "spirit": spirit_id,
@@ -504,8 +510,9 @@ class GameState:
 
     def _resolve_cleanup(self) -> list[dict]:
         events = []
-        # Reset turn tracking
+        # Return played/spoils cards to decks, then reset turn tracking
         for faction in self.factions.values():
+            faction.cleanup_deck()
             faction.reset_turn_tracking()
 
         self.turn += 1

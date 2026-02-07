@@ -36,6 +36,9 @@ class Faction:
         self.gold_gained_this_turn: int = 0
         self.territories_gained_this_turn: int = 0
         self.wars_won_this_turn: int = 0
+        # Agenda deck tracking for cleanup
+        self.played_agenda_this_turn: list[AgendaCard] = []
+        self.spoils_cards_this_turn: list[AgendaCard] = []
 
     def reset_turn_tracking(self):
         self.gold_gained_this_turn = 0
@@ -63,10 +66,16 @@ class Faction:
         self.regard[other_faction_id] = current + delta
 
     def draw_agenda_cards(self, count: int) -> list[AgendaCard]:
-        """Draw `count` cards from the shuffled agenda deck."""
-        shuffled = list(self.agenda_deck)
-        random.shuffle(shuffled)
-        return shuffled[:min(count, len(shuffled))]
+        """Draw `count` cards from the shuffled agenda deck.
+
+        Cards are removed from the deck when drawn. They should be
+        returned via played_agenda_this_turn during cleanup.
+        """
+        random.shuffle(self.agenda_deck)
+        n = min(count, len(self.agenda_deck))
+        hand = self.agenda_deck[:n]
+        self.agenda_deck = self.agenda_deck[n:]
+        return hand
 
     def draw_random_agenda(self) -> AgendaCard:
         """Draw a single random agenda card (for non-possessed factions)."""
@@ -74,6 +83,18 @@ class Faction:
 
     def add_agenda_card(self, agenda_type: AgendaType):
         self.agenda_deck.append(AgendaCard(agenda_type))
+
+    def add_spoils_card(self, agenda_type: AgendaType):
+        """Stage a Spoils of War card for permanent addition during cleanup."""
+        self.spoils_cards_this_turn.append(AgendaCard(agenda_type))
+
+    def cleanup_deck(self):
+        """Return all played and spoils cards to the deck and shuffle."""
+        self.agenda_deck.extend(self.played_agenda_this_turn)
+        self.agenda_deck.extend(self.spoils_cards_this_turn)
+        self.played_agenda_this_turn.clear()
+        self.spoils_cards_this_turn.clear()
+        random.shuffle(self.agenda_deck)
 
     def shuffle_agenda_deck(self):
         random.shuffle(self.agenda_deck)
