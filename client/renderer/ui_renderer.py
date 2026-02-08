@@ -138,6 +138,18 @@ class UIRenderer:
                 continue
             cx = i * cell_w
             fc = tuple(FACTION_COLORS.get(fid, (150, 150, 150)))
+            is_eliminated = fd.get("eliminated", False) if isinstance(fd, dict) else getattr(fd, "eliminated", False)
+
+            if is_eliminated:
+                # Greyed-out eliminated faction
+                pygame.draw.rect(surface, (40, 40, 40), pygame.Rect(cx, strip_y, 3, strip_h))
+                pygame.draw.rect(surface, (20, 20, 20), pygame.Rect(cx + 3, strip_y, cell_w - 3, strip_h))
+                abbr = FACTION_DISPLAY_NAMES.get(fid, fid)
+                abbr_surf = self.small_font.render(abbr, True, (80, 80, 80))
+                surface.blit(abbr_surf, (cx + 6, strip_y + 4))
+                elim_surf = self.small_font.render("ELIMINATED", True, (120, 60, 60))
+                surface.blit(elim_surf, (cx + 6, strip_y + 22))
+                continue
 
             # Color accent bar
             pygame.draw.rect(surface, fc, pygame.Rect(cx, strip_y, 3, strip_h))
@@ -156,6 +168,14 @@ class UIRenderer:
             gold_text = self.small_font.render(f"{gold}g", True, (255, 220, 60))
             surface.blit(gold_text, (cx + 6 + abbr_surf.get_width() + 6, strip_y + 4))
 
+            # Presence indicator (first row, after gold)
+            presence_id = fd.get("presence_spirit") if isinstance(fd, dict) else getattr(fd, "presence_spirit", None)
+            presence_end_x = cx + 6 + abbr_surf.get_width() + 6 + gold_text.get_width()
+            if presence_id:
+                p_name = spirits.get(presence_id, {}).get("name", presence_id[:6])
+                p_surf = self.small_font.render(f" P:{p_name}", True, (100, 200, 180))
+                surface.blit(p_surf, (presence_end_x, strip_y + 4))
+
             # Agenda name (right-aligned)
             agenda_str = faction_agendas.get(fid, "")
             if agenda_str:
@@ -164,7 +184,7 @@ class UIRenderer:
                 a_surf = self.small_font.render(a_label, True, a_color)
                 surface.blit(a_surf, (cx + cell_w - a_surf.get_width() - 6, strip_y + 4))
 
-            # War indicators (second row, left side)
+            # War indicators (second row)
             if fid in war_lookup:
                 wx = cx + 6
                 for opponent_abbr, is_ripe in war_lookup[fid]:
@@ -172,13 +192,6 @@ class UIRenderer:
                     war_surf = self.small_font.render(f"vs {opponent_abbr}", True, war_color)
                     surface.blit(war_surf, (wx, strip_y + 22))
                     wx += war_surf.get_width() + 6
-
-            # Presence indicator (second row, right side)
-            presence_id = fd.get("presence_spirit") if isinstance(fd, dict) else getattr(fd, "presence_spirit", None)
-            if presence_id:
-                p_name = spirits.get(presence_id, {}).get("name", presence_id[:6])
-                p_surf = self.small_font.render(f"Presence: {p_name}", True, (140, 200, 180))
-                surface.blit(p_surf, (cx + cell_w - p_surf.get_width() - 6, strip_y + 22))
 
     def draw_faction_panel(self, surface: pygame.Surface, faction_data: dict,
                            x: int, y: int, width: int = 220, spirits: dict = None):
@@ -209,6 +222,11 @@ class UIRenderer:
         name_text = self.font.render(name, True, color)
         surface.blit(name_text, (x + 10, dy))
         dy += 24
+
+        if faction_data.get("eliminated", False):
+            elim_text = self.font.render("ELIMINATED", True, (200, 60, 60))
+            surface.blit(elim_text, (x + 10, dy))
+            return
 
         info_lines = [
             f"Gold: {gold}",
@@ -244,12 +262,61 @@ class UIRenderer:
                     surface.blit(text, (x + 10, dy))
                     dy += 18
 
+        # Extra agenda cards
+        extra_agendas = faction_data.get("agenda_deck_extra", {})
+        if extra_agendas:
+            dy += 4
+            text = self.small_font.render("Extra Agendas:", True, (150, 150, 170))
+            surface.blit(text, (x + 10, dy))
+            dy += 18
+            for atype, count in extra_agendas.items():
+                text = self.small_font.render(f"  {atype}: +{count}", True, (200, 180, 100))
+                surface.blit(text, (x + 10, dy))
+                dy += 18
+
+    def _build_card_description(self, agenda_type: str, modifiers: dict) -> list[str]:
+        """Build detailed description lines for an agenda card based on modifiers."""
+        steal_mod = modifiers.get("steal", 0)
+        bond_mod = modifiers.get("bond", 0)
+        trade_mod = modifiers.get("trade", 0)
+        expand_mod = modifiers.get("expand", 0)
+
+        descs = {
+            "steal": [
+                f"-{1 + steal_mod} regard",
+                f"-{1 + steal_mod}g from neighbors",
+                "+gold stolen",
+                "War at -2 regard",
+            ],
+            "bond": [
+                f"+{1 + bond_mod} regard",
+                "with neighbors",
+            ],
+            "trade": [
+                "+1g base",
+                f"+{1 + trade_mod}g per trader",
+            ],
+            "expand": [
+                f"Cost: terr-{expand_mod}g",
+                "Claim neutral hex",
+                f"Fail: +{1 + expand_mod}g",
+            ],
+            "change": [
+                "Draw modifier",
+                "card",
+            ],
+        }
+        return descs.get(agenda_type, ["???"])
+
     def draw_card_hand(self, surface: pygame.Surface, hand: list[dict],
-                       selected_index: int, x: int, y: int) -> list[pygame.Rect]:
+                       selected_index: int, x: int, y: int,
+                       modifiers: dict | None = None) -> list[pygame.Rect]:
         """Draw clickable agenda cards. Returns list of card rects."""
+        modifiers = modifiers or {}
         rects = []
-        card_w, card_h = 100, 140
+        card_w, card_h = 110, 170
         spacing = 10
+        effect_font = self._get_font(11)
 
         for i, card in enumerate(hand):
             cx = x + i * (card_w + spacing)
@@ -264,20 +331,13 @@ class UIRenderer:
 
             agenda_type = card.get("agenda_type", "?")
             name_text = self.font.render(agenda_type.title(), True, (220, 220, 240))
-            surface.blit(name_text, (cx + card_w // 2 - name_text.get_width() // 2, y + 20))
+            surface.blit(name_text, (cx + card_w // 2 - name_text.get_width() // 2, y + 10))
 
-            # Short description
-            descriptions = {
-                "steal": "Steal gold\nfrom neighbors",
-                "bond": "Improve\nregard",
-                "trade": "Gain gold\nfrom trade",
-                "expand": "Claim new\nterritory",
-                "change": "Modify an\nagenda type",
-            }
-            desc = descriptions.get(agenda_type, "")
-            for j, line in enumerate(desc.split("\n")):
-                desc_text = self.small_font.render(line, True, (160, 160, 180))
-                surface.blit(desc_text, (cx + card_w // 2 - desc_text.get_width() // 2, y + 60 + j * 16))
+            # Detailed description
+            desc_lines = self._build_card_description(agenda_type, modifiers)
+            for j, line in enumerate(desc_lines):
+                desc_text = effect_font.render(line, True, (160, 170, 190))
+                surface.blit(desc_text, (cx + card_w // 2 - desc_text.get_width() // 2, y + 38 + j * 15))
 
         return rects
 

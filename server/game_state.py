@@ -115,10 +115,10 @@ class GameState:
         if self.phase == Phase.VAGRANT_PHASE:
             if not spirit.is_vagrant:
                 return {"action": "none", "reason": "not_vagrant"}
-            # Can possess any unoccupied faction or place an idol on neutral territory
+            # Can possess any unoccupied, non-eliminated faction or place an idol
             available_factions = [
                 fid for fid, f in self.factions.items()
-                if f.possessing_spirit is None
+                if f.possessing_spirit is None and not f.eliminated
             ]
             neutral_hexes = [
                 {"q": q, "r": r}
@@ -358,6 +358,43 @@ class GameState:
                     "faction": faction.faction_id,
                 })
 
+    def _check_eliminations(self, events: list):
+        """Check all factions for 0 territories and mark as eliminated."""
+        for fid, faction in self.factions.items():
+            if faction.eliminated:
+                continue
+            territories = self.hex_map.get_faction_territories(fid)
+            if len(territories) > 0:
+                continue
+            faction.eliminated = True
+            events.append({
+                "type": "faction_eliminated",
+                "faction": fid,
+            })
+            # Eject possessing spirit
+            if faction.possessing_spirit:
+                spirit = self.spirits[faction.possessing_spirit]
+                faction.possessing_spirit = None
+                spirit.become_vagrant()
+                events.append({
+                    "type": "ejected",
+                    "spirit": spirit.spirit_id,
+                    "faction": fid,
+                })
+            # Clear presence
+            faction.presence_spirit = None
+            # Remove wars involving this faction
+            wars_to_remove = [w for w in self.wars
+                              if w.faction_a == fid or w.faction_b == fid]
+            for w in wars_to_remove:
+                self.wars.remove(w)
+                events.append({
+                    "type": "war_ended",
+                    "war_id": w.war_id,
+                    "reason": "faction_eliminated",
+                    "faction": fid,
+                })
+
     def _resolve_agenda_phase(self) -> list[dict]:
         events = []
         agenda_choices: dict[str, AgendaType] = {}
@@ -380,9 +417,11 @@ class GameState:
                 "agenda": chosen.agenda_type.value,
             })
 
-        # Non-possessed factions draw random agenda
+        # Non-possessed factions draw random agenda (skip eliminated)
         for fid, faction in self.factions.items():
             if fid not in agenda_choices:
+                if faction.eliminated:
+                    continue
                 card = faction.draw_random_agenda()
                 agenda_choices[fid] = card.agenda_type
                 events.append({
@@ -534,6 +573,9 @@ class GameState:
         else:
             self.spoils_pending = {}
 
+        # Check for faction eliminations after territory changes
+        self._check_eliminations(events)
+
         if not self.spoils_pending:
             self.phase = Phase.SCORING
         # Otherwise stay in WAR_PHASE until spoils choices are submitted
@@ -570,6 +612,8 @@ class GameState:
         events = []
         # Return played/spoils cards to decks, then reset turn tracking
         for faction in self.factions.values():
+            if faction.eliminated:
+                continue
             faction.cleanup_deck()
             faction.reset_turn_tracking()
 
@@ -596,6 +640,8 @@ class GameState:
         resolve_spoils_choice(self.factions, self.hex_map, self.wars, events,
                               spirit_id, card_index, self.spoils_pending,
                               self.spirits)
+        # Check for faction eliminations after spoils territory changes
+        self._check_eliminations(events)
         # If all spoils resolved, advance to scoring
         if not self.spoils_pending:
             self.phase = Phase.SCORING

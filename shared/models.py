@@ -82,18 +82,28 @@ class FactionState:
     regard: dict[str, int] = field(default_factory=dict)
     possessing_spirit: Optional[str] = None
     presence_spirit: Optional[str] = None
+    eliminated: bool = False
 
     def to_dict(self) -> dict:
+        # Count extra agenda cards (beyond 1 base copy per type)
+        type_counts: dict[str, int] = {}
+        for card in self.agenda_deck:
+            t = card.agenda_type.value if hasattr(card.agenda_type, 'value') else card.agenda_type
+            type_counts[t] = type_counts.get(t, 0) + 1
+        agenda_deck_extra = {t: c - 1 for t, c in type_counts.items() if c > 1}
+
         return {
             "faction_id": self.faction_id,
             "color": list(self.color),
             "gold": self.gold,
             "territories": [h.to_dict() for h in self.territories],
             "agenda_deck_size": len(self.agenda_deck),
+            "agenda_deck_extra": agenda_deck_extra,
             "change_modifiers": self.change_modifiers,
             "regard": self.regard,
             "possessing_spirit": self.possessing_spirit,
             "presence_spirit": self.presence_spirit,
+            "eliminated": self.eliminated,
         }
 
     @staticmethod
@@ -107,6 +117,7 @@ class FactionState:
             regard=d.get("regard", {}),
             possessing_spirit=d.get("possessing_spirit"),
             presence_spirit=d.get("presence_spirit"),
+            eliminated=d.get("eliminated", False),
         )
 
 

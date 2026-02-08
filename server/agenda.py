@@ -54,6 +54,8 @@ def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils)
         for other_fid, other_faction in factions.items():
             if other_fid == fid:
                 continue
+            if other_faction.eliminated:
+                continue
             if not hex_map.are_factions_neighbors(fid, other_fid):
                 continue
             # Mark regard change
@@ -114,6 +116,8 @@ def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils)
         for other_fid in factions:
             if other_fid == fid:
                 continue
+            if factions[other_fid].eliminated:
+                continue
             if not hex_map.are_factions_neighbors(fid, other_fid):
                 continue
             regard = factions[fid].get_regard(other_fid)
@@ -143,6 +147,8 @@ def _resolve_bond(factions, hex_map, playing_factions, events):
 
         for other_fid in factions:
             if other_fid == fid:
+                continue
+            if factions[other_fid].eliminated:
                 continue
             if not hex_map.are_factions_neighbors(fid, other_fid):
                 continue

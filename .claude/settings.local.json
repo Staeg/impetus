@@ -9,7 +9,10 @@
       "Bash(python -m pytest:*)",
       "Bash(python:*)",
       "Bash(timeout /t 2 /nobreak)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(xargs:*)",
+      "Bash(dir:*)",
+      "Bash(findstr:*)"
     ]
   }
 }

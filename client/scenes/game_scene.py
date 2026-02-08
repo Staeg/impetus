@@ -342,7 +342,10 @@ class GameScene:
             )
 
     def _build_faction_buttons(self):
-        available = self.phase_options.get("available_factions", [])
+        available = [
+            fid for fid in self.phase_options.get("available_factions", [])
+            if not self.factions.get(fid, {}).get("eliminated", False)
+        ]
         self.faction_buttons = []
         y = SCREEN_HEIGHT - 160
         for i, fid in enumerate(available):
@@ -373,11 +376,11 @@ class GameScene:
     def _get_card_rects(self) -> list[pygame.Rect]:
         """Calculate card rects for the agenda hand."""
         rects = []
-        card_w, card_h = 100, 140
+        card_w, card_h = 110, 170
         spacing = 10
         total_w = len(self.agenda_hand) * (card_w + spacing) - spacing
         start_x = SCREEN_WIDTH // 2 - total_w // 2
-        y = SCREEN_HEIGHT - 180
+        y = SCREEN_HEIGHT - 210
         for i in range(len(self.agenda_hand)):
             rects.append(pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h))
         return rects
@@ -395,7 +398,7 @@ class GameScene:
 
     def _get_spoils_card_rects(self) -> list[pygame.Rect]:
         rects = []
-        card_w, card_h = 120, 60
+        card_w, card_h = 110, 170
         spacing = 10
         total_w = len(self.spoils_cards) * (card_w + spacing) - spacing
         start_x = SCREEN_WIDTH // 2 - total_w // 2
@@ -513,6 +516,11 @@ class GameScene:
             name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
             self.event_log.append(f"{name} gained presence in {fname}")
+        elif etype == "faction_eliminated":
+            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
+            self.event_log.append(f"{fname} has been ELIMINATED!")
+        elif etype == "war_ended":
+            self.event_log.append(f"War ended ({event.get('reason', 'unknown')})")
         elif etype == "setup_start":
             self.event_log.append("--- Setup ---")
         elif etype == "turn_start":
@@ -672,14 +680,24 @@ class GameScene:
             self.submit_button.enabled = can_submit
             self.submit_button.draw(screen, self.font)
 
+    def _get_current_faction_modifiers(self) -> dict:
+        """Get the change_modifiers for the current player's possessed faction."""
+        my_spirit = self.spirits.get(self.app.my_spirit_id, {})
+        fid = my_spirit.get("possessed_faction")
+        if fid and fid in self.factions:
+            return self.factions[fid].get("change_modifiers", {})
+        return {}
+
     def _render_agenda_ui(self, screen):
         if self.agenda_hand:
-            total_w = len(self.agenda_hand) * 110 - 10
+            total_w = len(self.agenda_hand) * 120 - 10
             start_x = SCREEN_WIDTH // 2 - total_w // 2
+            modifiers = self._get_current_faction_modifiers()
             self.ui_renderer.draw_card_hand(
                 screen, self.agenda_hand,
                 self.selected_agenda_index,
-                start_x, SCREEN_HEIGHT - 180,
+                start_x, SCREEN_HEIGHT - 210,
+                modifiers=modifiers,
             )
 
         if self.submit_button:
@@ -728,12 +746,16 @@ class GameScene:
         if not self.spoils_cards:
             return
         title = self.font.render("Spoils of War - Choose an agenda:", True, (255, 200, 100))
-        screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, SCREEN_HEIGHT // 2 - 60))
-
         rects = self._get_spoils_card_rects()
-        for i, (card, rect) in enumerate(zip(self.spoils_cards, rects)):
-            pygame.draw.rect(screen, (70, 50, 30), rect, border_radius=6)
-            pygame.draw.rect(screen, (200, 160, 60), rect, 2, border_radius=6)
-            text = self.font.render(card.title(), True, (255, 220, 140))
-            screen.blit(text, (rect.centerx - text.get_width() // 2,
-                               rect.centery - text.get_height() // 2))
+        title_y = rects[0].y - 30 if rects else SCREEN_HEIGHT // 2 - 120
+        screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, title_y))
+
+        modifiers = self._get_current_faction_modifiers()
+        hand = [{"agenda_type": card} for card in self.spoils_cards]
+        total_w = len(self.spoils_cards) * 120 - 10
+        start_x = SCREEN_WIDTH // 2 - total_w // 2
+        self.ui_renderer.draw_card_hand(
+            screen, hand, -1,
+            start_x, rects[0].y if rects else SCREEN_HEIGHT // 2 - 85,
+            modifiers=modifiers,
+        )
