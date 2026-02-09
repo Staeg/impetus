@@ -123,6 +123,7 @@ class MessageType(str, Enum):
     SUBMIT_CHANGE_CHOICE = "submit_change_choice"
     SUBMIT_EJECTION_AGENDA = "submit_ejection_agenda"
     SUBMIT_SPOILS_CHOICE = "submit_spoils_choice"
+    SUBMIT_SPOILS_CHANGE_CHOICE = "submit_spoils_change_choice"
     # Server -> Client
     LOBBY_STATE = "lobby_state"
     GAME_START = "game_start"

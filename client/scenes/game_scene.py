@@ -53,6 +53,7 @@ class GameScene:
         self.ejection_faction = ""
         self.selected_ejection_type: str | None = None
         self.spoils_cards: list[str] = []
+        self.spoils_change_cards: list[str] = []
 
         # UI buttons
         self.action_buttons: list[Button] = []
@@ -168,6 +169,14 @@ class GameScene:
                         self._submit_spoils_choice(i)
                         return
 
+            # Check spoils change card clicks
+            if self.spoils_change_cards:
+                card_rects = self._get_spoils_change_card_rects()
+                for i, rect in enumerate(card_rects):
+                    if rect.collidepoint(event.pos):
+                        self._submit_spoils_change_choice(i)
+                        return
+
             # Hex click
             hex_coord = self.hex_renderer.get_hex_at_screen(
                 event.pos[0], event.pos[1], self.input_handler,
@@ -250,6 +259,12 @@ class GameScene:
         })
         self.spoils_cards = []
 
+    def _submit_spoils_change_choice(self, index: int):
+        self.app.network.send(MessageType.SUBMIT_SPOILS_CHANGE_CHOICE, {
+            "card_index": index,
+        })
+        self.spoils_change_cards = []
+
     def _clear_selection(self):
         self.vagrant_action = None
         self.selected_faction = None
@@ -323,6 +338,9 @@ class GameScene:
         elif self.phase == "spoils_choice":
             self.spoils_cards = payload_cards if (payload_cards := self.phase_options.get("cards")) else []
 
+        elif self.phase == "spoils_change_choice":
+            self.spoils_change_cards = payload_cards if (payload_cards := self.phase_options.get("cards")) else []
+
         elif self.phase == "ejection_choice":
             self.ejection_pending = True
             self.ejection_faction = self.phase_options.get("faction", "")
@@ -346,16 +364,22 @@ class GameScene:
             fid for fid in self.phase_options.get("available_factions", [])
             if not self.factions.get(fid, {}).get("eliminated", False)
         ]
+        blocked = self.phase_options.get("presence_blocked", [])
         self.faction_buttons = []
         y = SCREEN_HEIGHT - 160
-        for i, fid in enumerate(available):
+        all_factions = available + blocked
+        for i, fid in enumerate(all_factions):
             color = FACTION_COLORS.get(fid, (100, 100, 100))
+            is_blocked = fid in blocked
             btn = Button(
                 pygame.Rect(20 + i * 120, y, 110, 32),
                 FACTION_DISPLAY_NAMES.get(fid, fid),
                 color=tuple(max(c // 2, 30) for c in color),
                 text_color=(255, 255, 255),
+                tooltip="Your Presence prevents you from Possessing this Faction" if is_blocked else None,
             )
+            if is_blocked:
+                btn.enabled = False
             self.faction_buttons.append(btn)
 
     def _build_idol_buttons(self):
@@ -404,6 +428,17 @@ class GameScene:
         start_x = SCREEN_WIDTH // 2 - total_w // 2
         y = SCREEN_HEIGHT // 2 - card_h // 2
         for i in range(len(self.spoils_cards)):
+            rects.append(pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h))
+        return rects
+
+    def _get_spoils_change_card_rects(self) -> list[pygame.Rect]:
+        rects = []
+        card_w, card_h = 120, 60
+        spacing = 10
+        total_w = len(self.spoils_change_cards) * (card_w + spacing) - spacing
+        start_x = SCREEN_WIDTH // 2 - total_w // 2
+        y = SCREEN_HEIGHT // 2 - card_h // 2
+        for i in range(len(self.spoils_change_cards)):
             rects.append(pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h))
         return rects
 
@@ -633,6 +668,8 @@ class GameScene:
             self._render_ejection_ui(screen)
         elif self.phase == "spoils_choice":
             self._render_spoils_ui(screen)
+        elif self.phase == "spoils_change_choice":
+            self._render_spoils_change_ui(screen)
 
     def _render_vagrant_ui(self, screen):
         # Action buttons
@@ -642,6 +679,9 @@ class GameScene:
             btn.draw(screen, self.font)
         for btn in self.idol_buttons:
             btn.draw(screen, self.font)
+        # Tooltips (drawn last so they appear on top)
+        for btn in self.faction_buttons:
+            btn.draw_tooltip(screen, self.small_font)
 
         # Selection info
         y = SCREEN_HEIGHT - 110
@@ -759,3 +799,17 @@ class GameScene:
             start_x, rects[0].y if rects else SCREEN_HEIGHT // 2 - 85,
             modifiers=modifiers,
         )
+
+    def _render_spoils_change_ui(self, screen):
+        if not self.spoils_change_cards:
+            return
+        title = self.font.render("Spoils of War - Choose a Change modifier:", True, (255, 200, 100))
+        screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, SCREEN_HEIGHT // 2 - 60))
+
+        rects = self._get_spoils_change_card_rects()
+        for i, (card, rect) in enumerate(zip(self.spoils_change_cards, rects)):
+            pygame.draw.rect(screen, (50, 50, 70), rect, border_radius=6)
+            pygame.draw.rect(screen, (120, 120, 160), rect, 2, border_radius=6)
+            text = self.font.render(card.title(), True, (220, 220, 240))
+            screen.blit(text, (rect.centerx - text.get_width() // 2,
+                               rect.centery - text.get_height() // 2))

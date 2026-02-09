@@ -119,6 +119,12 @@ class GameState:
             available_factions = [
                 fid for fid, f in self.factions.items()
                 if f.possessing_spirit is None and not f.eliminated
+                and f.presence_spirit != spirit_id
+            ]
+            presence_blocked = [
+                fid for fid, f in self.factions.items()
+                if f.possessing_spirit is None and not f.eliminated
+                and f.presence_spirit == spirit_id
             ]
             neutral_hexes = [
                 {"q": q, "r": r}
@@ -127,6 +133,7 @@ class GameState:
             return {
                 "action": "choose",
                 "available_factions": available_factions,
+                "presence_blocked": presence_blocked,
                 "neutral_hexes": neutral_hexes,
                 "idol_types": [t.value for t in IdolType],
             }
@@ -643,6 +650,33 @@ class GameState:
         # Check for faction eliminations after spoils territory changes
         self._check_eliminations(events)
         # If all spoils resolved, advance to scoring
+        if not self.spoils_pending:
+            self.phase = Phase.SCORING
+        return None, events
+
+    def submit_spoils_change_choice(self, spirit_id: str, card_index: int) -> tuple[Optional[str], list[dict]]:
+        """Submit a spoils change modifier choice (second stage of spoils Change)."""
+        if spirit_id not in self.spoils_pending:
+            return "No spoils pending", []
+        pending = self.spoils_pending[spirit_id]
+        if pending.get("stage") != "change_choice":
+            return "Not in change choice stage", []
+        change_cards = pending.get("change_cards", [])
+        if card_index < 0 or card_index >= len(change_cards):
+            return f"Invalid card index: {card_index}", []
+
+        events = []
+        chosen = change_cards[card_index]
+        winner = pending["winner"]
+        faction = self.factions[winner]
+        faction.change_modifiers[chosen.value] = faction.change_modifiers.get(chosen.value, 0) + 1
+        events.append({
+            "type": "change",
+            "faction": winner,
+            "modifier": chosen.value,
+        })
+
+        del self.spoils_pending[spirit_id]
         if not self.spoils_pending:
             self.phase = Phase.SCORING
         return None, events

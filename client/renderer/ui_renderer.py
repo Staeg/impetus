@@ -9,7 +9,8 @@ from shared.constants import (
 
 class Button:
     def __init__(self, rect: pygame.Rect, text: str, color=(80, 80, 120),
-                 text_color=(255, 255, 255), hover_color=(100, 100, 150)):
+                 text_color=(255, 255, 255), hover_color=(100, 100, 150),
+                 tooltip: str = None):
         self.rect = rect
         self.text = text
         self.color = color
@@ -17,6 +18,7 @@ class Button:
         self.hover_color = hover_color
         self.hovered = False
         self.enabled = True
+        self.tooltip = tooltip
 
     def draw(self, surface: pygame.Surface, font: pygame.font.Font):
         color = self.hover_color if self.hovered else self.color
@@ -27,6 +29,20 @@ class Button:
         text_surf = font.render(self.text, True, self.text_color if self.enabled else (120, 120, 120))
         text_rect = text_surf.get_rect(center=self.rect.center)
         surface.blit(text_surf, text_rect)
+
+    def draw_tooltip(self, surface: pygame.Surface, font: pygame.font.Font):
+        """Draw tooltip above the button if disabled and hovered."""
+        if not self.tooltip or self.enabled or not self.hovered:
+            return
+        tip_surf = font.render(self.tooltip, True, (255, 220, 150))
+        tip_w = tip_surf.get_width() + 12
+        tip_h = tip_surf.get_height() + 8
+        tip_x = self.rect.centerx - tip_w // 2
+        tip_y = self.rect.top - tip_h - 4
+        tip_rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
+        pygame.draw.rect(surface, (40, 40, 50), tip_rect, border_radius=4)
+        pygame.draw.rect(surface, (150, 150, 100), tip_rect, 1, border_radius=4)
+        surface.blit(tip_surf, (tip_x + 6, tip_y + 4))
 
     def update(self, mouse_pos):
         self.hovered = self.rect.collidepoint(mouse_pos)

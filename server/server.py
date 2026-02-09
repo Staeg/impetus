@@ -250,10 +250,39 @@ class GameServer:
                     await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
                 else:
                     await self._broadcast_phase_result(room, events)
-                    if not room.game_state.spoils_pending:
+                    # Check if this spirit now needs a change modifier choice
+                    pending = room.game_state.spoils_pending.get(spirit_id)
+                    if pending and pending.get("stage") == "change_choice":
+                        change_cards = pending.get("change_cards", [])
+                        await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
+                            "phase": "spoils_change_choice",
+                            "turn": room.game_state.turn,
+                            "options": {"cards": [c.value for c in change_cards]},
+                        }))
+                        waiting_for = list(room.game_state.spoils_pending.keys())
+                        await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                            "players_remaining": waiting_for,
+                        }))
+                    elif not room.game_state.spoils_pending:
                         await self._auto_resolve_phases(room)
                     else:
                         # Still waiting for other spoils choices
+                        waiting_for = list(room.game_state.spoils_pending.keys())
+                        await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                            "players_remaining": waiting_for,
+                        }))
+
+        elif msg_type == MessageType.SUBMIT_SPOILS_CHANGE_CHOICE:
+            if room.game_state:
+                error, events = room.game_state.submit_spoils_change_choice(
+                    spirit_id, payload.get("card_index", 0))
+                if error:
+                    await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
+                else:
+                    await self._broadcast_phase_result(room, events)
+                    if not room.game_state.spoils_pending:
+                        await self._auto_resolve_phases(room)
+                    else:
                         waiting_for = list(room.game_state.spoils_pending.keys())
                         await room.broadcast(create_message(MessageType.WAITING_FOR, {
                             "players_remaining": waiting_for,

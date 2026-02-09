@@ -273,7 +273,7 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
         if faction.possessing_spirit and faction.possessing_spirit in spirits:
             spirit = spirits[faction.possessing_spirit]
             draw_count = 1 + spirit.influence
-            cards = [draw_spoils_agenda() for _ in range(draw_count)]
+            cards = [c.agenda_type for c in random.sample(faction.agenda_deck, min(draw_count, len(faction.agenda_deck)))]
             spoils_pending[faction.possessing_spirit] = {
                 "cards": cards,
                 "winner": winner,
@@ -288,8 +288,8 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
             })
             continue
 
-        # Non-possessed: auto-resolve with single random draw
-        spoils_type = draw_spoils_agenda()
+        # Non-possessed: auto-resolve with single draw from faction deck
+        spoils_type = random.choice(faction.agenda_deck).agenda_type if faction.agenda_deck else draw_spoils_agenda()
         result["spoils"] = spoils_type.value
 
         if spoils_type == AgendaType.EXPAND and result.get("battleground"):
@@ -343,5 +343,14 @@ def resolve_spoils_choice(factions, hex_map, wars, events, spirit_id,
         "agenda": chosen.value,
     })
 
-    resolve_agendas(factions, hex_map, {winner: chosen}, wars, events, is_spoils=True, spoils_conquests=spoils_conquests)
-    del spoils_pending[spirit_id]
+    if chosen == AgendaType.CHANGE:
+        # Spirit gets to choose a change modifier instead of random
+        spirit = spirits[spirit_id]
+        draw_count = 1 + spirit.influence
+        change_cards = random.sample(CHANGE_DECK, min(draw_count, len(CHANGE_DECK)))
+        pending["stage"] = "change_choice"
+        pending["change_cards"] = change_cards
+        # Don't delete from spoils_pending — still waiting for change choice
+    else:
+        resolve_agendas(factions, hex_map, {winner: chosen}, wars, events, is_spoils=True, spoils_conquests=spoils_conquests)
+        del spoils_pending[spirit_id]
