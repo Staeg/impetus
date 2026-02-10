@@ -36,7 +36,12 @@ class GameRoom:
 
     def remove_player(self, spirit_id: str):
         if spirit_id in self.players:
-            self.players[spirit_id].connected = False
+            if self.started:
+                # Keep for reconnection, just mark disconnected
+                self.players[spirit_id].connected = False
+            else:
+                # Pre-game: fully remove from lobby
+                del self.players[spirit_id]
 
     def reconnect_player(self, spirit_id: str, ws: ServerConnection):
         if spirit_id in self.players:
@@ -118,7 +123,10 @@ class GameServer:
                 room = self.rooms.get(room_code)
                 if room:
                     room.remove_player(spirit_id)
-                    await self._broadcast_lobby_state(room)
+                    if not room.players:
+                        del self.rooms[room_code]
+                    else:
+                        await self._broadcast_lobby_state(room)
             if ws in self.ws_to_room:
                 del self.ws_to_room[ws]
 
