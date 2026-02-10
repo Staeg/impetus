@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+import sys
 
 a = Analysis(
     ['main.py'],
@@ -43,3 +44,10 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        exe,
+        name='Impetus.app',
+        bundle_identifier='com.impetus.game',
+    )

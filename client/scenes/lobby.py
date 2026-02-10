@@ -43,6 +43,16 @@ class LobbyScene:
         elif msg_type == MessageType.ERROR:
             self.error_message = payload.get("message", "Unknown error")
             print(f"[lobby] Error: {self.error_message}")
+            # If we never successfully joined a room, return to menu
+            if not self.room_code:
+                self.app.network.disconnect()
+                menu = self.app.scenes["menu"]
+                menu.error_message = self.error_message
+                # Reset lobby for next attempt
+                self.players = []
+                self.my_spirit_id = ""
+                self.error_message = ""
+                self.app.set_scene("menu")
 
     def update(self, dt):
         pass
