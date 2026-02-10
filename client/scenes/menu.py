@@ -1,8 +1,21 @@
 """Main menu scene: host/join options."""
 
 import pygame
-from shared.constants import MessageType, SCREEN_WIDTH, SCREEN_HEIGHT, DEFAULT_HOST, DEFAULT_PORT
+from shared.constants import MessageType, SCREEN_WIDTH, SCREEN_HEIGHT, DEFAULT_PORT
 from client.renderer.ui_renderer import Button
+
+
+def _get_clipboard():
+    """Get text from the system clipboard."""
+    try:
+        if not pygame.scrap.get_init():
+            pygame.scrap.init()
+        data = pygame.scrap.get(pygame.SCRAP_TEXT)
+        if data:
+            return data.decode("utf-8").rstrip("\x00")
+    except Exception:
+        pass
+    return ""
 
 
 class MenuScene:
@@ -31,7 +44,7 @@ class MenuScene:
         self.player_name = ""
         self.room_code = ""
         self.host_code = ""
-        self.server_address = f"{DEFAULT_HOST}:{DEFAULT_PORT}"
+        self.server_address = "localhost:8765"
         self.error_message = ""
         self.name_confirmed = False
 
@@ -41,13 +54,19 @@ class MenuScene:
             self.join_button.update(event.pos)
 
         if event.type == pygame.KEYDOWN:
+            is_paste = (event.key == pygame.K_v and
+                        event.mod & pygame.KMOD_CTRL)
+
             if self.entering_name:
                 if event.key == pygame.K_RETURN and self.player_name.strip():
                     self.entering_name = False
                     self.name_confirmed = True
                 elif event.key == pygame.K_BACKSPACE:
                     self.player_name = self.player_name[:-1]
-                elif event.unicode and len(self.player_name) < 16:
+                elif is_paste:
+                    text = _get_clipboard()
+                    self.player_name = (self.player_name + text)[:16]
+                elif event.unicode and event.unicode.isprintable() and len(self.player_name) < 16:
                     self.player_name += event.unicode
                 return
             elif self.entering_server:
@@ -58,7 +77,10 @@ class MenuScene:
                     self.entering_server = False
                 elif event.key == pygame.K_BACKSPACE:
                     self.server_address = self.server_address[:-1]
-                elif event.unicode and len(self.server_address) < 45:
+                elif is_paste:
+                    text = _get_clipboard()
+                    self.server_address = (self.server_address + text)[:45]
+                elif event.unicode and event.unicode.isprintable() and len(self.server_address) < 45:
                     self.server_address += event.unicode
                 return
             elif self.entering_host_code:
@@ -68,7 +90,10 @@ class MenuScene:
                     self.entering_host_code = False
                 elif event.key == pygame.K_BACKSPACE:
                     self.host_code = self.host_code[:-1]
-                elif event.unicode and len(self.host_code) < 6:
+                elif is_paste:
+                    text = _get_clipboard().upper()
+                    self.host_code = (self.host_code + text)[:6]
+                elif event.unicode and event.unicode.isprintable() and len(self.host_code) < 6:
                     self.host_code += event.unicode.upper()
                 return
             elif self.entering_code:
@@ -78,7 +103,10 @@ class MenuScene:
                     self.entering_code = False
                 elif event.key == pygame.K_BACKSPACE:
                     self.room_code = self.room_code[:-1]
-                elif event.unicode and len(self.room_code) < 6:
+                elif is_paste:
+                    text = _get_clipboard().upper()
+                    self.room_code = (self.room_code + text)[:6]
+                elif event.unicode and event.unicode.isprintable() and len(self.room_code) < 6:
                     self.room_code += event.unicode.upper()
                 return
 
@@ -90,6 +118,10 @@ class MenuScene:
             if server_rect.collidepoint(event.pos):
                 self.entering_server = True
                 return
+            # Clicking outside server field closes it
+            if self.entering_server:
+                self._apply_server_address()
+                self.entering_server = False
             if self.host_button.clicked(event.pos):
                 self.entering_host_code = True
                 self.host_code = ""

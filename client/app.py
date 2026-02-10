@@ -18,6 +18,7 @@ class App:
         pygame.init()
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption(TITLE)
+        pygame.key.set_repeat(400, 35)
         self.clock = pygame.time.Clock()
         self.running = True
 

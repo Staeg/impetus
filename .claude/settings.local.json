@@ -12,7 +12,8 @@
       "Bash(cd:*)",
       "Bash(xargs:*)",
       "Bash(dir:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(git tag:*)"
     ]
   }
 }
