@@ -14,6 +14,7 @@ class Spirit:
         self.influence: int = 0
         self.is_vagrant: bool = True
         self.possessed_faction: Optional[str] = None
+        self.has_placed_idol_as_vagrant: bool = False
         self.idols: list[Idol] = []
         self.victory_points: int = 0
 
@@ -21,11 +22,13 @@ class Spirit:
         self.is_vagrant = False
         self.possessed_faction = faction_id
         self.influence = STARTING_INFLUENCE
+        self.has_placed_idol_as_vagrant = False
 
     def become_vagrant(self):
         self.is_vagrant = True
         self.possessed_faction = None
         self.influence = 0
+        self.has_placed_idol_as_vagrant = False
 
     def lose_influence(self, amount: int = 1):
         self.influence = max(0, self.influence - amount)

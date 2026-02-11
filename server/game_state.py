@@ -136,6 +136,7 @@ class GameState:
                 "presence_blocked": presence_blocked,
                 "neutral_hexes": neutral_hexes,
                 "idol_types": [t.value for t in IdolType],
+                "can_place_idol": not spirit.has_placed_idol_as_vagrant,
             }
 
         elif self.phase == Phase.AGENDA_PHASE:
@@ -195,26 +196,30 @@ class GameState:
     def _validate_vagrant_action(self, spirit: Spirit, action: dict) -> Optional[str]:
         if not spirit.is_vagrant:
             return "Not vagrant"
-        action_type = action.get("action_type")
-        if action_type == "possess":
-            target = action.get("target")
-            if target not in self.factions:
-                return f"Unknown faction: {target}"
-            self.pending_actions[spirit.spirit_id] = action
-            return None
-        elif action_type == "place_idol":
-            idol_type = action.get("idol_type")
-            hex_q = action.get("q")
-            hex_r = action.get("r")
+        possess_target = action.get("possess_target")
+        idol_type = action.get("idol_type")
+
+        if not possess_target and not idol_type:
+            return "Must choose at least one action"
+
+        if possess_target:
+            if possess_target not in self.factions:
+                return f"Unknown faction: {possess_target}"
+
+        if idol_type:
+            if spirit.has_placed_idol_as_vagrant:
+                return "Already placed an idol this vagrant stint"
+            hex_q = action.get("idol_q")
+            hex_r = action.get("idol_r")
             if idol_type not in [t.value for t in IdolType]:
                 return f"Unknown idol type: {idol_type}"
             if (hex_q, hex_r) not in self.hex_map.all_hexes:
                 return "Invalid hex"
             if self.hex_map.ownership.get((hex_q, hex_r)) is not None:
                 return "Hex is not neutral"
-            self.pending_actions[spirit.spirit_id] = action
-            return None
-        return f"Unknown action type: {action_type}"
+
+        self.pending_actions[spirit.spirit_id] = action
+        return None
 
     def _validate_agenda_action(self, spirit: Spirit, action: dict) -> Optional[str]:
         if spirit.is_vagrant or spirit.possessed_faction is None:
@@ -274,22 +279,23 @@ class GameState:
     def _resolve_vagrant_phase(self) -> list[dict]:
         events = []
 
-        # Group possess attempts by target faction
+        # Group possess attempts by target faction, and collect idol placements
         possess_attempts: dict[str, list[str]] = {}
         idol_placements = []
 
         for spirit_id, action in self.pending_actions.items():
-            if action["action_type"] == "possess":
-                target = action["target"]
-                possess_attempts.setdefault(target, []).append(spirit_id)
-            elif action["action_type"] == "place_idol":
+            possess_target = action.get("possess_target")
+            idol_type = action.get("idol_type")
+            if possess_target:
+                possess_attempts.setdefault(possess_target, []).append(spirit_id)
+            if idol_type:
                 idol_placements.append((spirit_id, action))
 
         # Resolve idol placements (always succeed, but limit 1 neutral idol per spirit)
         for spirit_id, action in idol_placements:
             spirit = self.spirits[spirit_id]
             idol_type = IdolType(action["idol_type"])
-            pos = HexCoord(action["q"], action["r"])
+            pos = HexCoord(action["idol_q"], action["idol_r"])
 
             # Remove existing neutral idol if any
             existing_neutral = self.hex_map.get_spirit_idols_in_neutral(spirit_id)
@@ -305,6 +311,7 @@ class GameState:
 
             idol = spirit.place_idol(idol_type, pos)
             self.hex_map.place_idol(idol)
+            spirit.has_placed_idol_as_vagrant = True
             events.append({
                 "type": "idol_placed",
                 "spirit": spirit_id,
@@ -328,13 +335,12 @@ class GameState:
                 # Check presence
                 self._check_presence(faction, spirit, events)
             else:
-                # Contested - all fail
-                for spirit_id in spirit_ids:
-                    events.append({
-                        "type": "possess_contested",
-                        "spirit": spirit_id,
-                        "faction": target_faction,
-                    })
+                # Contested - all fail, single event with all spirits
+                events.append({
+                    "type": "possess_contested",
+                    "spirits": spirit_ids,
+                    "faction": target_faction,
+                })
 
         self.pending_actions.clear()
         self.phase = Phase.AGENDA_PHASE
