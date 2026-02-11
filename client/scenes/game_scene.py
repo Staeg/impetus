@@ -300,35 +300,46 @@ class GameScene:
             elif active_sub_phase == "spoils_change_choice" and self.spoils_change_cards:
                 self.phase = active_sub_phase
             events = payload.get("events", [])
-            agenda_anim_index = 0
+            # Log all events in original order
             for event in events:
                 self._log_event(event)
-                # Spawn floating agenda animations for agenda resolution events
-                etype = event.get("type", "")
-                agenda_event_map = {
-                    "steal": "steal", "bond": "bond", "trade": "trade",
-                    "expand": "expand", "expand_failed": "expand",
-                    "change": "change", "expand_spoils": "expand",
-                }
-                if etype in agenda_event_map:
-                    img_key = agenda_event_map[etype]
-                    img = agenda_images.get(img_key)
-                    faction_id = event.get("faction")
-                    if not img:
-                        print(f"[anim] No image for '{img_key}' (loaded: {list(agenda_images.keys())})")
-                    elif not faction_id:
-                        print(f"[anim] No faction_id in {etype} event")
+            # Collect agenda events and sort by animation display order
+            _ANIM_ORDER = {
+                "trade": 0, "bond": 1, "steal": 2,
+                "expand": 3, "expand_failed": 3, "expand_spoils": 3,
+                "change": 4,
+            }
+            agenda_events = [e for e in events if e.get("type", "") in _ANIM_ORDER]
+            agenda_events.sort(key=lambda e: _ANIM_ORDER[e["type"]])
+            agenda_anim_index = 0
+            for event in agenda_events:
+                etype = event["type"]
+                # Determine image key
+                if etype == "change":
+                    modifier = event.get("modifier", "")
+                    img_key = f"change_{modifier}" if f"change_{modifier}" in agenda_images else "change"
+                elif etype == "expand_failed":
+                    img_key = "expand_failed"
+                else:
+                    img_key = {"steal": "steal", "bond": "bond", "trade": "trade",
+                               "expand": "expand", "expand_spoils": "expand"}[etype]
+                img = agenda_images.get(img_key)
+                faction_id = event.get("faction")
+                if not img:
+                    print(f"[anim] No image for '{img_key}' (loaded: {list(agenda_images.keys())})")
+                elif not faction_id:
+                    print(f"[anim] No faction_id in {etype} event")
+                else:
+                    wx, wy = self._get_faction_centroid(faction_id)
+                    if wx is not None:
+                        anim = AgendaAnimation(
+                            img, wx, wy,
+                            delay=agenda_anim_index * 0.5,
+                        )
+                        self.animation.add_agenda_animation(anim)
+                        agenda_anim_index += 1
                     else:
-                        wx, wy = self._get_faction_centroid(faction_id)
-                        if wx is not None:
-                            anim = AgendaAnimation(
-                                img, wx, wy,
-                                delay=agenda_anim_index * 0.5,
-                            )
-                            self.animation.add_agenda_animation(anim)
-                            agenda_anim_index += 1
-                        else:
-                            print(f"[anim] No centroid for faction '{faction_id}'")
+                        print(f"[anim] No centroid for faction '{faction_id}'")
             if agenda_anim_index > 0:
                 print(f"[anim] Created {agenda_anim_index} agenda animations")
             # Clear previews after processing phase results
