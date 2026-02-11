@@ -37,7 +37,8 @@ class HexRenderer:
                       camera, screen_w: int, screen_h: int,
                       idols: list = None, wars: list = None,
                       selected_hex=None, highlight_hexes=None,
-                      spirit_index_map: dict = None):
+                      spirit_index_map: dict = None,
+                      preview_idol: tuple = None):
         """Draw the complete hex map.
 
         Args:
@@ -110,6 +111,11 @@ class HexRenderer:
             self._draw_idols(surface, idols, camera, screen_w, screen_h,
                              spirit_index_map or {})
 
+        # Draw preview idol (semi-transparent)
+        if preview_idol:
+            self._draw_preview_idol(surface, preview_idol, camera,
+                                    screen_w, screen_h)
+
     def _draw_idols(self, surface, idols, camera, screen_w, screen_h,
                     spirit_index_map):
         """Draw idol icons on their hexes, offset radially by owner."""
@@ -131,6 +137,29 @@ class HexRenderer:
             symbol = IDOL_SYMBOLS.get(idol.type, "?")
             text = font.render(symbol, True, (0, 0, 0))
             surface.blit(text, (ix - text.get_width() // 2, iy - text.get_height() // 2))
+
+    def _draw_preview_idol(self, surface, preview_idol, camera, screen_w, screen_h):
+        """Draw a semi-transparent preview idol at hex center.
+
+        preview_idol: (idol_type_str, q, r) e.g. ("battle", 0, 1)
+        """
+        idol_type_str, pq, pr = preview_idol
+        try:
+            idol_type = IdolType(idol_type_str)
+        except ValueError:
+            return
+        wx, wy = axial_to_pixel(pq, pr, self.hex_size)
+        sx, sy = camera.world_to_screen(wx, wy, screen_w, screen_h)
+        base_color = IDOL_COLORS.get(idol_type, (255, 255, 255))
+        # Draw semi-transparent circle
+        alpha_surf = pygame.Surface((20, 20), pygame.SRCALPHA)
+        pygame.draw.circle(alpha_surf, (*base_color, 100), (10, 10), 8)
+        surface.blit(alpha_surf, (sx - 10, sy - 10))
+        # Draw letter
+        font = self._get_font(12)
+        symbol = IDOL_SYMBOLS.get(idol_type, "?")
+        text = font.render(symbol, True, (*base_color, 160))
+        surface.blit(text, (sx - text.get_width() // 2, sy - text.get_height() // 2))
 
     def _draw_war_arrows(self, surface, wars, hex_ownership, camera,
                          screen_w, screen_h):

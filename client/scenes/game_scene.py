@@ -41,7 +41,9 @@ class GameScene:
         self.selected_faction: str | None = None
         self.selected_hex: tuple[int, int] | None = None
         self.selected_idol_type: str | None = None
-        self.vagrant_action: str | None = None  # "possess" or "place_idol"
+        self.panel_faction: str | None = None
+        self.preview_possession: str | None = None
+        self.preview_idol: tuple | None = None  # (idol_type, q, r)
 
         # Agenda state
         self.agenda_hand: list[dict] = []
@@ -189,49 +191,41 @@ class GameScene:
         if self.ejection_pending:
             self.selected_ejection_type = text.lower()
             return
-        elif text == "Possess":
-            self.vagrant_action = "possess"
-            self.idol_buttons = []
-            self.selected_hex = None
-            self.selected_idol_type = None
-            self._build_faction_buttons()
-        elif text == "Place Idol":
-            self.vagrant_action = "place_idol"
-            self.faction_buttons = []
-            self.selected_faction = None
-            self._build_idol_buttons()
 
     def _handle_faction_select(self, faction_id: str):
         self.selected_faction = faction_id
+        self.panel_faction = faction_id
 
     def _handle_idol_select(self, idol_type: str):
         self.selected_idol_type = idol_type
 
     def _handle_hex_click(self, hex_coord: tuple[int, int]):
-        if self.vagrant_action == "place_idol" and self.hex_ownership.get(hex_coord) is None:
+        if self.phase == Phase.VAGRANT_PHASE.value and self.hex_ownership.get(hex_coord) is None:
+            # Neutral hex during vagrant phase: select for idol placement
             self.selected_hex = hex_coord
         else:
-            # Click to view faction info
+            # Click to view faction info (sets panel, not possess target)
             owner = self.hex_ownership.get(hex_coord)
             if owner:
-                self.selected_faction = owner
+                self.panel_faction = owner
 
     def _submit_action(self):
         if self.phase == Phase.VAGRANT_PHASE.value:
-            if self.vagrant_action == "possess" and self.selected_faction:
-                self.app.network.send(MessageType.SUBMIT_VAGRANT_ACTION, {
-                    "action_type": "possess",
-                    "target": self.selected_faction,
-                })
-                self._clear_selection()
-            elif (self.vagrant_action == "place_idol" and
-                  self.selected_hex and self.selected_idol_type):
-                self.app.network.send(MessageType.SUBMIT_VAGRANT_ACTION, {
-                    "action_type": "place_idol",
-                    "idol_type": self.selected_idol_type,
-                    "q": self.selected_hex[0],
-                    "r": self.selected_hex[1],
-                })
+            payload = {}
+            if self.selected_faction:
+                payload["possess_target"] = self.selected_faction
+            if self.selected_idol_type and self.selected_hex:
+                payload["idol_type"] = self.selected_idol_type
+                payload["idol_q"] = self.selected_hex[0]
+                payload["idol_r"] = self.selected_hex[1]
+            if payload:
+                # Store previews before clearing
+                if self.selected_faction:
+                    self.preview_possession = self.selected_faction
+                if self.selected_idol_type and self.selected_hex:
+                    self.preview_idol = (self.selected_idol_type,
+                                         self.selected_hex[0], self.selected_hex[1])
+                self.app.network.send(MessageType.SUBMIT_VAGRANT_ACTION, payload)
                 self._clear_selection()
         elif self.phase == Phase.AGENDA_PHASE.value:
             if self.selected_agenda_index >= 0:
@@ -266,10 +260,10 @@ class GameScene:
         self.spoils_change_cards = []
 
     def _clear_selection(self):
-        self.vagrant_action = None
         self.selected_faction = None
         self.selected_hex = None
         self.selected_idol_type = None
+        self.panel_faction = None
         self.selected_agenda_index = -1
         self.selected_ejection_type = None
         self.agenda_hand = []
@@ -298,6 +292,9 @@ class GameScene:
             events = payload.get("events", [])
             for event in events:
                 self._log_event(event)
+            # Clear previews after processing phase results
+            self.preview_possession = None
+            self.preview_idol = None
 
         elif msg_type == MessageType.GAME_OVER:
             # Will be in the events
@@ -312,14 +309,12 @@ class GameScene:
         action = self.phase_options.get("action", "none")
 
         if self.phase == Phase.VAGRANT_PHASE.value and action == "choose":
-            # Build possess/idol buttons
-            y = SCREEN_HEIGHT - 200
-            self.action_buttons = [
-                Button(pygame.Rect(20, y, 120, 36), "Possess", (60, 80, 130)),
-                Button(pygame.Rect(150, y, 120, 36), "Place Idol", (60, 80, 130)),
-            ]
+            # Build faction buttons (left) and idol buttons (right)
+            self._build_faction_buttons()
+            if self.phase_options.get("can_place_idol", True):
+                self._build_idol_buttons()
             self.submit_button = Button(
-                pygame.Rect(20, SCREEN_HEIGHT - 60, 130, 40),
+                pygame.Rect(SCREEN_WIDTH // 2 - 65, SCREEN_HEIGHT - 60, 130, 40),
                 "Confirm", (60, 130, 60)
             )
 
@@ -366,13 +361,12 @@ class GameScene:
         ]
         blocked = self.phase_options.get("presence_blocked", [])
         self.faction_buttons = []
-        y = SCREEN_HEIGHT - 160
         all_factions = available + blocked
         for i, fid in enumerate(all_factions):
             color = FACTION_COLORS.get(fid, (100, 100, 100))
             is_blocked = fid in blocked
             btn = Button(
-                pygame.Rect(20 + i * 120, y, 110, 32),
+                pygame.Rect(10, 120 + i * 40, 130, 34),
                 FACTION_DISPLAY_NAMES.get(fid, fid),
                 color=tuple(max(c // 2, 30) for c in color),
                 text_color=(255, 255, 255),
@@ -384,7 +378,6 @@ class GameScene:
 
     def _build_idol_buttons(self):
         self.idol_buttons = []
-        y = SCREEN_HEIGHT - 160
         for i, it in enumerate(IdolType):
             colors = {
                 IdolType.BATTLE: (130, 50, 50),
@@ -392,7 +385,7 @@ class GameScene:
                 IdolType.SPREAD: (50, 120, 50),
             }
             btn = Button(
-                pygame.Rect(20 + i * 120, y, 110, 32),
+                pygame.Rect(SCREEN_WIDTH - 380, 120 + i * 40, 130, 34),
                 it.value.title(), colors.get(it, (80, 80, 80))
             )
             self.idol_buttons.append(btn)
@@ -467,7 +460,12 @@ class GameScene:
             self.event_log.append(f"{name} possessed {fname}")
         elif etype == "possess_contested":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"Contested possession of {fname}!")
+            spirit_ids = event.get("spirits", [])
+            names = [self.spirits.get(sid, {}).get("name", sid[:6]) for sid in spirit_ids]
+            self.event_log.append(f"Contested possession of {fname}! ({', '.join(names)})")
+            # Clear preview if local player was in the contested list
+            if self.app.my_spirit_id in spirit_ids:
+                self.preview_possession = None
         elif etype == "agenda_chosen":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
             self.event_log.append(f"{fname} plays {event['agenda']}")
@@ -605,8 +603,14 @@ class GameScene:
 
         # Draw hex grid
         highlight = None
-        if self.vagrant_action == "place_idol":
+        if self.phase == Phase.VAGRANT_PHASE.value:
             highlight = {h for h, o in self.hex_ownership.items() if o is None}
+
+        # Compute preview idol (post-confirm or pre-confirm)
+        render_preview_idol = self.preview_idol
+        if not render_preview_idol and self.selected_idol_type and self.selected_hex:
+            render_preview_idol = (self.selected_idol_type,
+                                   self.selected_hex[0], self.selected_hex[1])
 
         # Build spirit_id -> player_index mapping (sorted for stability)
         spirit_index_map = {
@@ -620,30 +624,40 @@ class GameScene:
             selected_hex=self.selected_hex,
             highlight_hexes=highlight,
             spirit_index_map=spirit_index_map,
+            preview_idol=render_preview_idol,
         )
 
         # Draw HUD
         self.ui_renderer.draw_hud(screen, self.phase, self.turn,
                                    self.spirits, self.app.my_spirit_id)
 
+        # Compute preview possession dict
+        preview_poss_dict = None
+        preview_fid = self.preview_possession or self.selected_faction
+        if preview_fid:
+            my_name = self.spirits.get(self.app.my_spirit_id, {}).get("name", "?")
+            preview_poss_dict = {preview_fid: my_name}
+
         # Draw faction overview strip (with war indicators)
         self.ui_renderer.draw_faction_overview(
             screen, self.factions, self.faction_agendas_this_turn,
             wars=render_wars,
             spirits=self.spirits,
+            preview_possession=preview_poss_dict,
         )
 
         # Draw faction panel (right side)
-        panel_faction = self.selected_faction
-        if not panel_faction:
+        pf = self.panel_faction
+        if not pf:
             # Default to possessed faction
             my_spirit = self.spirits.get(self.app.my_spirit_id, {})
-            panel_faction = my_spirit.get("possessed_faction")
-        if panel_faction and panel_faction in self.factions:
+            pf = my_spirit.get("possessed_faction")
+        if pf and pf in self.factions:
             self.ui_renderer.draw_faction_panel(
-                screen, self.factions[panel_faction],
+                screen, self.factions[pf],
                 SCREEN_WIDTH - 240, 92, 230,
                 spirits=self.spirits,
+                preview_possession=preview_poss_dict,
             )
 
         # Draw event log (bottom right)
@@ -672,52 +686,49 @@ class GameScene:
             self._render_spoils_change_ui(screen)
 
     def _render_vagrant_ui(self, screen):
-        # Action buttons
-        for btn in self.action_buttons:
-            btn.draw(screen, self.font)
+        # Draw faction buttons (left) with selection highlight
         for btn in self.faction_buttons:
+            # Highlight selected faction with white border
+            if self.selected_faction and btn.text == FACTION_DISPLAY_NAMES.get(self.selected_faction):
+                pygame.draw.rect(screen, (255, 255, 255), btn.rect.inflate(4, 4), 2, border_radius=8)
             btn.draw(screen, self.font)
+
+        # Draw idol buttons (right) with selection highlight
         for btn in self.idol_buttons:
+            if self.selected_idol_type and btn.text.lower() == self.selected_idol_type:
+                pygame.draw.rect(screen, (255, 255, 255), btn.rect.inflate(4, 4), 2, border_radius=8)
             btn.draw(screen, self.font)
+
         # Tooltips (drawn last so they appear on top)
         for btn in self.faction_buttons:
             btn.draw_tooltip(screen, self.small_font)
 
-        # Selection info
+        # Selection info at bottom
         y = SCREEN_HEIGHT - 110
-        if self.vagrant_action == "possess" and self.selected_faction:
+        parts = []
+        if self.selected_faction:
             fname = FACTION_DISPLAY_NAMES.get(self.selected_faction, self.selected_faction)
-            text = self.font.render(f"Possess: {fname}", True, (200, 200, 220))
-            screen.blit(text, (20, y))
-        elif self.vagrant_action == "place_idol":
-            parts = []
-            if self.selected_idol_type:
-                parts.append(f"Idol: {self.selected_idol_type}")
-            if self.selected_hex:
-                parts.append(f"Hex: ({self.selected_hex[0]}, {self.selected_hex[1]})")
-            if parts:
-                text = self.font.render(" | ".join(parts), True, (200, 200, 220))
-                screen.blit(text, (20, y))
-            else:
-                text = self.small_font.render("Select idol type, then click a neutral hex", True, (140, 140, 160))
-                screen.blit(text, (20, y))
+            parts.append(f"Possess: {fname}")
+        if self.selected_idol_type:
+            parts.append(f"Idol: {self.selected_idol_type}")
+        if self.selected_hex:
+            parts.append(f"Hex: ({self.selected_hex[0]}, {self.selected_hex[1]})")
+        if parts:
+            text = self.font.render(" | ".join(parts), True, (200, 200, 220))
+            screen.blit(text, (SCREEN_WIDTH // 2 - text.get_width() // 2, y))
 
-            # Warning if spirit already has a neutral idol
-            if self._has_neutral_idol():
-                warn = self.small_font.render(
-                    "Warning: Your existing neutral idol will be removed",
-                    True, (255, 180, 60))
-                screen.blit(warn, (20, y + 18))
+        # Warning if spirit already has a neutral idol and idol is selected
+        if self.selected_idol_type and self._has_neutral_idol():
+            warn = self.small_font.render(
+                "Warning: Your existing neutral idol will be removed",
+                True, (255, 180, 60))
+            screen.blit(warn, (SCREEN_WIDTH // 2 - warn.get_width() // 2, y + 18))
 
         # Submit button
         if self.submit_button:
-            can_submit = False
-            if self.vagrant_action == "possess" and self.selected_faction:
-                can_submit = True
-            elif (self.vagrant_action == "place_idol" and
-                  self.selected_hex and self.selected_idol_type):
-                can_submit = True
-            self.submit_button.enabled = can_submit
+            has_possess = bool(self.selected_faction)
+            has_idol = bool(self.selected_idol_type and self.selected_hex)
+            self.submit_button.enabled = has_possess or has_idol
             self.submit_button.draw(screen, self.font)
 
     def _get_current_faction_modifiers(self) -> dict:
