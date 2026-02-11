@@ -22,24 +22,24 @@ def load_assets():
         return
     _loaded = True
 
-    base_dir = os.path.join(os.path.dirname(__file__), "..", "..", "graphics")
+    # Use absolute path so it works regardless of CWD
+    base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "graphics")
     base_dir = os.path.normpath(base_dir)
 
     for name in AGENDA_NAMES:
         filename = f"{name.title()}.png"
         path = os.path.join(base_dir, filename)
         if not os.path.exists(path):
+            print(f"[assets] WARNING: Missing agenda image: {path}")
             continue
 
         raw = pygame.image.load(path)
-        if raw.get_alpha() is not None or raw.get_bitsize() == 32:
-            # PNG has per-pixel alpha — use it directly
-            alpha_img = raw.convert_alpha()
-        else:
-            # No alpha channel — use white colorkey for transparency
-            img = raw.convert()
-            img.set_colorkey((255, 255, 255))
-            alpha_img = img.convert_alpha()
+        alpha_img = raw.convert_alpha()
 
         agenda_images[name] = pygame.transform.smoothscale(alpha_img, (48, 48))
         agenda_card_images[name] = pygame.transform.smoothscale(alpha_img, (70, 70))
+
+    if len(agenda_images) < len(AGENDA_NAMES):
+        print(f"[assets] WARNING: Only loaded {len(agenda_images)}/{len(AGENDA_NAMES)} agenda images")
+    else:
+        print(f"[assets] Loaded {len(agenda_images)} agenda images")

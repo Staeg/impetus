@@ -314,7 +314,11 @@ class GameScene:
                     img_key = agenda_event_map[etype]
                     img = agenda_images.get(img_key)
                     faction_id = event.get("faction")
-                    if img and faction_id:
+                    if not img:
+                        print(f"[anim] No image for '{img_key}' (loaded: {list(agenda_images.keys())})")
+                    elif not faction_id:
+                        print(f"[anim] No faction_id in {etype} event")
+                    else:
                         wx, wy = self._get_faction_centroid(faction_id)
                         if wx is not None:
                             anim = AgendaAnimation(
@@ -323,6 +327,10 @@ class GameScene:
                             )
                             self.animation.add_agenda_animation(anim)
                             agenda_anim_index += 1
+                        else:
+                            print(f"[anim] No centroid for faction '{faction_id}'")
+            if agenda_anim_index > 0:
+                print(f"[anim] Created {agenda_anim_index} agenda animations")
             # Clear previews after processing phase results
             self.preview_guidance = None
             self.preview_idol = None
@@ -488,7 +496,7 @@ class GameScene:
                 SCREEN_WIDTH, SCREEN_HEIGHT,
             )
             img = anim.image.copy()
-            img.fill((255, 255, 255, anim.alpha), special_flags=pygame.BLEND_RGBA_MULT)
+            img.set_alpha(anim.alpha)
             screen.blit(img, (sx - img.get_width() // 2, sy - img.get_height() // 2))
 
     def _log_event(self, event: dict):
