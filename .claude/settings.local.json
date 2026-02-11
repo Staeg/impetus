@@ -16,7 +16,11 @@
       "Bash(git tag:*)",
       "Bash(for i in 1 2 3 4 5)",
       "Bash(do python -m pytest tests/ -q)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(git -C /c/Users/Stag/impetus status)",
+      "Bash(git -C /c/Users/Stag/impetus diff --stat)",
+      "Bash(git -C /c/Users/Stag/impetus log --oneline -5)",
+      "Bash(git -C /c/Users/Stag/impetus add client/renderer/assets.py client/scenes/game_scene.py server/game_state.py server/hex_map.py .claude/settings.local.json)"
     ]
   }
 }

@@ -466,17 +466,6 @@ class GameScene:
             rects.append(pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h))
         return rects
 
-    def _has_neutral_idol(self) -> bool:
-        """Check if current spirit has an idol on a neutral hex."""
-        my_id = self.app.my_spirit_id
-        for idol_data in self.all_idols:
-            if isinstance(idol_data, dict) and idol_data.get("owner_spirit") == my_id:
-                pos = idol_data.get("position", {})
-                hex_key = (pos.get("q"), pos.get("r"))
-                if self.hex_ownership.get(hex_key) is None and hex_key in self.hex_ownership:
-                    return True
-        return False
-
     def _get_faction_centroid(self, faction_id: str) -> tuple[float | None, float | None]:
         """Get the world-coordinate centroid of a faction's territory."""
         owned = [(q, r) for (q, r), owner in self.hex_ownership.items()
@@ -499,7 +488,7 @@ class GameScene:
                 SCREEN_WIDTH, SCREEN_HEIGHT,
             )
             img = anim.image.copy()
-            img.set_alpha(anim.alpha)
+            img.fill((255, 255, 255, anim.alpha), special_flags=pygame.BLEND_RGBA_MULT)
             screen.blit(img, (sx - img.get_width() // 2, sy - img.get_height() // 2))
 
     def _log_event(self, event: dict):
@@ -507,9 +496,6 @@ class GameScene:
         if etype == "idol_placed":
             name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
             self.event_log.append(f"{name} placed {event['idol_type']} idol")
-        elif etype == "idol_removed":
-            name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
-            self.event_log.append(f"{name}'s {event['idol_type']} idol was removed (neutral limit)")
         elif etype == "guided":
             name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
@@ -775,13 +761,6 @@ class GameScene:
         if parts:
             text = self.font.render(" | ".join(parts), True, (200, 200, 220))
             screen.blit(text, (SCREEN_WIDTH // 2 - text.get_width() // 2, y))
-
-        # Warning if spirit already has a neutral idol and idol is selected
-        if self.selected_idol_type and self._has_neutral_idol():
-            warn = self.small_font.render(
-                "Warning: Your existing neutral idol will be removed",
-                True, (255, 180, 60))
-            screen.blit(warn, (SCREEN_WIDTH // 2 - warn.get_width() // 2, y + 18))
 
         # Submit button
         if self.submit_button:

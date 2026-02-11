@@ -31,11 +31,15 @@ def load_assets():
         if not os.path.exists(path):
             continue
 
-        img = pygame.image.load(path).convert()
-        img.set_colorkey((255, 255, 255))
-
-        # Convert to SRCALPHA for proper alpha blending
-        alpha_img = img.convert_alpha()
+        raw = pygame.image.load(path)
+        if raw.get_alpha() is not None or raw.get_bitsize() == 32:
+            # PNG has per-pixel alpha — use it directly
+            alpha_img = raw.convert_alpha()
+        else:
+            # No alpha channel — use white colorkey for transparency
+            img = raw.convert()
+            img.set_colorkey((255, 255, 255))
+            alpha_img = img.convert_alpha()
 
         agenda_images[name] = pygame.transform.smoothscale(alpha_img, (48, 48))
         agenda_card_images[name] = pygame.transform.smoothscale(alpha_img, (70, 70))

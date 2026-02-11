@@ -87,13 +87,6 @@ class HexMap:
             return random.choice(list(with_idols))
         return random.choice(list(reachable))
 
-    def get_spirit_idols_in_neutral(self, spirit_id: str) -> list[Idol]:
-        """Return all idols this spirit has on neutral hexes."""
-        neutral = self.get_neutral_hexes()
-        return [idol for idol in self.idols
-                if idol.owner_spirit == spirit_id
-                and idol.position.to_tuple() in neutral]
-
     def get_ownership_dict(self) -> dict[str, Optional[str]]:
         """Serializable ownership map: 'q,r' -> faction_id or None."""
         return {f"{q},{r}": owner for (q, r), owner in self.ownership.items()}
