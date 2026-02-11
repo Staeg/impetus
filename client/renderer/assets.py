@@ -43,7 +43,30 @@ def load_assets():
         agenda_images[name] = pygame.transform.smoothscale(alpha_img, (48, 48))
         agenda_card_images[name] = pygame.transform.smoothscale(alpha_img, (70, 70))
 
+    # Create expand_failed composite: expand image with red X overlay
+    if "expand" in agenda_images:
+        expand_fail = agenda_images["expand"].copy()
+        size = expand_fail.get_width()
+        margin = 6
+        pygame.draw.line(expand_fail, (220, 30, 30), (margin, margin), (size - margin, size - margin), 4)
+        pygame.draw.line(expand_fail, (220, 30, 30), (size - margin, margin), (margin, size - margin), 4)
+        agenda_images["expand_failed"] = expand_fail
+
+    # Create change_{modifier} composites: change icon + smaller modifier icon to the right
+    if "change" in agenda_images:
+        change_base = agenda_images["change"]
+        for mod_name in ["trade", "bond", "steal", "expand"]:
+            if mod_name in agenda_images:
+                small_size = 24
+                gap = 4
+                total_w = 48 + gap + small_size
+                composite = pygame.Surface((total_w, 48), pygame.SRCALPHA)
+                composite.blit(change_base, (0, 0))
+                small_icon = pygame.transform.smoothscale(agenda_images[mod_name], (small_size, small_size))
+                composite.blit(small_icon, (48 + gap, (48 - small_size) // 2))
+                agenda_images[f"change_{mod_name}"] = composite
+
     if len(agenda_images) < len(AGENDA_NAMES):
         print(f"[assets] WARNING: Only loaded {len(agenda_images)}/{len(AGENDA_NAMES)} agenda images")
     else:
-        print(f"[assets] Loaded {len(agenda_images)} agenda images")
+        print(f"[assets] Loaded {len(agenda_images)} agenda images (+ composites)")
