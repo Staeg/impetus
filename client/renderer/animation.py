@@ -59,6 +59,12 @@ class AnimationManager:
         for key in done_flashes:
             del self.flash_timers[key]
 
+        # Update agenda animations
+        if hasattr(self, "agenda_animations"):
+            for anim in self.agenda_animations:
+                anim.update(dt)
+            self.agenda_animations = [a for a in self.agenda_animations if not a.done]
+
     def get_tween_value(self, key: str, default: float = 0.0) -> float:
         if key in self.tweens:
             return self.tweens[key].value
@@ -66,3 +72,66 @@ class AnimationManager:
 
     def is_flashing(self, key: str) -> bool:
         return key in self.flash_timers
+
+    # --- Agenda animations ---
+
+    def add_agenda_animation(self, anim: "AgendaAnimation"):
+        if not hasattr(self, "agenda_animations"):
+            self.agenda_animations: list[AgendaAnimation] = []
+        self.agenda_animations.append(anim)
+
+    def get_active_agenda_animations(self) -> list["AgendaAnimation"]:
+        if not hasattr(self, "agenda_animations"):
+            return []
+        return [a for a in self.agenda_animations if not a.done]
+
+
+class AgendaAnimation:
+    """Floating agenda icon that rises and fades over a faction's territory."""
+
+    def __init__(self, image: "pygame.Surface", world_x: float, world_y: float,
+                 delay: float = 0.0, duration: float = 1.5, rise_pixels: float = 40):
+        self.image = image
+        self.world_x = world_x
+        self.world_y = world_y
+        self.delay = delay
+        self.duration = duration
+        self.rise_pixels = rise_pixels
+        self.elapsed = 0.0
+        self.done = False
+
+    def update(self, dt: float):
+        self.elapsed += dt
+        if self.elapsed >= self.delay + self.duration:
+            self.done = True
+
+    @property
+    def active(self) -> bool:
+        """True when past the delay and not yet done."""
+        return self.elapsed >= self.delay and not self.done
+
+    @property
+    def progress(self) -> float:
+        """0-1 progress through the visible portion of the animation."""
+        if self.elapsed < self.delay:
+            return 0.0
+        t = (self.elapsed - self.delay) / self.duration
+        return min(1.0, max(0.0, t))
+
+    @property
+    def alpha(self) -> int:
+        """Alpha value: holds full for first 30%, then fades out."""
+        p = self.progress
+        if p < 0.3:
+            return 255
+        # Fade from 1.0 to 0.0 over remaining 70%
+        fade = 1.0 - (p - 0.3) / 0.7
+        return max(0, int(255 * fade))
+
+    @property
+    def y_offset(self) -> float:
+        """Ease-out upward drift in pixels."""
+        p = self.progress
+        # Ease out: 1 - (1-t)^2
+        eased = 1.0 - (1.0 - p) ** 2
+        return -eased * self.rise_pixels
