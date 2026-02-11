@@ -15,6 +15,11 @@ def make_game(num_players=3):
     return gs
 
 
+def neutral_hexes(gs, n=2):
+    """Get n guaranteed-neutral hex coordinates from the game state."""
+    return list(gs.hex_map.get_neutral_hexes())[:n]
+
+
 class TestGameStateSetup:
     def test_initial_phase(self):
         gs = make_game()
@@ -53,76 +58,115 @@ class TestVagrantPhase:
         assert gs.needs_input("spirit_0") is True
         assert gs.needs_input("spirit_1") is True
 
-    def test_submit_possess(self):
+    def test_submit_guide(self):
         gs = make_game(2)
-        err = gs.submit_action("spirit_0", {"possess_target": "mountain"})
+        h = neutral_hexes(gs, 1)
+        err = gs.submit_action("spirit_0", {
+            "guide_target": "mountain",
+            "idol_type": "battle", "idol_q": h[0][0], "idol_r": h[0][1],
+        })
         assert err is None
 
     def test_submit_idol(self):
         gs = make_game(2)
+        h = neutral_hexes(gs, 1)
         err = gs.submit_action("spirit_0", {
-            "idol_type": "battle",
-            "idol_q": 0, "idol_r": 0,
+            "guide_target": "mountain",
+            "idol_type": "battle", "idol_q": h[0][0], "idol_r": h[0][1],
         })
         assert err is None
 
-    def test_invalid_possess_target(self):
+    def test_invalid_guide_target(self):
         gs = make_game(2)
-        err = gs.submit_action("spirit_0", {"possess_target": "nonexistent"})
+        h = neutral_hexes(gs, 1)
+        err = gs.submit_action("spirit_0", {
+            "guide_target": "nonexistent",
+            "idol_type": "battle", "idol_q": h[0][0], "idol_r": h[0][1],
+        })
         assert err is not None
 
-    def test_resolve_possess(self):
+    def test_resolve_guide(self):
         gs = make_game(2)
-        gs.submit_action("spirit_0", {"possess_target": "mountain"})
-        gs.submit_action("spirit_1", {"possess_target": "plains"})
+        h = neutral_hexes(gs)
+        gs.submit_action("spirit_0", {
+            "guide_target": "mountain",
+            "idol_type": "battle", "idol_q": h[0][0], "idol_r": h[0][1],
+        })
+        gs.submit_action("spirit_1", {
+            "guide_target": "plains",
+            "idol_type": "affluence", "idol_q": h[1][0], "idol_r": h[1][1],
+        })
         events = gs.resolve_current_phase()
         assert gs.phase == Phase.AGENDA_PHASE
-        assert gs.spirits["spirit_0"].possessed_faction == "mountain"
+        assert gs.spirits["spirit_0"].guided_faction == "mountain"
         assert gs.spirits["spirit_0"].influence == 3
-        assert gs.factions["mountain"].possessing_spirit == "spirit_0"
+        assert gs.factions["mountain"].guiding_spirit == "spirit_0"
 
-    def test_contested_possess(self):
+    def test_contested_guide(self):
         gs = make_game(2)
-        gs.submit_action("spirit_0", {"possess_target": "mountain"})
-        gs.submit_action("spirit_1", {"possess_target": "mountain"})
+        h = neutral_hexes(gs)
+        gs.submit_action("spirit_0", {
+            "guide_target": "mountain",
+            "idol_type": "battle", "idol_q": h[0][0], "idol_r": h[0][1],
+        })
+        gs.submit_action("spirit_1", {
+            "guide_target": "mountain",
+            "idol_type": "affluence", "idol_q": h[1][0], "idol_r": h[1][1],
+        })
         events = gs.resolve_current_phase()
         assert gs.spirits["spirit_0"].is_vagrant is True
         assert gs.spirits["spirit_1"].is_vagrant is True
-        assert gs.factions["mountain"].possessing_spirit is None
+        assert gs.factions["mountain"].guiding_spirit is None
 
     def test_idol_placement(self):
         gs = make_game(2)
+        # Use hexes far from faction starts to avoid setup Expand claims
+        neutral = list(gs.hex_map.get_neutral_hexes())
+        h0, h1 = neutral[0], neutral[1]
         gs.submit_action("spirit_0", {
-            "idol_type": "battle", "idol_q": 0, "idol_r": 0,
+            "guide_target": "mountain",
+            "idol_type": "battle", "idol_q": h0[0], "idol_r": h0[1],
         })
         gs.submit_action("spirit_1", {
-            "idol_type": "affluence", "idol_q": 2, "idol_r": 0,
+            "guide_target": "plains",
+            "idol_type": "affluence", "idol_q": h1[0], "idol_r": h1[1],
         })
         events = gs.resolve_current_phase()
         assert len(gs.hex_map.idols) == 2
         assert len(gs.spirits["spirit_0"].idols) == 1
 
-    def test_submit_combined_possess_and_idol(self):
+    def test_submit_combined_guide_and_idol(self):
         gs = make_game(2)
+        h = neutral_hexes(gs)
         err = gs.submit_action("spirit_0", {
-            "possess_target": "mountain",
+            "guide_target": "mountain",
             "idol_type": "battle",
-            "idol_q": 0, "idol_r": 0,
+            "idol_q": h[0][0], "idol_r": h[0][1],
         })
         assert err is None
-        gs.submit_action("spirit_1", {"possess_target": "plains"})
+        gs.submit_action("spirit_1", {
+            "guide_target": "plains",
+            "idol_type": "affluence", "idol_q": h[1][0], "idol_r": h[1][1],
+        })
         events = gs.resolve_current_phase()
         # Both should resolve
-        assert gs.spirits["spirit_0"].possessed_faction == "mountain"
-        assert len(gs.hex_map.idols) == 1
+        assert gs.spirits["spirit_0"].guided_faction == "mountain"
+        assert len(gs.hex_map.idols) == 2
         assert len(gs.spirits["spirit_0"].idols) == 1
 
     def test_contested_single_event(self):
         gs = make_game(2)
-        gs.submit_action("spirit_0", {"possess_target": "mountain"})
-        gs.submit_action("spirit_1", {"possess_target": "mountain"})
+        h = neutral_hexes(gs)
+        gs.submit_action("spirit_0", {
+            "guide_target": "mountain",
+            "idol_type": "battle", "idol_q": h[0][0], "idol_r": h[0][1],
+        })
+        gs.submit_action("spirit_1", {
+            "guide_target": "mountain",
+            "idol_type": "affluence", "idol_q": h[1][0], "idol_r": h[1][1],
+        })
         events = gs.resolve_current_phase()
-        contested = [e for e in events if e["type"] == "possess_contested"]
+        contested = [e for e in events if e["type"] == "guide_contested"]
         assert len(contested) == 1
         assert set(contested[0]["spirits"]) == {"spirit_0", "spirit_1"}
         assert contested[0]["faction"] == "mountain"
@@ -134,18 +178,22 @@ class TestVagrantPhase:
 
     def test_idol_limit_per_vagrant_stint(self):
         gs = make_game(2)
-        # First idol placement should work
+        # Both contest same faction so both stay vagrant, but place idols
+        neutral = list(gs.hex_map.get_neutral_hexes())
+        h0, h1 = neutral[0], neutral[1]
         gs.submit_action("spirit_0", {
-            "idol_type": "battle", "idol_q": 0, "idol_r": 0,
+            "guide_target": "mountain",
+            "idol_type": "battle", "idol_q": h0[0], "idol_r": h0[1],
         })
-        gs.submit_action("spirit_1", {"possess_target": "plains"})
+        gs.submit_action("spirit_1", {
+            "guide_target": "mountain",
+            "idol_type": "affluence", "idol_q": h1[0], "idol_r": h1[1],
+        })
         gs.resolve_current_phase()
 
         # Advance back to vagrant phase (resolve remaining phases)
-        # spirit_0 is still vagrant, spirit_1 possessed plains
-        gs.get_phase_options("spirit_1")
-        gs.submit_action("spirit_1", {"agenda_index": 0})
-        gs.resolve_current_phase()  # agenda
+        # Both spirits are still vagrant (contested guide)
+        gs.resolve_current_phase()  # agenda (no input needed)
         gs.resolve_current_phase()  # war
         gs.resolve_current_phase()  # scoring
         gs.resolve_current_phase()  # cleanup
@@ -156,10 +204,11 @@ class TestVagrantPhase:
         options = gs.get_phase_options("spirit_0")
         assert options["can_place_idol"] is False
 
+        # With can_place_idol False, only guide_target is required
         err = gs.submit_action("spirit_0", {
-            "idol_type": "spread", "idol_q": 1, "idol_r": 0,
+            "guide_target": "mountain",
         })
-        assert err is not None
+        assert err is None
 
     def test_can_place_idol_flag_in_options(self):
         gs = make_game(2)
@@ -170,8 +219,15 @@ class TestVagrantPhase:
 class TestAgendaPhase:
     def test_agenda_draw(self):
         gs = make_game(2)
-        gs.submit_action("spirit_0", {"possess_target": "mountain"})
-        gs.submit_action("spirit_1", {"possess_target": "plains"})
+        h = neutral_hexes(gs)
+        gs.submit_action("spirit_0", {
+            "guide_target": "mountain",
+            "idol_type": "battle", "idol_q": h[0][0], "idol_r": h[0][1],
+        })
+        gs.submit_action("spirit_1", {
+            "guide_target": "plains",
+            "idol_type": "affluence", "idol_q": h[1][0], "idol_r": h[1][1],
+        })
         gs.resolve_current_phase()
         assert gs.phase == Phase.AGENDA_PHASE
         # Spirit should be able to draw 1 + 3 = 4 cards (influence starts at 3)
@@ -181,8 +237,15 @@ class TestAgendaPhase:
 
     def test_submit_agenda_choice(self):
         gs = make_game(2)
-        gs.submit_action("spirit_0", {"possess_target": "mountain"})
-        gs.submit_action("spirit_1", {"possess_target": "plains"})
+        h = neutral_hexes(gs)
+        gs.submit_action("spirit_0", {
+            "guide_target": "mountain",
+            "idol_type": "battle", "idol_q": h[0][0], "idol_r": h[0][1],
+        })
+        gs.submit_action("spirit_1", {
+            "guide_target": "plains",
+            "idol_type": "affluence", "idol_q": h[1][0], "idol_r": h[1][1],
+        })
         gs.resolve_current_phase()
 
         gs.get_phase_options("spirit_0")

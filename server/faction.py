@@ -30,7 +30,7 @@ class Faction:
             ChangeModifierTarget.EXPAND.value: 0,
         }
         self.regard: dict[str, int] = {}
-        self.possessing_spirit: Optional[str] = None
+        self.guiding_spirit: Optional[str] = None
         self.presence_spirit: Optional[str] = None
         self.eliminated: bool = False
         # Turn tracking for scoring
@@ -79,7 +79,7 @@ class Faction:
         return hand
 
     def draw_random_agenda(self) -> AgendaCard:
-        """Draw a single random agenda card (for non-possessed factions)."""
+        """Draw a single random agenda card (for non-guided factions)."""
         return random.choice(self.agenda_deck)
 
     def add_agenda_card(self, agenda_type: AgendaType):
@@ -110,7 +110,7 @@ class Faction:
             agenda_deck=list(self.agenda_deck),
             change_modifiers=dict(self.change_modifiers),
             regard=dict(self.regard),
-            possessing_spirit=self.possessing_spirit,
+            guiding_spirit=self.guiding_spirit,
             presence_spirit=self.presence_spirit,
             eliminated=self.eliminated,
         )

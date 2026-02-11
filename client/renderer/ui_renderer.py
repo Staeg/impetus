@@ -96,7 +96,7 @@ class UIRenderer:
             color = (255, 255, 100) if sid == my_spirit_id else (180, 180, 200)
             name = spirit.get("name", sid[:6])
             vp = spirit.get("victory_points", 0)
-            faction_id = spirit.get("possessed_faction")
+            faction_id = spirit.get("guided_faction")
 
             # Render name
             name_surf = self.small_font.render(name, True, color)
@@ -119,7 +119,7 @@ class UIRenderer:
     def draw_faction_overview(self, surface: pygame.Surface, factions: dict,
                               faction_agendas: dict[str, str], wars=None,
                               spirits: dict = None,
-                              preview_possession: dict = None):
+                              preview_guidance: dict = None):
         """Draw a compact overview strip showing all factions' gold, agenda, wars, and presence."""
         spirits = spirits or {}
         strip_y = 42
@@ -187,16 +187,16 @@ class UIRenderer:
 
             # Presence indicator (first row, after gold)
             presence_id = fd.get("presence_spirit") if isinstance(fd, dict) else getattr(fd, "presence_spirit", None)
-            possessing_id = fd.get("possessing_spirit") if isinstance(fd, dict) else getattr(fd, "possessing_spirit", None)
+            guiding_id = fd.get("guiding_spirit") if isinstance(fd, dict) else getattr(fd, "guiding_spirit", None)
             presence_end_x = cx + 6 + abbr_surf.get_width() + 6 + gold_text.get_width()
             if presence_id:
                 p_name = spirits.get(presence_id, {}).get("name", presence_id[:6])
                 p_surf = self.small_font.render(f" P:{p_name}", True, (100, 200, 180))
                 surface.blit(p_surf, (presence_end_x, strip_y + 4))
 
-            # Preview possession indicator (faded, with ? prefix)
-            if preview_possession and not possessing_id and fid in preview_possession:
-                preview_name = preview_possession[fid]
+            # Preview guidance indicator (faded, with ? prefix)
+            if preview_guidance and not guiding_id and fid in preview_guidance:
+                preview_name = preview_guidance[fid]
                 pv_surf = self.small_font.render(f" ?{preview_name}", True, (80, 80, 100))
                 surface.blit(pv_surf, (presence_end_x + (p_surf.get_width() if presence_id else 0), strip_y + 4))
 
@@ -219,7 +219,7 @@ class UIRenderer:
 
     def draw_faction_panel(self, surface: pygame.Surface, faction_data: dict,
                            x: int, y: int, width: int = 220, spirits: dict = None,
-                           preview_possession: dict = None):
+                           preview_guidance: dict = None):
         """Draw faction info panel."""
         if not faction_data:
             return
@@ -230,12 +230,12 @@ class UIRenderer:
         territories = faction_data.get("territories", [])
         regard = faction_data.get("regard", {})
         modifiers = faction_data.get("change_modifiers", {})
-        possessing = faction_data.get("possessing_spirit")
+        guiding = faction_data.get("guiding_spirit")
         presence = faction_data.get("presence_spirit")
 
         spirits = spirits or {}
-        preview_possession = preview_possession or {}
-        possessing_name = spirits.get(possessing, {}).get("name", possessing) if possessing else "none"
+        preview_guidance = preview_guidance or {}
+        guiding_name = spirits.get(guiding, {}).get("name", guiding) if guiding else "none"
         presence_name = spirits.get(presence, {}).get("name", presence) if presence else "none"
 
         panel_h = 200 + len(regard) * 18
@@ -254,16 +254,16 @@ class UIRenderer:
             surface.blit(elim_text, (x + 10, dy))
             return
 
-        # Check for preview possession name
-        preview_poss_name = preview_possession.get(fid)
+        # Check for preview guidance name
+        preview_guid_name = preview_guidance.get(fid)
 
         info_lines = [
             ("Gold", f"Gold: {gold}", None),
             ("Territories", f"Territories: {len(territories)}", None),
-            ("Possessing", f"Possessing: {possessing_name}",
-             f"Possessing: {preview_poss_name}?" if possessing_name == "none" and preview_poss_name else None),
+            ("Guiding", f"Guiding: {guiding_name}",
+             f"Guiding: {preview_guid_name}?" if guiding_name == "none" and preview_guid_name else None),
             ("Presence", f"Presence: {presence_name}",
-             f"Presence: {preview_poss_name}?" if presence_name == "none" and preview_poss_name else None),
+             f"Presence: {preview_guid_name}?" if presence_name == "none" and preview_guid_name else None),
         ]
         for label, line, preview_line in info_lines:
             if preview_line:

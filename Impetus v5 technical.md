@@ -19,13 +19,13 @@
   * Spirits choose their actions  
   * After all Spirits have confirmed their actions, reveal them  
   * All Idols are placed  
-  * All Factions with only 1 Spirit trying to Possess them become Possessed by that Spirit and that Spirit’s Influence is set to 3  
-    * Presence changes are checked  
-  * All Factions with \>1 Spirit trying to Possess them remain not Possessed, and the Spirits remain Vagrant  
-* Agenda Phase  
-  * All Spirits currently Possessing a Faction draw 1 \+ \[their Influence\] Agenda cards and choose 1 of them  
-  * All choices are revealed and all non-Possessed Factions draw a random Agenda card  
-  * All Spirits currently Possessing a Faction lose 1 Influence  
+  * All Factions with only 1 Spirit trying to Guide them become Guided by that Spirit and that Spirit's Influence is set to 3
+    * Presence changes are checked
+  * All Factions with \>1 Spirit trying to Guide them remain not Guided, and the Spirits remain Vagrant
+* Agenda Phase
+  * All Spirits currently Guiding a Faction draw 1 \+ \[their Influence\] Agenda cards and choose 1 of them
+  * All choices are revealed and all non-Guided Factions draw a random Agenda card
+  * All Spirits currently Guiding a Faction lose 1 Influence
   * Agendas are resolved in order (but each step is simultaneous):  
     * Steal: \-1 Regard with and \-1 gold to all neighbors. \+1 gold to this Faction for each gold lost by neighbors. Then a War erupts with any neighboring Factions who have \-2 Regard or less with this Faction.  
     * Bond: \+1 Regard with all neighbors.   
@@ -33,8 +33,8 @@
     * Expand: spend gold equal to the number of this Faction’s territories to claim a random new one; if none are available or it lacks gold, \+1 gold instead.  
       * If there are any neutral Territories with Idols in them within reach: the Faction chooses at random between those territories.  
     * Change: draw a card from the Change modifier deck, then shuffle it back in.  
-      * If possessed, the Spirit draws additional cards equal to their current Influence and chooses 1 among them.  
-  * Any Spirits with 0 Influence currently Possessing a Faction are ejected; they may add a copy of an Agenda card to that Faction’s Agenda deck  
+      * If guided, the Spirit draws additional cards equal to their current Influence and chooses 1 among them.
+  * Any Spirits with 0 Influence currently Guiding a Faction are ejected; they may add a copy of an Agenda card to that Faction's Agenda deck  
     * Presence changes are checked  
 * War phase  
   * Any Ripe wars are resolved \- each combatant rolls a 6-sided die and adds their Power  

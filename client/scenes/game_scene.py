@@ -45,7 +45,7 @@ class GameScene:
         self.selected_hex: tuple[int, int] | None = None
         self.selected_idol_type: str | None = None
         self.panel_faction: str | None = None
-        self.preview_possession: str | None = None
+        self.preview_guidance: str | None = None
         self.preview_idol: tuple | None = None  # (idol_type, q, r)
 
         # Agenda state
@@ -207,7 +207,7 @@ class GameScene:
             # Neutral hex during vagrant phase: select for idol placement
             self.selected_hex = hex_coord
         else:
-            # Click to view faction info (sets panel, not possess target)
+            # Click to view faction info (sets panel, not guide target)
             owner = self.hex_ownership.get(hex_coord)
             if owner:
                 self.panel_faction = owner
@@ -216,7 +216,7 @@ class GameScene:
         if self.phase == Phase.VAGRANT_PHASE.value:
             payload = {}
             if self.selected_faction:
-                payload["possess_target"] = self.selected_faction
+                payload["guide_target"] = self.selected_faction
             if self.selected_idol_type and self.selected_hex:
                 payload["idol_type"] = self.selected_idol_type
                 payload["idol_q"] = self.selected_hex[0]
@@ -224,7 +224,7 @@ class GameScene:
             if payload:
                 # Store previews before clearing
                 if self.selected_faction:
-                    self.preview_possession = self.selected_faction
+                    self.preview_guidance = self.selected_faction
                 if self.selected_idol_type and self.selected_hex:
                     self.preview_idol = (self.selected_idol_type,
                                          self.selected_hex[0], self.selected_hex[1])
@@ -290,8 +290,15 @@ class GameScene:
             self.waiting_for = payload.get("players_remaining", [])
 
         elif msg_type == MessageType.PHASE_RESULT:
+            active_sub_phase = self.phase if self.phase in (
+                "spoils_choice", "spoils_change_choice") else None
             if "state" in payload:
                 self._update_state_from_snapshot(payload["state"])
+            # Preserve spoils sub-phases while this player still has cards to choose
+            if active_sub_phase == "spoils_choice" and self.spoils_cards:
+                self.phase = active_sub_phase
+            elif active_sub_phase == "spoils_change_choice" and self.spoils_change_cards:
+                self.phase = active_sub_phase
             events = payload.get("events", [])
             agenda_anim_index = 0
             for event in events:
@@ -317,7 +324,7 @@ class GameScene:
                             self.animation.add_agenda_animation(anim)
                             agenda_anim_index += 1
             # Clear previews after processing phase results
-            self.preview_possession = None
+            self.preview_guidance = None
             self.preview_idol = None
 
         elif msg_type == MessageType.GAME_OVER:
@@ -394,7 +401,7 @@ class GameScene:
                 FACTION_DISPLAY_NAMES.get(fid, fid),
                 color=tuple(max(c // 2, 30) for c in color),
                 text_color=(255, 255, 255),
-                tooltip="Your Presence prevents you from Possessing this Faction" if is_blocked else None,
+                tooltip="Your Presence prevents you from Guiding this Faction" if is_blocked else None,
             )
             if is_blocked:
                 btn.enabled = False
@@ -503,18 +510,18 @@ class GameScene:
         elif etype == "idol_removed":
             name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
             self.event_log.append(f"{name}'s {event['idol_type']} idol was removed (neutral limit)")
-        elif etype == "possessed":
+        elif etype == "guided":
             name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"{name} possessed {fname}")
-        elif etype == "possess_contested":
+            self.event_log.append(f"{name} is guiding {fname}")
+        elif etype == "guide_contested":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
             spirit_ids = event.get("spirits", [])
             names = [self.spirits.get(sid, {}).get("name", sid[:6]) for sid in spirit_ids]
-            self.event_log.append(f"Contested possession of {fname}! ({', '.join(names)})")
+            self.event_log.append(f"Contested guidance of {fname}! ({', '.join(names)})")
             # Clear preview if local player was in the contested list
             if self.app.my_spirit_id in spirit_ids:
-                self.preview_possession = None
+                self.preview_guidance = None
         elif etype == "agenda_chosen":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
             self.event_log.append(f"{fname} plays {event['agenda']}")
@@ -683,33 +690,33 @@ class GameScene:
         self.ui_renderer.draw_hud(screen, self.phase, self.turn,
                                    self.spirits, self.app.my_spirit_id)
 
-        # Compute preview possession dict
-        preview_poss_dict = None
-        preview_fid = self.preview_possession or self.selected_faction
+        # Compute preview guidance dict
+        preview_guid_dict = None
+        preview_fid = self.preview_guidance or self.selected_faction
         if preview_fid:
             my_name = self.spirits.get(self.app.my_spirit_id, {}).get("name", "?")
-            preview_poss_dict = {preview_fid: my_name}
+            preview_guid_dict = {preview_fid: my_name}
 
         # Draw faction overview strip (with war indicators)
         self.ui_renderer.draw_faction_overview(
             screen, self.factions, self.faction_agendas_this_turn,
             wars=render_wars,
             spirits=self.spirits,
-            preview_possession=preview_poss_dict,
+            preview_guidance=preview_guid_dict,
         )
 
         # Draw faction panel (right side)
         pf = self.panel_faction
         if not pf:
-            # Default to possessed faction
+            # Default to guided faction
             my_spirit = self.spirits.get(self.app.my_spirit_id, {})
-            pf = my_spirit.get("possessed_faction")
+            pf = my_spirit.get("guided_faction")
         if pf and pf in self.factions:
             self.ui_renderer.draw_faction_panel(
                 screen, self.factions[pf],
                 SCREEN_WIDTH - 240, 92, 230,
                 spirits=self.spirits,
-                preview_possession=preview_poss_dict,
+                preview_guidance=preview_guid_dict,
             )
 
         # Draw event log (bottom right)
@@ -760,7 +767,7 @@ class GameScene:
         parts = []
         if self.selected_faction:
             fname = FACTION_DISPLAY_NAMES.get(self.selected_faction, self.selected_faction)
-            parts.append(f"Possess: {fname}")
+            parts.append(f"Guide: {fname}")
         if self.selected_idol_type:
             parts.append(f"Idol: {self.selected_idol_type}")
         if self.selected_hex:
@@ -778,15 +785,20 @@ class GameScene:
 
         # Submit button
         if self.submit_button:
-            has_possess = bool(self.selected_faction)
+            has_guide = bool(self.selected_faction)
             has_idol = bool(self.selected_idol_type and self.selected_hex)
-            self.submit_button.enabled = has_possess or has_idol
+            can_guide = bool(self.phase_options.get("available_factions"))
+            can_place_idol = bool(self.idol_buttons) and bool(self.phase_options.get("neutral_hexes"))
+            if can_guide and can_place_idol:
+                self.submit_button.enabled = has_guide and has_idol
+            else:
+                self.submit_button.enabled = has_guide or has_idol
             self.submit_button.draw(screen, self.font)
 
     def _get_current_faction_modifiers(self) -> dict:
-        """Get the change_modifiers for the current player's possessed faction."""
+        """Get the change_modifiers for the current player's guided faction."""
         my_spirit = self.spirits.get(self.app.my_spirit_id, {})
-        fid = my_spirit.get("possessed_faction")
+        fid = my_spirit.get("guided_faction")
         if fid and fid in self.factions:
             return self.factions[fid].get("change_modifiers", {})
         return {}

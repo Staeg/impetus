@@ -1,4 +1,4 @@
-"""Spirit model: influence, possession, idols, VP."""
+"""Spirit model: influence, guidance, idols, VP."""
 
 from typing import Optional
 from shared.constants import STARTING_INFLUENCE, IdolType
@@ -13,20 +13,20 @@ class Spirit:
         self.name = name
         self.influence: int = 0
         self.is_vagrant: bool = True
-        self.possessed_faction: Optional[str] = None
+        self.guided_faction: Optional[str] = None
         self.has_placed_idol_as_vagrant: bool = False
         self.idols: list[Idol] = []
         self.victory_points: int = 0
 
-    def possess_faction(self, faction_id: str):
+    def guide_faction(self, faction_id: str):
         self.is_vagrant = False
-        self.possessed_faction = faction_id
+        self.guided_faction = faction_id
         self.influence = STARTING_INFLUENCE
         self.has_placed_idol_as_vagrant = False
 
     def become_vagrant(self):
         self.is_vagrant = True
-        self.possessed_faction = None
+        self.guided_faction = None
         self.influence = 0
         self.has_placed_idol_as_vagrant = False
 
@@ -47,7 +47,7 @@ class Spirit:
             name=self.name,
             influence=self.influence,
             is_vagrant=self.is_vagrant,
-            possessed_faction=self.possessed_faction,
+            guided_faction=self.guided_faction,
             idols=list(self.idols),
             victory_points=self.victory_points,
         )

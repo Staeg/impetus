@@ -119,8 +119,8 @@ Phase details:
 
 | Phase | Player Input Required | Resolution |
 |---|---|---|
-| VAGRANT_PHASE | Vagrant spirits choose: possess a faction OR place an idol | Simultaneous reveal. Contested possessions fail. Idols placed. Influence set to 3 on success. Presence checked. |
-| AGENDA_PHASE | Possessing spirits choose 1 agenda from drawn hand | Simultaneous reveal. Non-possessed factions draw randomly. Resolve in order: Steal → Bond → Trade → Expand → Change. Eject 0-influence spirits (they choose agenda to add). Presence checked. |
+| VAGRANT_PHASE | Vagrant spirits choose: guide a faction OR place an idol | Simultaneous reveal. Contested guidance fails. Idols placed. Influence set to 3 on success. Presence checked. |
+| AGENDA_PHASE | Guiding spirits choose 1 agenda from drawn hand | Simultaneous reveal. Non-guided factions draw randomly. Resolve in order: Steal → Bond → Trade → Expand → Change. Eject 0-influence spirits (they choose agenda to add). Presence checked. |
 | WAR_PHASE | None (dice rolls are server-side) | Ripen new wars (select battlegrounds). Resolve ripe wars: roll + power. Losers lose gold, winners gain gold + spoils agenda. Spoils resolved in agenda order. |
 | SCORING | None | Calculate VP per spirit based on idols in factions where they have presence. Round down. Check for 10 VP winner. |
 | CLEANUP | None | Shuffle agenda cards back into faction decks. Advance turn counter. |
@@ -136,7 +136,7 @@ Each faction tracks:
 - `agenda_deck: list[AgendaCard]` (starts with 1 of each: Steal, Bond, Trade, Expand, Change)
 - `change_modifiers: dict[AgendaType, int]` (accumulated Change upgrades per agenda type)
 - `regard: dict[FactionId, int]` (bilateral regard with other factions, starts at 0)
-- `possessing_spirit: Optional[SpiritId]`
+- `guiding_spirit: Optional[SpiritId]`
 - `presence_spirit: Optional[SpiritId]`
 
 Neighbors are determined dynamically: two factions are neighbors if any of their territories are adjacent on the hex grid.
@@ -145,9 +145,9 @@ Neighbors are determined dynamically: two factions are neighbors if any of their
 
 Each spirit (player) tracks:
 - `spirit_id: str`
-- `influence: int` (0-3, only meaningful while possessing)
+- `influence: int` (0-3, only meaningful while guiding)
 - `is_vagrant: bool`
-- `possessed_faction: Optional[FactionId]`
+- `guided_faction: Optional[FactionId]`
 - `idols: list[Idol]` (each idol has a type and hex location)
 - `victory_points: int`
 
@@ -190,7 +190,7 @@ Tracking "gold gained this turn" and "territories gained this turn" requires the
 All messages are JSON objects over WebSocket with a `type` field and a `payload` field:
 
 ```json
-{"type": "submit_action", "payload": {"action": "possess", "target": "plains"}}
+{"type": "submit_action", "payload": {"action": "guide", "target": "plains"}}
 {"type": "phase_result", "payload": {"phase": "agenda", "events": [...]}}
 ```
 
@@ -201,7 +201,7 @@ Message types fall into two categories:
 |---|---|---|
 | `join_game` | Lobby | `{player_name}` |
 | `ready` | Lobby | `{}` |
-| `submit_vagrant_action` | Vagrant phase | `{action_type, target}` (possess faction OR place idol type + hex) |
+| `submit_vagrant_action` | Vagrant phase | `{action_type, target}` (guide faction OR place idol type + hex) |
 | `submit_agenda_choice` | Agenda phase | `{agenda_index}` (index into drawn hand) |
 | `submit_change_choice` | Agenda/Change sub-phase | `{card_index}` (index into drawn change cards) |
 | `submit_ejection_agenda` | Agenda/ejection sub-phase | `{agenda_type}` (card to add to faction deck) |
@@ -307,7 +307,7 @@ class FactionState:
     territories: list[HexCoord]
     change_modifiers: dict[str, int]
     regard: dict[str, int]
-    possessing_spirit: str | None
+    guiding_spirit: str | None
     presence_spirit: str | None
 
 @dataclass
@@ -316,7 +316,7 @@ class SpiritState:
     name: str
     influence: int
     is_vagrant: bool
-    possessed_faction: str | None
+    guided_faction: str | None
     idols: list[Idol]
     victory_points: int
 

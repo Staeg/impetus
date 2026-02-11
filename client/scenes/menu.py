@@ -182,8 +182,10 @@ class MenuScene:
             pygame.draw.rect(screen, (40, 40, 55), name_rect, border_radius=4)
             pygame.draw.rect(screen, (100, 100, 140), name_rect, 1, border_radius=4)
 
-            name_text = self.font.render(self.player_name + "|", True, (220, 220, 240))
+            name_text = self.font.render(self.player_name, True, (220, 220, 240))
+            cursor = self.font.render("|", True, (220, 220, 240))
             screen.blit(name_text, (name_rect.x + 8, name_rect.y + 8))
+            screen.blit(cursor, (name_rect.x + 8 + name_text.get_width() - 1, name_rect.y + 8))
 
             hint = self.small_font.render("Press Enter to confirm", True, (100, 100, 120))
             screen.blit(hint, (SCREEN_WIDTH // 2 - hint.get_width() // 2, 295))
