@@ -80,7 +80,7 @@ class FactionState:
     agenda_deck: list[AgendaCard] = field(default_factory=list)
     change_modifiers: dict[str, int] = field(default_factory=dict)
     regard: dict[str, int] = field(default_factory=dict)
-    possessing_spirit: Optional[str] = None
+    guiding_spirit: Optional[str] = None
     presence_spirit: Optional[str] = None
     eliminated: bool = False
 
@@ -101,7 +101,7 @@ class FactionState:
             "agenda_deck_extra": agenda_deck_extra,
             "change_modifiers": self.change_modifiers,
             "regard": self.regard,
-            "possessing_spirit": self.possessing_spirit,
+            "guiding_spirit": self.guiding_spirit,
             "presence_spirit": self.presence_spirit,
             "eliminated": self.eliminated,
         }
@@ -115,7 +115,7 @@ class FactionState:
             territories=[HexCoord.from_dict(h) for h in d["territories"]],
             change_modifiers=d.get("change_modifiers", {}),
             regard=d.get("regard", {}),
-            possessing_spirit=d.get("possessing_spirit"),
+            guiding_spirit=d.get("guiding_spirit"),
             presence_spirit=d.get("presence_spirit"),
             eliminated=d.get("eliminated", False),
         )
@@ -127,7 +127,7 @@ class SpiritState:
     name: str
     influence: int = 0
     is_vagrant: bool = True
-    possessed_faction: Optional[str] = None
+    guided_faction: Optional[str] = None
     idols: list[Idol] = field(default_factory=list)
     victory_points: int = 0
 
@@ -137,7 +137,7 @@ class SpiritState:
             "name": self.name,
             "influence": self.influence,
             "is_vagrant": self.is_vagrant,
-            "possessed_faction": self.possessed_faction,
+            "guided_faction": self.guided_faction,
             "idols": [i.to_dict() for i in self.idols],
             "victory_points": self.victory_points,
         }
@@ -149,7 +149,7 @@ class SpiritState:
             name=d["name"],
             influence=d.get("influence", 0),
             is_vagrant=d.get("is_vagrant", True),
-            possessed_faction=d.get("possessed_faction"),
+            guided_faction=d.get("guided_faction"),
             idols=[Idol.from_dict(i) for i in d.get("idols", [])],
             victory_points=d.get("victory_points", 0),
         )

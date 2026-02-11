@@ -252,7 +252,7 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
                    normal_trade_factions: list[str], spirits: dict = None):
     """Resolve spoils of war agendas for war winners.
 
-    If the winning faction is possessed by a spirit, draw multiple spoils
+    If the winning faction is guided by a spirit, draw multiple spoils
     cards (1 + influence) and let the spirit choose.  Returns spoils_pending
     dict (spirit_id -> list of AgendaType) for any choices that need player
     input; empty dict means all spoils were auto-resolved.
@@ -269,12 +269,12 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
         loser = result.get("loser")
         faction = factions[winner]
 
-        # Check if winner is possessed by a spirit with influence
-        if faction.possessing_spirit and faction.possessing_spirit in spirits:
-            spirit = spirits[faction.possessing_spirit]
+        # Check if winner is guided by a spirit with influence
+        if faction.guiding_spirit and faction.guiding_spirit in spirits:
+            spirit = spirits[faction.guiding_spirit]
             draw_count = 1 + spirit.influence
             cards = [c.agenda_type for c in random.sample(faction.agenda_deck, min(draw_count, len(faction.agenda_deck)))]
-            spoils_pending[faction.possessing_spirit] = {
+            spoils_pending[faction.guiding_spirit] = {
                 "cards": cards,
                 "winner": winner,
                 "loser": loser,
@@ -282,13 +282,13 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
             }
             events.append({
                 "type": "spoils_choice",
-                "spirit": faction.possessing_spirit,
+                "spirit": faction.guiding_spirit,
                 "faction": winner,
                 "cards": [c.value for c in cards],
             })
             continue
 
-        # Non-possessed: auto-resolve with single draw from faction deck
+        # Non-guided: auto-resolve with single draw from faction deck
         spoils_type = random.choice(faction.agenda_deck).agenda_type if faction.agenda_deck else draw_spoils_agenda()
         result["spoils"] = spoils_type.value
 

@@ -115,15 +115,15 @@ class GameState:
         if self.phase == Phase.VAGRANT_PHASE:
             if not spirit.is_vagrant:
                 return {"action": "none", "reason": "not_vagrant"}
-            # Can possess any unoccupied, non-eliminated faction or place an idol
+            # Can guide any unoccupied, non-eliminated faction or place an idol
             available_factions = [
                 fid for fid, f in self.factions.items()
-                if f.possessing_spirit is None and not f.eliminated
+                if f.guiding_spirit is None and not f.eliminated
                 and f.presence_spirit != spirit_id
             ]
             presence_blocked = [
                 fid for fid, f in self.factions.items()
-                if f.possessing_spirit is None and not f.eliminated
+                if f.guiding_spirit is None and not f.eliminated
                 and f.presence_spirit == spirit_id
             ]
             neutral_hexes = [
@@ -142,13 +142,13 @@ class GameState:
         elif self.phase == Phase.AGENDA_PHASE:
             if spirit.is_vagrant:
                 return {"action": "none", "reason": "vagrant"}
-            if spirit.possessed_faction is None:
+            if spirit.guided_faction is None:
                 return {"action": "none", "reason": "no_faction"}
             # Guard against double-draw on reconnection
             if spirit_id in self.drawn_hands:
                 hand = self.drawn_hands[spirit_id]
             else:
-                faction = self.factions[spirit.possessed_faction]
+                faction = self.factions[spirit.guided_faction]
                 draw_count = 1 + spirit.influence
                 hand = faction.draw_agenda_cards(draw_count)
                 self.drawn_hands[spirit_id] = hand
@@ -166,7 +166,7 @@ class GameState:
         if self.phase == Phase.VAGRANT_PHASE:
             return spirit.is_vagrant
         elif self.phase == Phase.AGENDA_PHASE:
-            return not spirit.is_vagrant and spirit.possessed_faction is not None
+            return not spirit.is_vagrant and spirit.guided_faction is not None
         return False
 
     def get_spirits_needing_input(self) -> list[str]:
@@ -196,15 +196,31 @@ class GameState:
     def _validate_vagrant_action(self, spirit: Spirit, action: dict) -> Optional[str]:
         if not spirit.is_vagrant:
             return "Not vagrant"
-        possess_target = action.get("possess_target")
+        guide_target = action.get("guide_target")
         idol_type = action.get("idol_type")
 
-        if not possess_target and not idol_type:
+        if not guide_target and not idol_type:
             return "Must choose at least one action"
 
-        if possess_target:
-            if possess_target not in self.factions:
-                return f"Unknown faction: {possess_target}"
+        # If both guidance and idol placement are available, require both
+        can_guide = any(
+            f.guiding_spirit is None and not f.eliminated
+            and f.presence_spirit != spirit.spirit_id
+            for f in self.factions.values()
+        )
+        can_place_idol = (
+            not spirit.has_placed_idol_as_vagrant
+            and any(self.hex_map.ownership.get(h) is None for h in self.hex_map.all_hexes)
+        )
+        if can_guide and can_place_idol:
+            if not guide_target:
+                return "Must also choose a Faction to Guide"
+            if not idol_type:
+                return "Must also place an Idol"
+
+        if guide_target:
+            if guide_target not in self.factions:
+                return f"Unknown faction: {guide_target}"
 
         if idol_type:
             if spirit.has_placed_idol_as_vagrant:
@@ -222,8 +238,8 @@ class GameState:
         return None
 
     def _validate_agenda_action(self, spirit: Spirit, action: dict) -> Optional[str]:
-        if spirit.is_vagrant or spirit.possessed_faction is None:
-            return "Not possessing a faction"
+        if spirit.is_vagrant or spirit.guided_faction is None:
+            return "Not guiding a faction"
         agenda_index = action.get("agenda_index")
         hand = self.drawn_hands.get(spirit.spirit_id, [])
         if not isinstance(agenda_index, int) or agenda_index < 0 or agenda_index >= len(hand):
@@ -245,7 +261,7 @@ class GameState:
         return None
 
     def submit_change_choice(self, spirit_id: str, card_index: int) -> Optional[str]:
-        """Submit the change card choice for possessed spirits."""
+        """Submit the change card choice for guiding spirits."""
         if spirit_id not in self.change_pending:
             return "No change pending"
         cards = self.change_pending[spirit_id]
@@ -253,7 +269,7 @@ class GameState:
             return f"Invalid card index: {card_index}"
         # Apply the chosen card
         spirit = self.spirits[spirit_id]
-        faction = self.factions[spirit.possessed_faction]
+        faction = self.factions[spirit.guided_faction]
         chosen = cards[card_index]
         faction.change_modifiers[chosen.value] = faction.change_modifiers.get(chosen.value, 0) + 1
         del self.change_pending[spirit_id]
@@ -279,15 +295,15 @@ class GameState:
     def _resolve_vagrant_phase(self) -> list[dict]:
         events = []
 
-        # Group possess attempts by target faction, and collect idol placements
-        possess_attempts: dict[str, list[str]] = {}
+        # Group guide attempts by target faction, and collect idol placements
+        guide_attempts: dict[str, list[str]] = {}
         idol_placements = []
 
         for spirit_id, action in self.pending_actions.items():
-            possess_target = action.get("possess_target")
+            guide_target = action.get("guide_target")
             idol_type = action.get("idol_type")
-            if possess_target:
-                possess_attempts.setdefault(possess_target, []).append(spirit_id)
+            if guide_target:
+                guide_attempts.setdefault(guide_target, []).append(spirit_id)
             if idol_type:
                 idol_placements.append((spirit_id, action))
 
@@ -319,16 +335,16 @@ class GameState:
                 "hex": pos.to_dict(),
             })
 
-        # Resolve possess attempts
-        for target_faction, spirit_ids in possess_attempts.items():
+        # Resolve guide attempts
+        for target_faction, spirit_ids in guide_attempts.items():
             if len(spirit_ids) == 1:
                 spirit_id = spirit_ids[0]
                 spirit = self.spirits[spirit_id]
                 faction = self.factions[target_faction]
-                spirit.possess_faction(target_faction)
-                faction.possessing_spirit = spirit_id
+                spirit.guide_faction(target_faction)
+                faction.guiding_spirit = spirit_id
                 events.append({
-                    "type": "possessed",
+                    "type": "guided",
                     "spirit": spirit_id,
                     "faction": target_faction,
                 })
@@ -337,7 +353,7 @@ class GameState:
             else:
                 # Contested - all fail, single event with all spirits
                 events.append({
-                    "type": "possess_contested",
+                    "type": "guide_contested",
                     "spirits": spirit_ids,
                     "faction": target_faction,
                 })
@@ -347,7 +363,7 @@ class GameState:
         return events
 
     def _check_presence(self, faction: Faction, spirit: Spirit, events: list):
-        """Check and update presence for a faction when a spirit possesses or leaves."""
+        """Check and update presence for a faction when a spirit guides or leaves."""
         if faction.presence_spirit is None:
             faction.presence_spirit = spirit.spirit_id
             events.append({
@@ -384,10 +400,10 @@ class GameState:
                 "type": "faction_eliminated",
                 "faction": fid,
             })
-            # Eject possessing spirit
-            if faction.possessing_spirit:
-                spirit = self.spirits[faction.possessing_spirit]
-                faction.possessing_spirit = None
+            # Eject guiding spirit
+            if faction.guiding_spirit:
+                spirit = self.spirits[faction.guiding_spirit]
+                faction.guiding_spirit = None
                 spirit.become_vagrant()
                 events.append({
                     "type": "ejected",
@@ -419,18 +435,18 @@ class GameState:
             hand = self.drawn_hands.get(spirit_id, [])
             idx = action["agenda_index"]
             chosen = hand[idx]
-            agenda_choices[spirit.possessed_faction] = chosen.agenda_type
+            agenda_choices[spirit.guided_faction] = chosen.agenda_type
             # Track all drawn cards for return to deck during cleanup
-            faction = self.factions[spirit.possessed_faction]
+            faction = self.factions[spirit.guided_faction]
             faction.played_agenda_this_turn.extend(hand)
             events.append({
                 "type": "agenda_chosen",
                 "spirit": spirit_id,
-                "faction": spirit.possessed_faction,
+                "faction": spirit.guided_faction,
                 "agenda": chosen.agenda_type.value,
             })
 
-        # Non-possessed factions draw random agenda (skip eliminated)
+        # Non-guided factions draw random agenda (skip eliminated)
         for fid, faction in self.factions.items():
             if fid not in agenda_choices:
                 if faction.eliminated:
@@ -445,7 +461,7 @@ class GameState:
 
         # All spirits lose 1 influence
         for spirit in self.spirits.values():
-            if not spirit.is_vagrant and spirit.possessed_faction:
+            if not spirit.is_vagrant and spirit.guided_faction:
                 spirit.lose_influence(1)
 
         # Track trade factions before resolving
@@ -454,16 +470,16 @@ class GameState:
             if at == AgendaType.TRADE
         ]
 
-        # Handle Change differently for possessed factions
-        change_factions_possessed = []
+        # Handle Change differently for guided factions
+        change_factions_guided = []
         change_factions_auto = []
         for fid, at in agenda_choices.items():
             if at == AgendaType.CHANGE:
                 faction = self.factions[fid]
-                if faction.possessing_spirit:
-                    spirit = self.spirits[faction.possessing_spirit]
+                if faction.guiding_spirit:
+                    spirit = self.spirits[faction.guiding_spirit]
                     if spirit.influence > 0:
-                        change_factions_possessed.append((fid, faction.possessing_spirit))
+                        change_factions_guided.append((fid, faction.guiding_spirit))
                     else:
                         change_factions_auto.append(fid)
                 else:
@@ -479,8 +495,8 @@ class GameState:
         resolve_agendas(self.factions, self.hex_map, non_change_choices,
                        self.wars, events)
 
-        # Handle possessed change (spirit gets to choose)
-        for fid, spirit_id in change_factions_possessed:
+        # Handle guided change (spirit gets to choose)
+        for fid, spirit_id in change_factions_guided:
             spirit = self.spirits[spirit_id]
             draw_count = 1 + spirit.influence
             cards = random.sample(CHANGE_DECK, min(draw_count, len(CHANGE_DECK)))
@@ -494,8 +510,8 @@ class GameState:
 
         # Check for ejection (0 influence spirits)
         for spirit in self.spirits.values():
-            if not spirit.is_vagrant and spirit.possessed_faction and spirit.influence == 0:
-                faction_id = spirit.possessed_faction
+            if not spirit.is_vagrant and spirit.guided_faction and spirit.influence == 0:
+                faction_id = spirit.guided_faction
                 faction = self.factions[faction_id]
                 self.ejection_pending[spirit.spirit_id] = faction_id
                 events.append({
@@ -529,13 +545,13 @@ class GameState:
         # Actually eject spirits whose ejection has been resolved
         spirits_to_eject = []
         for spirit in self.spirits.values():
-            if not spirit.is_vagrant and spirit.possessed_faction and spirit.influence == 0:
+            if not spirit.is_vagrant and spirit.guided_faction and spirit.influence == 0:
                 if spirit.spirit_id not in self.ejection_pending:
                     spirits_to_eject.append(spirit)
 
         for spirit in spirits_to_eject:
-            faction = self.factions[spirit.possessed_faction]
-            faction.possessing_spirit = None
+            faction = self.factions[spirit.guided_faction]
+            faction.guiding_spirit = None
             # Check presence on leaving
             self._check_presence(faction, spirit, events)
             spirit.become_vagrant()

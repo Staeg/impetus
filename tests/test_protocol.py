@@ -51,7 +51,7 @@ class TestModelSerialization:
         assert idol2.owner_spirit == "spirit_1"
 
     def test_spirit_state(self):
-        s = SpiritState("s1", "Alice", influence=3, is_vagrant=False, possessed_faction="mountain")
+        s = SpiritState("s1", "Alice", influence=3, is_vagrant=False, guided_faction="mountain")
         d = s.to_dict()
         s2 = SpiritState.from_dict(d)
         assert s2.spirit_id == "s1"

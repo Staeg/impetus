@@ -13,7 +13,10 @@
       "Bash(xargs:*)",
       "Bash(dir:*)",
       "Bash(findstr:*)",
-      "Bash(git tag:*)"
+      "Bash(git tag:*)",
+      "Bash(for i in 1 2 3 4 5)",
+      "Bash(do python -m pytest tests/ -q)",
+      "Bash(done)"
     ]
   }
 }
