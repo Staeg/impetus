@@ -9,8 +9,10 @@ from shared.constants import (
 from shared.models import GameStateSnapshot, HexCoord, Idol, WarState
 from client.renderer.hex_renderer import HexRenderer
 from client.renderer.ui_renderer import UIRenderer, Button
-from client.renderer.animation import AnimationManager
+from client.renderer.animation import AnimationManager, AgendaAnimation
+from client.renderer.assets import load_assets, agenda_images, agenda_card_images
 from client.input_handler import InputHandler
+from shared.hex_utils import axial_to_pixel
 
 
 class GameScene:
@@ -20,6 +22,7 @@ class GameScene:
         self.ui_renderer = UIRenderer()
         self.animation = AnimationManager()
         self.input_handler = InputHandler()
+        load_assets()
 
         self.game_state: dict = {}
         self.phase = ""
@@ -290,8 +293,29 @@ class GameScene:
             if "state" in payload:
                 self._update_state_from_snapshot(payload["state"])
             events = payload.get("events", [])
+            agenda_anim_index = 0
             for event in events:
                 self._log_event(event)
+                # Spawn floating agenda animations for agenda resolution events
+                etype = event.get("type", "")
+                agenda_event_map = {
+                    "steal": "steal", "bond": "bond", "trade": "trade",
+                    "expand": "expand", "expand_failed": "expand",
+                    "change": "change", "expand_spoils": "expand",
+                }
+                if etype in agenda_event_map:
+                    img_key = agenda_event_map[etype]
+                    img = agenda_images.get(img_key)
+                    faction_id = event.get("faction")
+                    if img and faction_id:
+                        wx, wy = self._get_faction_centroid(faction_id)
+                        if wx is not None:
+                            anim = AgendaAnimation(
+                                img, wx, wy,
+                                delay=agenda_anim_index * 0.5,
+                            )
+                            self.animation.add_agenda_animation(anim)
+                            agenda_anim_index += 1
             # Clear previews after processing phase results
             self.preview_possession = None
             self.preview_idol = None
@@ -445,6 +469,31 @@ class GameScene:
                 if self.hex_ownership.get(hex_key) is None and hex_key in self.hex_ownership:
                     return True
         return False
+
+    def _get_faction_centroid(self, faction_id: str) -> tuple[float | None, float | None]:
+        """Get the world-coordinate centroid of a faction's territory."""
+        owned = [(q, r) for (q, r), owner in self.hex_ownership.items()
+                 if owner == faction_id]
+        if not owned:
+            return None, None
+        avg_q = sum(q for q, r in owned) / len(owned)
+        avg_r = sum(r for q, r in owned) / len(owned)
+        # Snap to nearest owned hex
+        best = min(owned, key=lambda h: (h[0] - avg_q) ** 2 + (h[1] - avg_r) ** 2)
+        return axial_to_pixel(best[0], best[1], HEX_SIZE)
+
+    def _render_agenda_animations(self, screen: pygame.Surface):
+        """Draw active agenda animations, converting world coords to screen."""
+        for anim in self.animation.get_active_agenda_animations():
+            if not anim.active:
+                continue
+            sx, sy = self.input_handler.world_to_screen(
+                anim.world_x, anim.world_y + anim.y_offset,
+                SCREEN_WIDTH, SCREEN_HEIGHT,
+            )
+            img = anim.image.copy()
+            img.set_alpha(anim.alpha)
+            screen.blit(img, (sx - img.get_width() // 2, sy - img.get_height() // 2))
 
     def _log_event(self, event: dict):
         etype = event.get("type", "")
@@ -627,6 +676,9 @@ class GameScene:
             preview_idol=render_preview_idol,
         )
 
+        # Draw agenda animations (above hex grid, below HUD)
+        self._render_agenda_animations(screen)
+
         # Draw HUD
         self.ui_renderer.draw_hud(screen, self.phase, self.turn,
                                    self.spirits, self.app.my_spirit_id)
@@ -749,6 +801,7 @@ class GameScene:
                 self.selected_agenda_index,
                 start_x, SCREEN_HEIGHT - 210,
                 modifiers=modifiers,
+                card_images=agenda_card_images,
             )
 
         if self.submit_button:
@@ -809,6 +862,7 @@ class GameScene:
             screen, hand, -1,
             start_x, rects[0].y if rects else SCREEN_HEIGHT // 2 - 85,
             modifiers=modifiers,
+            card_images=agenda_card_images,
         )
 
     def _render_spoils_change_ui(self, screen):

@@ -344,9 +344,11 @@ class UIRenderer:
 
     def draw_card_hand(self, surface: pygame.Surface, hand: list[dict],
                        selected_index: int, x: int, y: int,
-                       modifiers: dict | None = None) -> list[pygame.Rect]:
+                       modifiers: dict | None = None,
+                       card_images: dict | None = None) -> list[pygame.Rect]:
         """Draw clickable agenda cards. Returns list of card rects."""
         modifiers = modifiers or {}
+        card_images = card_images or {}
         rects = []
         card_w, card_h = 110, 170
         spacing = 10
@@ -367,11 +369,20 @@ class UIRenderer:
             name_text = self.font.render(agenda_type.title(), True, (220, 220, 240))
             surface.blit(name_text, (cx + card_w // 2 - name_text.get_width() // 2, y + 10))
 
+            # Card image (if available)
+            img = card_images.get(agenda_type)
+            desc_y = y + 38
+            if img:
+                img_x = cx + card_w // 2 - img.get_width() // 2
+                img_y = y + 30
+                surface.blit(img, (img_x, img_y))
+                desc_y = y + 30 + img.get_height() + 4
+
             # Detailed description
             desc_lines = self._build_card_description(agenda_type, modifiers)
             for j, line in enumerate(desc_lines):
                 desc_text = effect_font.render(line, True, (160, 170, 190))
-                surface.blit(desc_text, (cx + card_w // 2 - desc_text.get_width() // 2, y + 38 + j * 15))
+                surface.blit(desc_text, (cx + card_w // 2 - desc_text.get_width() // 2, desc_y + j * 15))
 
         return rects
 
