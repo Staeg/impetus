@@ -1,6 +1,7 @@
 """Load and cache agenda card images from graphics/ folder."""
 
 import os
+import sys
 import pygame
 
 # Module-level caches: agenda name -> pygame.Surface
@@ -22,9 +23,12 @@ def load_assets():
         return
     _loaded = True
 
-    # Use absolute path so it works regardless of CWD
-    base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "graphics")
-    base_dir = os.path.normpath(base_dir)
+    # Use _MEIPASS when running from a PyInstaller bundle, else resolve from source tree
+    if getattr(sys, '_MEIPASS', None):
+        base_dir = os.path.join(sys._MEIPASS, "graphics")
+    else:
+        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "graphics")
+        base_dir = os.path.normpath(base_dir)
 
     for name in AGENDA_NAMES:
         filename = f"{name.title()}.png"
