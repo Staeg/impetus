@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('graphics', 'graphics')],
     hiddenimports=[
         'server.server',
         'client.app',
