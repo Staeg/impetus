@@ -95,16 +95,16 @@ def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils)
         if actual > 0:
             factions[victim].gold -= actual
 
-    # Apply gains to stealers
+    # Apply gains to stealers (always emit event for animations, even if 0 gold)
     for fid, gained in gold_gains.items():
         if gained > 0:
             factions[fid].add_gold(gained)
-            events.append({
-                "type": "steal",
-                "faction": fid,
-                "gold_gained": gained,
-                "is_spoils": is_spoils,
-            })
+        events.append({
+            "type": "steal",
+            "faction": fid,
+            "gold_gained": gained,
+            "is_spoils": is_spoils,
+        })
 
     # Apply regard changes
     for fid, other_fid, delta in regard_changes:
