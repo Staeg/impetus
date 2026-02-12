@@ -5,7 +5,7 @@ from shared.constants import IdolType, BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPREAD
 
 
 def calculate_scoring(factions: dict, spirits: dict, hex_map) -> list[dict]:
-    """Calculate VP for all spirits based on presence and idols.
+    """Calculate VP for all spirits based on Worship and idols.
 
     Returns a list of scoring event dicts.
     """

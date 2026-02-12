@@ -7,10 +7,69 @@ from shared.constants import (
 )
 
 
+def _wrap_text(text: str, font: "pygame.font.Font", max_width: int) -> list[str]:
+    """Word-wrap text to fit within max_width pixels."""
+    lines = []
+    for paragraph in text.split('\n'):
+        if not paragraph.strip():
+            lines.append('')
+            continue
+        words = paragraph.split()
+        if not words:
+            lines.append('')
+            continue
+        current_line = words[0]
+        for word in words[1:]:
+            test_line = current_line + ' ' + word
+            if font.size(test_line)[0] <= max_width:
+                current_line = test_line
+            else:
+                lines.append(current_line)
+                current_line = word
+        lines.append(current_line)
+    return lines
+
+
+def draw_multiline_tooltip(surface: "pygame.Surface", font: "pygame.font.Font",
+                           text: str, anchor_x: int, anchor_y: int,
+                           max_width: int = 350, below: bool = False):
+    """Draw a multi-line tooltip box at the given anchor position.
+
+    anchor_x/anchor_y: the center-x and top (if below) or bottom (if above) of the tooltip.
+    """
+    lines = _wrap_text(text, font, max_width)
+    if not lines:
+        return
+    line_h = font.get_linesize()
+    rendered = [font.render(line, True, (255, 220, 150)) for line in lines]
+    content_w = max(s.get_width() for s in rendered)
+    tip_w = content_w + 16
+    tip_h = len(lines) * line_h + 12
+
+    tip_x = anchor_x - tip_w // 2
+    # Clamp to screen bounds
+    screen_w = surface.get_width()
+    if tip_x < 4:
+        tip_x = 4
+    if tip_x + tip_w > screen_w - 4:
+        tip_x = screen_w - 4 - tip_w
+
+    if below:
+        tip_y = anchor_y + 4
+    else:
+        tip_y = anchor_y - tip_h - 4
+
+    tip_rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
+    pygame.draw.rect(surface, (40, 40, 50), tip_rect, border_radius=4)
+    pygame.draw.rect(surface, (150, 150, 100), tip_rect, 1, border_radius=4)
+    for i, surf in enumerate(rendered):
+        surface.blit(surf, (tip_x + 8, tip_y + 6 + i * line_h))
+
+
 class Button:
     def __init__(self, rect: pygame.Rect, text: str, color=(80, 80, 120),
                  text_color=(255, 255, 255), hover_color=(100, 100, 150),
-                 tooltip: str = None):
+                 tooltip: str = None, tooltip_always: bool = False):
         self.rect = rect
         self.text = text
         self.color = color
@@ -19,6 +78,7 @@ class Button:
         self.hovered = False
         self.enabled = True
         self.tooltip = tooltip
+        self.tooltip_always = tooltip_always
 
     def draw(self, surface: pygame.Surface, font: pygame.font.Font):
         color = self.hover_color if self.hovered else self.color
@@ -31,18 +91,16 @@ class Button:
         surface.blit(text_surf, text_rect)
 
     def draw_tooltip(self, surface: pygame.Surface, font: pygame.font.Font):
-        """Draw tooltip above the button if disabled and hovered."""
-        if not self.tooltip or self.enabled or not self.hovered:
+        """Draw tooltip near the button when hovered."""
+        if not self.tooltip or not self.hovered:
             return
-        tip_surf = font.render(self.tooltip, True, (255, 220, 150))
-        tip_w = tip_surf.get_width() + 12
-        tip_h = tip_surf.get_height() + 8
-        tip_x = self.rect.centerx - tip_w // 2
-        tip_y = self.rect.top - tip_h - 4
-        tip_rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
-        pygame.draw.rect(surface, (40, 40, 50), tip_rect, border_radius=4)
-        pygame.draw.rect(surface, (150, 150, 100), tip_rect, 1, border_radius=4)
-        surface.blit(tip_surf, (tip_x + 6, tip_y + 4))
+        if not self.tooltip_always and self.enabled:
+            return
+        draw_multiline_tooltip(
+            surface, font, self.tooltip,
+            anchor_x=self.rect.centerx,
+            anchor_y=self.rect.top,
+        )
 
     def update(self, mouse_pos):
         self.hovered = self.rect.collidepoint(mouse_pos)
@@ -191,7 +249,7 @@ class UIRenderer:
             presence_end_x = cx + 6 + abbr_surf.get_width() + 6 + gold_text.get_width()
             if presence_id:
                 p_name = spirits.get(presence_id, {}).get("name", presence_id[:6])
-                p_surf = self.small_font.render(f" P:{p_name}", True, (100, 200, 180))
+                p_surf = self.small_font.render(f" W:{p_name}", True, (100, 200, 180))
                 surface.blit(p_surf, (presence_end_x, strip_y + 4))
 
             # Preview guidance indicator (faded, with ? prefix)
@@ -262,8 +320,8 @@ class UIRenderer:
             ("Territories", f"Territories: {len(territories)}", None),
             ("Guiding", f"Guiding: {guiding_name}",
              f"Guiding: {preview_guid_name}?" if guiding_name == "none" and preview_guid_name else None),
-            ("Presence", f"Presence: {presence_name}",
-             f"Presence: {preview_guid_name}?" if presence_name == "none" and preview_guid_name else None),
+            ("Worshipping", f"Worshipping: {presence_name}",
+             f"Worshipping: {preview_guid_name}?" if presence_name == "none" and preview_guid_name else None),
         ]
         for label, line, preview_line in info_lines:
             if preview_line:

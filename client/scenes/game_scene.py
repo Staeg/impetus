@@ -2,17 +2,34 @@
 
 import pygame
 from shared.constants import (
-    MessageType, Phase, AgendaType, IdolType,
+    MessageType, Phase, AgendaType, IdolType, MAP_SIDE_LENGTH,
     SCREEN_WIDTH, SCREEN_HEIGHT, HEX_SIZE, FACTION_DISPLAY_NAMES, FACTION_COLORS,
     BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPREAD_IDOL_VP,
 )
 from shared.models import GameStateSnapshot, HexCoord, Idol, WarState
 from client.renderer.hex_renderer import HexRenderer
-from client.renderer.ui_renderer import UIRenderer, Button
+from client.renderer.ui_renderer import UIRenderer, Button, draw_multiline_tooltip
 from client.renderer.animation import AnimationManager, AgendaAnimation
 from client.renderer.assets import load_assets, agenda_images, agenda_card_images
 from client.input_handler import InputHandler
 from shared.hex_utils import axial_to_pixel
+
+# Approximate hex map screen bounds (default camera) for centering UI
+_HEX_MAP_HALF_W = int(HEX_SIZE * 1.5 * (MAP_SIDE_LENGTH - 1)) + HEX_SIZE
+_HEX_MAP_LEFT_X = SCREEN_WIDTH // 2 - _HEX_MAP_HALF_W
+_HEX_MAP_RIGHT_X = SCREEN_WIDTH // 2 + _HEX_MAP_HALF_W
+_FACTION_PANEL_X = SCREEN_WIDTH - 240
+
+# Centering positions for button columns
+_GUIDANCE_CENTER_X = _HEX_MAP_LEFT_X // 2
+_IDOL_CENTER_X = (_HEX_MAP_RIGHT_X + _FACTION_PANEL_X) // 2
+_BTN_W = 130
+_GUIDANCE_BTN_X = _GUIDANCE_CENTER_X - _BTN_W // 2
+_IDOL_BTN_X = _IDOL_CENTER_X - _BTN_W // 2
+
+# Title positions
+_TITLE_Y = 93
+_BTN_START_Y = 120
 
 
 class GameScene:
@@ -65,6 +82,12 @@ class GameScene:
         self.submit_button: Button | None = None
         self.faction_buttons: list[Button] = []
         self.idol_buttons: list[Button] = []
+
+        # Title labels (rects + tooltip text)
+        self.guidance_title_rect: pygame.Rect | None = None
+        self.guidance_title_hovered: bool = False
+        self.idol_title_rect: pygame.Rect | None = None
+        self.idol_title_hovered: bool = False
 
         self._font = None
         self._small_font = None
@@ -125,6 +148,11 @@ class GameScene:
                 btn.update(event.pos)
             if self.submit_button:
                 self.submit_button.update(event.pos)
+            # Title label hover tracking
+            if self.guidance_title_rect:
+                self.guidance_title_hovered = self.guidance_title_rect.collidepoint(event.pos)
+            if self.idol_title_rect:
+                self.idol_title_hovered = self.idol_title_rect.collidepoint(event.pos)
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # Check submit button
@@ -274,6 +302,10 @@ class GameScene:
         self.faction_buttons = []
         self.idol_buttons = []
         self.submit_button = None
+        self.guidance_title_rect = None
+        self.guidance_title_hovered = False
+        self.idol_title_rect = None
+        self.idol_title_hovered = False
 
     def handle_network(self, msg_type, payload):
         if msg_type == MessageType.GAME_START:
@@ -408,6 +440,42 @@ class GameScene:
                 "Confirm", (60, 130, 60)
             )
 
+    def _count_spirit_idols_in_faction(self, spirit_id: str, faction_id: str) -> int:
+        """Count idols owned by a spirit in a faction's territory."""
+        count = 0
+        for idol in self.all_idols:
+            if isinstance(idol, dict):
+                if idol.get('owner_spirit') == spirit_id:
+                    pos = idol.get('position', {})
+                    q, r = pos.get('q'), pos.get('r')
+                    if self.hex_ownership.get((q, r)) == faction_id:
+                        count += 1
+        return count
+
+    def _build_guidance_tooltip(self, faction_id: str, is_blocked: bool) -> str:
+        """Build tooltip for a Guidance faction button."""
+        fdata = self.factions.get(faction_id, {})
+        presence_id = fdata.get("presence_spirit") if isinstance(fdata, dict) else None
+        lines = []
+        if is_blocked:
+            lines.append("This Faction Worships you;")
+            lines.append("you cannot Guide them.")
+        elif presence_id:
+            name = self.spirits.get(presence_id, {}).get("name", presence_id[:6])
+            lines.append(f"Worshipped by: {name}")
+            my_id = self.app.my_spirit_id
+            my_idols = self._count_spirit_idols_in_faction(my_id, faction_id)
+            their_idols = self._count_spirit_idols_in_faction(presence_id, faction_id)
+            if my_idols >= their_idols:
+                lines.append("Guiding will make you Worshipped")
+            else:
+                lines.append(f"You need more Idols to become")
+                lines.append(f"Worshipped ({my_idols} vs {their_idols})")
+        else:
+            lines.append("Not Worshipped by any Spirit")
+            lines.append("Guiding will make you Worshipped")
+        return "\n".join(lines)
+
     def _build_faction_buttons(self):
         available = [
             fid for fid in self.phase_options.get("available_factions", [])
@@ -419,18 +487,30 @@ class GameScene:
         for i, fid in enumerate(all_factions):
             color = FACTION_COLORS.get(fid, (100, 100, 100))
             is_blocked = fid in blocked
+            tooltip = self._build_guidance_tooltip(fid, is_blocked)
             btn = Button(
-                pygame.Rect(10, 120 + i * 40, 130, 34),
+                pygame.Rect(_GUIDANCE_BTN_X, _BTN_START_Y + i * 40, _BTN_W, 34),
                 FACTION_DISPLAY_NAMES.get(fid, fid),
                 color=tuple(max(c // 2, 30) for c in color),
                 text_color=(255, 255, 255),
-                tooltip="Your Presence prevents you from Guiding this Faction" if is_blocked else None,
+                tooltip=tooltip,
+                tooltip_always=True,
             )
             if is_blocked:
                 btn.enabled = False
             self.faction_buttons.append(btn)
+        # Set up guidance title rect
+        title_w = 100
+        self.guidance_title_rect = pygame.Rect(
+            _GUIDANCE_CENTER_X - title_w // 2, _TITLE_Y, title_w, 22
+        )
 
     def _build_idol_buttons(self):
+        idol_tooltips = {
+            IdolType.BATTLE: f"{BATTLE_IDOL_VP} VP for each war won\nby the Worshipping Faction",
+            IdolType.AFFLUENCE: f"{AFFLUENCE_IDOL_VP} VP for each gold gained\nby the Worshipping Faction",
+            IdolType.SPREAD: f"{SPREAD_IDOL_VP} VP for each territory gained\nby the Worshipping Faction",
+        }
         self.idol_buttons = []
         for i, it in enumerate(IdolType):
             colors = {
@@ -439,10 +519,17 @@ class GameScene:
                 IdolType.SPREAD: (50, 120, 50),
             }
             btn = Button(
-                pygame.Rect(SCREEN_WIDTH - 380, 120 + i * 40, 130, 34),
-                it.value.title(), colors.get(it, (80, 80, 80))
+                pygame.Rect(_IDOL_BTN_X, _BTN_START_Y + i * 40, _BTN_W, 34),
+                it.value.title(), colors.get(it, (80, 80, 80)),
+                tooltip=idol_tooltips.get(it),
+                tooltip_always=True,
             )
             self.idol_buttons.append(btn)
+        # Set up idol title rect
+        title_w = 130
+        self.idol_title_rect = pygame.Rect(
+            _IDOL_CENTER_X - title_w // 2, _TITLE_Y, title_w, 22
+        )
 
     def _get_card_rects(self) -> list[pygame.Rect]:
         """Calculate card rects for the agenda hand."""
@@ -614,7 +701,12 @@ class GameScene:
         elif etype == "presence_gained":
             name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"{name} gained presence in {fname}")
+            self.event_log.append(f"{fname} now Worships {name}")
+        elif etype == "presence_replaced":
+            name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
+            old_name = self.spirits.get(event.get("old_spirit", ""), {}).get("name", event.get("old_spirit", "?")[:6])
+            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
+            self.event_log.append(f"{fname} now Worships {name} (was {old_name})")
         elif etype == "faction_eliminated":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
             self.event_log.append(f"{fname} has been ELIMINATED!")
@@ -754,10 +846,56 @@ class GameScene:
         elif self.phase == "spoils_change_choice":
             self._render_spoils_change_ui(screen)
 
+    _GUIDANCE_TITLE_TOOLTIP = (
+        "Select a Faction to Guide. If you are not the only Spirit "
+        "attempting to Guide that Faction this turn, both of you will "
+        "fail and choose again next turn.\n\n"
+        "If successful, for the next 3 turns you will choose among "
+        "several options whenever that Faction would ordinarily draw a "
+        "random Agenda card or Change modifier: 3 additional choices "
+        "this turn, 2 additional choices next turn and 1 additional "
+        "choice the turn after that. You will be ejected after this "
+        "last turn of Guidance, but you will leave behind a lasting "
+        "effect: adding an additional Agenda card to its Agenda deck.\n\n"
+        "Additionally, every time you begin and end Guidance of a "
+        "Faction, you will attempt to become Worshipped by that Faction. "
+        "If that Faction is not Worshipping any Spirit, you automatically "
+        "succeed. If they are Worshipping another Spirit, you become "
+        "their new object of Worship if you have as many or more Idols "
+        "in the Faction's Territories as the Spirit they currently Worship.\n\n"
+        "You cannot begin Guiding a Faction that Worships you."
+    )
+
+    _IDOL_TITLE_TOOLTIP = (
+        "Choose a neutral Territory and Idol type to place. When inside "
+        "a Faction's Territory, the Spirit Worshipped by that Faction "
+        "gains Victory Points at the end of every turn if that Faction "
+        "succeeds at winning Wars, gaining gold or expanding their "
+        "Territory, depending on which Idols are present.\n\n"
+        "Idols in neutral Territory beckon all neighboring Factions: "
+        "if they Expand, Territories with Idols in them are prioritized "
+        "over ones without Idols."
+    )
+
     def _render_vagrant_ui(self, screen):
+        # Draw "Guidance" title
+        if self.guidance_title_rect and self.faction_buttons:
+            title_surf = self.font.render("Guidance", True, (200, 200, 220))
+            screen.blit(title_surf, (
+                self.guidance_title_rect.centerx - title_surf.get_width() // 2,
+                self.guidance_title_rect.y,
+            ))
+
+        # Draw "Idol placement" title
+        if self.idol_title_rect and self.idol_buttons:
+            title_surf = self.font.render("Idol placement", True, (200, 200, 220))
+            screen.blit(title_surf, (
+                self.idol_title_rect.centerx - title_surf.get_width() // 2,
+                self.idol_title_rect.y,
+            ))
+
         # Draw faction buttons (left) with selection highlight
         for btn in self.faction_buttons:
-            # Highlight selected faction with white border
             if self.selected_faction and btn.text == FACTION_DISPLAY_NAMES.get(self.selected_faction):
                 pygame.draw.rect(screen, (255, 255, 255), btn.rect.inflate(4, 4), 2, border_radius=8)
             btn.draw(screen, self.font)
@@ -771,6 +909,24 @@ class GameScene:
         # Tooltips (drawn last so they appear on top)
         for btn in self.faction_buttons:
             btn.draw_tooltip(screen, self.small_font)
+        for btn in self.idol_buttons:
+            btn.draw_tooltip(screen, self.small_font)
+
+        # Title tooltips (drawn below title)
+        if self.guidance_title_hovered and self.guidance_title_rect:
+            draw_multiline_tooltip(
+                screen, self.small_font, self._GUIDANCE_TITLE_TOOLTIP,
+                anchor_x=self.guidance_title_rect.centerx,
+                anchor_y=self.guidance_title_rect.bottom,
+                below=True,
+            )
+        if self.idol_title_hovered and self.idol_title_rect:
+            draw_multiline_tooltip(
+                screen, self.small_font, self._IDOL_TITLE_TOOLTIP,
+                anchor_x=self.idol_title_rect.centerx,
+                anchor_y=self.idol_title_rect.bottom,
+                below=True,
+            )
 
         # Selection info at bottom
         y = SCREEN_HEIGHT - 110
