@@ -304,18 +304,22 @@ class GameScene:
             for event in events:
                 self._log_event(event)
             # Collect agenda events and sort by animation display order
+            # Setup change events (is_setup=True) play first, then normal agenda order
             _ANIM_ORDER = {
                 "trade": 0, "bond": 1, "steal": 2,
                 "expand": 3, "expand_failed": 3, "expand_spoils": 3,
-                "change": 4,
+                "change": 4, "change_draw": 4,
             }
             agenda_events = [e for e in events if e.get("type", "") in _ANIM_ORDER]
-            agenda_events.sort(key=lambda e: _ANIM_ORDER[e["type"]])
+            agenda_events.sort(key=lambda e: (
+                0 if e.get("is_setup") else 1,
+                _ANIM_ORDER[e["type"]],
+            ))
             agenda_anim_index = 0
             for event in agenda_events:
                 etype = event["type"]
                 # Determine image key
-                if etype == "change":
+                if etype in ("change", "change_draw"):
                     modifier = event.get("modifier", "")
                     img_key = f"change_{modifier}" if f"change_{modifier}" in agenda_images else "change"
                 elif etype == "expand_failed":
@@ -454,11 +458,10 @@ class GameScene:
 
     def _get_change_card_rects(self) -> list[pygame.Rect]:
         rects = []
-        card_w, card_h = 120, 60
+        card_w, card_h = 110, 170
         spacing = 10
-        total_w = len(self.change_cards) * (card_w + spacing) - spacing
-        start_x = SCREEN_WIDTH // 2 - total_w // 2
-        y = SCREEN_HEIGHT // 2 - card_h // 2
+        start_x = 20
+        y = 125
         for i in range(len(self.change_cards)):
             rects.append(pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h))
         return rects
@@ -467,20 +470,18 @@ class GameScene:
         rects = []
         card_w, card_h = 110, 170
         spacing = 10
-        total_w = len(self.spoils_cards) * (card_w + spacing) - spacing
-        start_x = SCREEN_WIDTH // 2 - total_w // 2
-        y = SCREEN_HEIGHT // 2 - card_h // 2
+        start_x = 20
+        y = 125
         for i in range(len(self.spoils_cards)):
             rects.append(pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h))
         return rects
 
     def _get_spoils_change_card_rects(self) -> list[pygame.Rect]:
         rects = []
-        card_w, card_h = 120, 60
+        card_w, card_h = 110, 170
         spacing = 10
-        total_w = len(self.spoils_change_cards) * (card_w + spacing) - spacing
-        start_x = SCREEN_WIDTH // 2 - total_w // 2
-        y = SCREEN_HEIGHT // 2 - card_h // 2
+        start_x = 20
+        y = 125
         for i in range(len(self.spoils_change_cards)):
             rects.append(pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h))
         return rects
@@ -555,6 +556,10 @@ class GameScene:
         elif etype == "change":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
             self.event_log.append(f"{fname} upgraded {event.get('modifier', '?')}")
+        elif etype == "change_draw":
+            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
+            cards = event.get("cards", [])
+            self.event_log.append(f"{fname} draws Change: {', '.join(cards)}")
         elif etype == "war_erupted":
             fa = FACTION_DISPLAY_NAMES.get(event["faction_a"], event["faction_a"])
             fb = FACTION_DISPLAY_NAMES.get(event["faction_b"], event["faction_b"])
@@ -821,17 +826,21 @@ class GameScene:
     def _render_change_ui(self, screen):
         if not self.change_cards:
             return
-        # Draw change card options
         title = self.font.render("Choose a Change modifier:", True, (200, 200, 220))
-        screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, SCREEN_HEIGHT // 2 - 60))
+        screen.blit(title, (20, 100))
 
+        hand = []
+        for card_name in self.change_cards:
+            desc = self.ui_renderer._build_modifier_description(card_name)
+            hand.append({"agenda_type": card_name, "description": desc})
         rects = self._get_change_card_rects()
-        for i, (card, rect) in enumerate(zip(self.change_cards, rects)):
-            pygame.draw.rect(screen, (50, 50, 70), rect, border_radius=6)
-            pygame.draw.rect(screen, (120, 120, 160), rect, 2, border_radius=6)
-            text = self.font.render(card.title(), True, (220, 220, 240))
-            screen.blit(text, (rect.centerx - text.get_width() // 2,
-                               rect.centery - text.get_height() // 2))
+        start_x = rects[0].x if rects else 20
+        start_y = rects[0].y if rects else 125
+        self.ui_renderer.draw_card_hand(
+            screen, hand, -1,
+            start_x, start_y,
+            card_images=agenda_card_images,
+        )
 
     def _render_ejection_ui(self, screen):
         title = self.font.render("Choose an Agenda card to add to the faction's deck:", True, (200, 200, 220))
@@ -860,31 +869,36 @@ class GameScene:
         if not self.spoils_cards:
             return
         title = self.font.render("Spoils of War - Choose an agenda:", True, (255, 200, 100))
-        rects = self._get_spoils_card_rects()
-        title_y = rects[0].y - 30 if rects else SCREEN_HEIGHT // 2 - 120
-        screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, title_y))
+        screen.blit(title, (20, 100))
 
         modifiers = self._get_current_faction_modifiers()
         hand = [{"agenda_type": card} for card in self.spoils_cards]
-        total_w = len(self.spoils_cards) * 120 - 10
-        start_x = SCREEN_WIDTH // 2 - total_w // 2
+        rects = self._get_spoils_card_rects()
+        start_x = rects[0].x if rects else 20
+        start_y = rects[0].y if rects else 125
         self.ui_renderer.draw_card_hand(
             screen, hand, -1,
-            start_x, rects[0].y if rects else SCREEN_HEIGHT // 2 - 85,
+            start_x, start_y,
             modifiers=modifiers,
             card_images=agenda_card_images,
+            is_spoils=True,
         )
 
     def _render_spoils_change_ui(self, screen):
         if not self.spoils_change_cards:
             return
         title = self.font.render("Spoils of War - Choose a Change modifier:", True, (255, 200, 100))
-        screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, SCREEN_HEIGHT // 2 - 60))
+        screen.blit(title, (20, 100))
 
+        hand = []
+        for card_name in self.spoils_change_cards:
+            desc = self.ui_renderer._build_modifier_description(card_name)
+            hand.append({"agenda_type": card_name, "description": desc})
         rects = self._get_spoils_change_card_rects()
-        for i, (card, rect) in enumerate(zip(self.spoils_change_cards, rects)):
-            pygame.draw.rect(screen, (50, 50, 70), rect, border_radius=6)
-            pygame.draw.rect(screen, (120, 120, 160), rect, 2, border_radius=6)
-            text = self.font.render(card.title(), True, (220, 220, 240))
-            screen.blit(text, (rect.centerx - text.get_width() // 2,
-                               rect.centery - text.get_height() // 2))
+        start_x = rects[0].x if rects else 20
+        start_y = rects[0].y if rects else 125
+        self.ui_renderer.draw_card_hand(
+            screen, hand, -1,
+            start_x, start_y,
+            card_images=agenda_card_images,
+        )

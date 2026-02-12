@@ -308,12 +308,20 @@ class UIRenderer:
                 surface.blit(text, (x + 10, dy))
                 dy += 18
 
-    def _build_card_description(self, agenda_type: str, modifiers: dict) -> list[str]:
+    def _build_card_description(self, agenda_type: str, modifiers: dict,
+                                is_spoils: bool = False) -> list[str]:
         """Build detailed description lines for an agenda card based on modifiers."""
         steal_mod = modifiers.get("steal", 0)
         bond_mod = modifiers.get("bond", 0)
         trade_mod = modifiers.get("trade", 0)
         expand_mod = modifiers.get("expand", 0)
+
+        if is_spoils and agenda_type == "expand":
+            return [
+                "Conquer enemy",
+                "Battleground hex",
+                "(free)",
+            ]
 
         descs = {
             "steal": [
@@ -342,11 +350,39 @@ class UIRenderer:
         }
         return descs.get(agenda_type, ["???"])
 
+    def _build_modifier_description(self, modifier_type: str) -> list[str]:
+        """Build description lines for a Change modifier card."""
+        descs = {
+            "trade": [
+                "+1g per extra",
+                "trader",
+            ],
+            "bond": [
+                "+1 Regard",
+                "with neighbors",
+            ],
+            "steal": [
+                "+1g stolen &",
+                "-1 Regard per",
+                "neighbor",
+            ],
+            "expand": [
+                "-1g expand cost",
+                "+1g fail bonus",
+            ],
+        }
+        return descs.get(modifier_type, ["???"])
+
     def draw_card_hand(self, surface: pygame.Surface, hand: list[dict],
                        selected_index: int, x: int, y: int,
                        modifiers: dict | None = None,
-                       card_images: dict | None = None) -> list[pygame.Rect]:
-        """Draw clickable agenda cards. Returns list of card rects."""
+                       card_images: dict | None = None,
+                       is_spoils: bool = False) -> list[pygame.Rect]:
+        """Draw clickable agenda cards. Returns list of card rects.
+
+        Each card dict should have "agenda_type". May optionally have
+        "description" (list[str]) to override auto-generated descriptions.
+        """
         modifiers = modifiers or {}
         card_images = card_images or {}
         rects = []
@@ -378,8 +414,9 @@ class UIRenderer:
                 surface.blit(img, (img_x, img_y))
                 desc_y = y + 30 + img.get_height() + 4
 
-            # Detailed description
-            desc_lines = self._build_card_description(agenda_type, modifiers)
+            # Detailed description (custom or auto-generated)
+            desc_lines = card.get("description") or self._build_card_description(
+                agenda_type, modifiers, is_spoils=is_spoils)
             for j, line in enumerate(desc_lines):
                 desc_text = effect_font.render(line, True, (160, 170, 190))
                 surface.blit(desc_text, (cx + card_w // 2 - desc_text.get_width() // 2, desc_y + j * 15))

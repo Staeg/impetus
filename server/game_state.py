@@ -67,6 +67,7 @@ class GameState:
                 "type": "change",
                 "faction": fid,
                 "modifier": card.value,
+                "is_setup": True,
             })
 
         # --- Setup turn: all factions resolve a random agenda (no player input) ---
