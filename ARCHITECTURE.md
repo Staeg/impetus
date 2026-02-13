@@ -119,10 +119,10 @@ Phase details:
 
 | Phase | Player Input Required | Resolution |
 |---|---|---|
-| VAGRANT_PHASE | Vagrant spirits choose: guide a faction OR place an idol | Simultaneous reveal. Contested guidance fails. Idols placed. Influence set to 3 on success. Presence checked. |
-| AGENDA_PHASE | Guiding spirits choose 1 agenda from drawn hand | Simultaneous reveal. Non-guided factions draw randomly. Resolve in order: Steal → Bond → Trade → Expand → Change. Eject 0-influence spirits (they choose agenda to add). Presence checked. |
-| WAR_PHASE | None (dice rolls are server-side) | Ripen new wars (select battlegrounds). Resolve ripe wars: roll + power. Losers lose gold, winners gain gold + spoils agenda. Spoils resolved in agenda order. |
-| SCORING | None | Calculate VP per spirit based on idols in factions where they have presence. Round down. Check for 10 VP winner. |
+| VAGRANT_PHASE | Vagrant spirits choose: guide a faction AND/OR place an idol (must do both if both available). Cannot guide a faction that Worships them. One idol per vagrant stint. | Simultaneous reveal. Contested guidance fails. Idols placed. Influence set to 3 on success. Worship checked. |
+| AGENDA_PHASE | Guiding spirits choose 1 agenda from drawn hand | Simultaneous reveal. Non-guided factions draw randomly. Resolve in order: Steal → Bond → Trade → Expand → Change. Eject 0-influence spirits (they choose agenda to add). Worship checked. |
+| WAR_PHASE | None (dice rolls are server-side), unless guided spirits need to choose spoils cards | Resolve ripe wars first: roll + power. Losers lose gold, winners gain gold + spoils agenda (guided spirits draw 1+influence spoils cards and choose). Then ripen new wars (select battlegrounds). Spoils resolved in agenda order. Check for faction eliminations. |
+| SCORING | None | Calculate VP per spirit based on idols in factions where they have Worship. Round down. Check for 10 VP winner. |
 | CLEANUP | None | Shuffle agenda cards back into faction decks. Advance turn counter. |
 
 The `GameState` object holds all mutable game data: the hex map, all factions, all spirits, current phase, pending wars, and the turn counter. It exposes methods like `submit_action(spirit_id, action)` and `resolve_current_phase()`.
@@ -137,9 +137,12 @@ Each faction tracks:
 - `change_modifiers: dict[AgendaType, int]` (accumulated Change upgrades per agenda type)
 - `regard: dict[FactionId, int]` (bilateral regard with other factions, starts at 0)
 - `guiding_spirit: Optional[SpiritId]`
-- `presence_spirit: Optional[SpiritId]`
+- `presence_spirit: Optional[SpiritId]` (the spirit whose Worship this faction holds)
+- `eliminated: bool` (True when faction has 0 territories; eliminated factions skip all phases)
 
 Neighbors are determined dynamically: two factions are neighbors if any of their territories are adjacent on the hex grid.
+
+A faction with 0 territories is eliminated: its guiding spirit is ejected, its Worship is cleared, and any active wars involving it are cancelled.
 
 ### 4. Spirit Model (`server/spirit.py`)
 
@@ -148,6 +151,7 @@ Each spirit (player) tracks:
 - `influence: int` (0-3, only meaningful while guiding)
 - `is_vagrant: bool`
 - `guided_faction: Optional[FactionId]`
+- `has_placed_idol_as_vagrant: bool` (limits one idol per vagrant stint, resets on guide/become vagrant)
 - `idols: list[Idol]` (each idol has a type and hex location)
 - `victory_points: int`
 
@@ -161,20 +165,20 @@ Simultaneous resolution matters most for Steal: if A and B are neighbors and bot
 
 The Change modifier system is cumulative. A faction's Change modifiers permanently boost subsequent plays of that agenda type.
 
-Spoils of War agendas follow the same resolution order but are resolved in a separate sub-pass after war resolution.
+Spoils of War agendas follow the same resolution order but are resolved in a separate sub-pass after war resolution. If the winning faction is guided by a spirit, the spirit draws 1 + influence spoils cards and chooses one (mirroring the normal agenda draw mechanic).
 
 ### 6. War System (`server/war.py`)
 
 Wars have a two-turn lifecycle:
 1. **Eruption**: Triggered during Steal resolution when regard hits -2 or lower. War is created in "pending" state.
-2. **Ripening**: At the start of the War Phase, pending wars become ripe. A random border hex pair between the two factions is chosen as the battleground.
-3. **Resolution**: Ripe wars from the *previous* turn are resolved. Each side rolls 1d6 + power (number of territories). Higher total wins.
+2. **Resolution**: At the start of the War Phase, ripe wars from the *previous* turn are resolved first. Each side rolls 1d6 + power (number of territories). Higher total wins. Winners draw spoils; if the faction is guided, the spirit draws 1+influence spoils cards and chooses.
+3. **Ripening**: After resolution, pending wars become ripe. A random border hex pair between the two factions is chosen as the battleground.
 
 Multiple wars can exist simultaneously. A faction can be involved in multiple wars in the same turn.
 
 ### 7. Scoring System (`server/scoring.py`)
 
-After each turn, for each faction with a spirit's presence:
+After each turn, for each faction with a spirit's Worship:
 - Count idols in that faction's territory (all idols, regardless of which spirit placed them)
 - Per Battle Idol: +0.5 VP for each war won this turn
 - Per Affluence Idol: +0.2 VP for each gold gained this turn
@@ -201,10 +205,12 @@ Message types fall into two categories:
 |---|---|---|
 | `join_game` | Lobby | `{player_name}` |
 | `ready` | Lobby | `{}` |
-| `submit_vagrant_action` | Vagrant phase | `{action_type, target}` (guide faction OR place idol type + hex) |
+| `submit_vagrant_action` | Vagrant phase | `{guide_target, idol_type, idol_q, idol_r}` (guide faction AND/OR place idol) |
 | `submit_agenda_choice` | Agenda phase | `{agenda_index}` (index into drawn hand) |
 | `submit_change_choice` | Agenda/Change sub-phase | `{card_index}` (index into drawn change cards) |
 | `submit_ejection_agenda` | Agenda/ejection sub-phase | `{agenda_type}` (card to add to faction deck) |
+| `submit_spoils_choice` | War/spoils sub-phase | `{card_index}` (index into drawn spoils cards) |
+| `submit_spoils_change_choice` | War/spoils Change sub-phase | `{card_index}` (index into drawn change cards) |
 
 **Server → Client:**
 | Type | When | Payload |
@@ -302,13 +308,15 @@ class Idol:
 @dataclass
 class FactionState:
     faction_id: str
-    color: str
+    color: tuple[int, int, int]
     gold: int
     territories: list[HexCoord]
+    agenda_deck: list[AgendaCard]
     change_modifiers: dict[str, int]
     regard: dict[str, int]
     guiding_spirit: str | None
     presence_spirit: str | None
+    eliminated: bool
 
 @dataclass
 class SpiritState:
@@ -322,6 +330,7 @@ class SpiritState:
 
 @dataclass
 class WarState:
+    war_id: str
     faction_a: str
     faction_b: str
     is_ripe: bool
