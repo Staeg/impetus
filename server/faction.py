@@ -79,8 +79,14 @@ class Faction:
         return hand
 
     def draw_random_agenda(self) -> AgendaCard:
-        """Draw a single random agenda card (for non-guided factions)."""
-        return random.choice(self.agenda_deck)
+        """Draw a single random agenda card (for non-guided factions).
+
+        The card is removed from the deck and should be returned
+        via played_agenda_this_turn during cleanup.
+        """
+        card = random.choice(self.agenda_deck)
+        self.agenda_deck.remove(card)
+        return card
 
     def add_agenda_card(self, agenda_type: AgendaType):
         self.agenda_deck.append(AgendaCard(agenda_type))

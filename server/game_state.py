@@ -74,6 +74,7 @@ class GameState:
         agenda_choices = {}
         for fid, faction in self.factions.items():
             card = faction.draw_random_agenda()
+            faction.played_agenda_this_turn.append(card)
             agenda_choices[fid] = card.agenda_type
             events.append({
                 "type": "agenda_random",
@@ -425,9 +426,11 @@ class GameState:
             idx = action["agenda_index"]
             chosen = hand[idx]
             agenda_choices[spirit.guided_faction] = chosen.agenda_type
-            # Track all drawn cards for return to deck during cleanup
+            # Only the chosen card stays out until cleanup; return unchosen cards
             faction = self.factions[spirit.guided_faction]
-            faction.played_agenda_this_turn.extend(hand)
+            faction.played_agenda_this_turn.append(chosen)
+            unchosen = [c for c in hand if c is not chosen]
+            faction.agenda_deck.extend(unchosen)
             events.append({
                 "type": "agenda_chosen",
                 "spirit": spirit_id,
@@ -436,11 +439,13 @@ class GameState:
             })
 
         # Non-guided factions draw random agenda (skip eliminated)
+        # Card is removed from deck by draw_random_agenda and returned at cleanup
         for fid, faction in self.factions.items():
             if fid not in agenda_choices:
                 if faction.eliminated:
                     continue
                 card = faction.draw_random_agenda()
+                faction.played_agenda_this_turn.append(card)
                 agenda_choices[fid] = card.agenda_type
                 events.append({
                     "type": "agenda_random",

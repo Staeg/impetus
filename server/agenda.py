@@ -295,9 +295,20 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
         if faction.guiding_spirit and faction.guiding_spirit in spirits:
             spirit = spirits[faction.guiding_spirit]
             draw_count = 1 + spirit.influence
-            cards = [c.agenda_type for c in random.sample(faction.agenda_deck, min(draw_count, len(faction.agenda_deck)))]
+            if not faction.agenda_deck:
+                # No cards to draw — spoils wasted
+                events.append({
+                    "type": "spoils_wasted",
+                    "faction": winner,
+                })
+                continue
+            drawn = random.sample(faction.agenda_deck, min(draw_count, len(faction.agenda_deck)))
+            for c in drawn:
+                faction.agenda_deck.remove(c)
+            cards = [c.agenda_type for c in drawn]
             spoils_pending[faction.guiding_spirit] = {
                 "cards": cards,
+                "drawn_cards": drawn,
                 "winner": winner,
                 "loser": loser,
                 "battleground": result.get("battleground"),
@@ -311,7 +322,17 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
             continue
 
         # Non-guided: auto-resolve with single draw from faction deck
-        spoils_type = random.choice(faction.agenda_deck).agenda_type if faction.agenda_deck else draw_spoils_agenda()
+        if not faction.agenda_deck:
+            # No cards to draw — spoils wasted
+            events.append({
+                "type": "spoils_wasted",
+                "faction": winner,
+            })
+            continue
+        card = random.choice(faction.agenda_deck)
+        faction.agenda_deck.remove(card)
+        faction.played_agenda_this_turn.append(card)
+        spoils_type = card.agenda_type
         result["spoils"] = spoils_type.value
 
         if spoils_type == AgendaType.EXPAND and result.get("battleground"):
@@ -348,10 +369,20 @@ def resolve_spoils_choice(factions, hex_map, wars, events, spirit_id,
     """Resolve a spirit's spoils card choice after player input."""
     pending = spoils_pending[spirit_id]
     cards = pending["cards"]
+    drawn_cards = pending.get("drawn_cards", [])
     chosen = cards[card_index]
     winner = pending["winner"]
     loser = pending["loser"]
     battleground = pending.get("battleground")
+
+    # Return unchosen cards to the deck; track chosen card for cleanup
+    faction = factions[winner]
+    chosen_card = drawn_cards[card_index] if drawn_cards else None
+    for i, c in enumerate(drawn_cards):
+        if i == card_index:
+            faction.played_agenda_this_turn.append(c)
+        else:
+            faction.agenda_deck.append(c)
 
     spoils_conquests = {}
     if chosen == AgendaType.EXPAND and battleground:
