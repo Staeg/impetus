@@ -657,7 +657,8 @@ class GameState:
         events = []
         resolve_spoils_choice(self.factions, self.hex_map, self.wars, events,
                               spirit_id, card_index, self.spoils_pending,
-                              self.spirits)
+                              self.spirits,
+                              normal_trade_factions=self.normal_trade_factions)
         # Check for faction eliminations after spoils territory changes
         self._check_eliminations(events)
         # If all spoils resolved, advance to scoring

@@ -7,7 +7,8 @@ from server.war import War
 
 def resolve_agendas(factions: dict, hex_map, agenda_choices: dict[str, AgendaType],
                     wars: list, events: list, is_spoils: bool = False,
-                    spoils_conquests: dict = None):
+                    spoils_conquests: dict = None,
+                    normal_trade_factions: list[str] = None):
     """Resolve all agenda choices in the correct order.
 
     Args:
@@ -17,6 +18,8 @@ def resolve_agendas(factions: dict, hex_map, agenda_choices: dict[str, AgendaTyp
         wars: list of active War objects (will be mutated to add new wars)
         events: list to append event dicts to
         is_spoils: if True, these are Spoils of War agendas
+        spoils_conquests: dict of faction_id -> hex coord for spoils expand targets
+        normal_trade_factions: factions that traded normally this turn (for spoils trade)
     """
     for agenda_type in AGENDA_RESOLUTION_ORDER:
         playing_factions = [fid for fid, choice in agenda_choices.items()
@@ -29,7 +32,8 @@ def resolve_agendas(factions: dict, hex_map, agenda_choices: dict[str, AgendaTyp
         elif agenda_type == AgendaType.BOND:
             _resolve_bond(factions, hex_map, playing_factions, events)
         elif agenda_type == AgendaType.TRADE:
-            _resolve_trade(factions, playing_factions, events, is_spoils)
+            _resolve_trade(factions, playing_factions, events, is_spoils,
+                          normal_trade_factions or [])
         elif agenda_type == AgendaType.EXPAND:
             _resolve_expand(factions, hex_map, playing_factions, events, is_spoils, spoils_conquests)
         elif agenda_type == AgendaType.CHANGE:
@@ -162,13 +166,23 @@ def _resolve_bond(factions, hex_map, playing_factions, events):
         })
 
 
-def _resolve_trade(factions, playing_factions, events, is_spoils):
-    """Trade: +1 gold, +1 gold for every other faction playing Trade this turn."""
+def _resolve_trade(factions, playing_factions, events, is_spoils,
+                   normal_trade_factions: list[str] = None):
+    """Trade: +1 gold, +1 gold for every other faction playing Trade this turn.
+
+    For spoils trade, normal_trade_factions counts as additional "others trading"
+    for the spoils trader's bonus, and each normal trader gets +1 gold.
+    """
+    normal_trade_factions = normal_trade_factions or []
+
     for fid in playing_factions:
         faction = factions[fid]
         trade_bonus = faction.change_modifiers.get(ChangeModifierTarget.TRADE.value, 0)
         base = 1
         others_trading = len(playing_factions) - 1
+        # Spoils traders also benefit from factions that traded normally this turn
+        if is_spoils:
+            others_trading += len(normal_trade_factions)
         total = base + others_trading + trade_bonus * others_trading
         faction.add_gold(total)
         events.append({
@@ -178,8 +192,16 @@ def _resolve_trade(factions, playing_factions, events, is_spoils):
             "is_spoils": is_spoils,
         })
 
-    # If spoils trade, also give 1 gold to every faction that traded normally this turn
-    # (handled by caller passing trade factions info)
+    # Spoils trade gives +1 gold (+ Trade modifier) to every faction that traded normally
+    if is_spoils and normal_trade_factions:
+        for fid in normal_trade_factions:
+            bonus = 1 + factions[fid].change_modifiers.get(ChangeModifierTarget.TRADE.value, 0)
+            factions[fid].add_gold(bonus)
+            events.append({
+                "type": "trade_spoils_bonus",
+                "faction": fid,
+                "gold_gained": bonus,
+            })
 
 
 def _resolve_expand(factions, hex_map, playing_factions, events, is_spoils,
@@ -313,13 +335,16 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
 
     # Resolve auto-resolved spoils agendas in order
     if spoils_choices:
-        resolve_agendas(factions, hex_map, spoils_choices, wars, events, is_spoils=True, spoils_conquests=spoils_conquests)
+        resolve_agendas(factions, hex_map, spoils_choices, wars, events,
+                       is_spoils=True, spoils_conquests=spoils_conquests,
+                       normal_trade_factions=normal_trade_factions)
 
     return spoils_pending
 
 
 def resolve_spoils_choice(factions, hex_map, wars, events, spirit_id,
-                          card_index, spoils_pending, spirits):
+                          card_index, spoils_pending, spirits,
+                          normal_trade_factions: list[str] = None):
     """Resolve a spirit's spoils card choice after player input."""
     pending = spoils_pending[spirit_id]
     cards = pending["cards"]
@@ -352,5 +377,7 @@ def resolve_spoils_choice(factions, hex_map, wars, events, spirit_id,
         pending["change_cards"] = change_cards
         # Don't delete from spoils_pending — still waiting for change choice
     else:
-        resolve_agendas(factions, hex_map, {winner: chosen}, wars, events, is_spoils=True, spoils_conquests=spoils_conquests)
+        resolve_agendas(factions, hex_map, {winner: chosen}, wars, events,
+                       is_spoils=True, spoils_conquests=spoils_conquests,
+                       normal_trade_factions=normal_trade_factions or [])
         del spoils_pending[spirit_id]

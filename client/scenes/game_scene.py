@@ -634,6 +634,9 @@ class GameScene:
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
             prefix = "Spoils: " if event.get("is_spoils") else ""
             self.event_log.append(f"{prefix}{fname} traded for {event.get('gold_gained', 0)} gold")
+        elif etype == "trade_spoils_bonus":
+            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
+            self.event_log.append(f"{fname} gained {event.get('gold_gained', 1)} gold from Spoils Trade")
         elif etype == "expand":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
             self.event_log.append(f"{fname} expanded territory")

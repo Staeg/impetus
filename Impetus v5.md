@@ -4,14 +4,15 @@
 
 You play as a Spirit with the ability to take control of Factions to shape their future and expand the reach of your faith.
 
-You gain Victory Points whenever Factions which have your Idols and Presence win fights, expand their territory and make lots of gold. First to 10 Victory Points wins.
+You gain Victory Points whenever Factions which have your Idols and Worship win fights, expand their territory and make lots of gold. First to 10 Victory Points wins.
 
 ## Turn structure
 
 All Spirits start in a Vagrant state.  
 All Factions start at 0 Regard with each other.
 
-* All Vagrant Spirits can choose to Guide a Faction that is currently not Guided or to place one of three Idol types on a neutral territory.
+* All Vagrant Spirits choose to Guide a Faction that is currently not Guided and, if they have not already placed an Idol during this vagrant stint, to place one of three Idol types on a neutral territory. If both options are available, they must do both. If only one option is available, they do that one.
+  * A Spirit cannot Guide a Faction that Worships them.
   * These choices are made in secret and then resolved simultaneously.
   * Several Idols can end up on the same territory.
   * If several Spirits try to Guide the same Faction, all of them waste their turn.
@@ -19,12 +20,12 @@ All Factions start at 0 Regard with each other.
 * All Spirits draw 1 Agenda card \+ however much Influence they have from the Guided Faction's Agenda deck, choose 1 of the drawn Agendas for their Guided Faction to play, then lose 1 Influence.
   * This choice is made in secret, then revealed simultaneously.
 * Factions without a Spirit Guiding them just draw a random Agenda card from their decks.
-* Agendas are resolved in the following order:  
-  * Trade  
-  * Bond  
-  * Steal  
-  * Expand  
-  * Change  
+* Agendas are resolved in the following order:
+  * Steal
+  * Bond
+  * Trade
+  * Expand
+  * Change
 * Spirits with 0 Influence Guiding a Faction add one Agenda card of their choice to that Faction's deck, then become Vagrant.
 
 ## Agenda phase
@@ -44,14 +45,14 @@ Each Faction starts with 1 of each Agenda in their deck.
 Each Faction’s Power baseline is equal to the number of Territories it controls.
 
 * War erupts whenever two neighboring Factions have \-2 Regard or lower after one or both of them resolve a Steal action.  
-* After the Agenda Phase, all Wars that erupted this turn become Ripe and all Wars from the previous turn which are already Ripe are resolved.  
-  * When a War becomes Ripe, a random border between two hexes owned by those two Factions is chosen as the Battleground.  
+* After the Agenda Phase, all Ripe Wars from the previous turn are resolved first. Then all Wars that erupted this turn become Ripe.
+  * When a War becomes Ripe, a random border between two hexes owned by those two Factions is chosen as the Battleground.
 * To determine the winner, both Factions roll a 6-sided die and add their Power.  
-* The loser loses 1 gold. The winner gains 1 gold and draws an additional Agenda card and resolves it. This Agenda card is referred to as Spoils of War.  
+* The loser loses 1 gold. The winner gains 1 gold and draws a Spoils of War Agenda card from their Faction's deck and resolves it. If the winning Faction is guided by a Spirit, the Spirit draws 1 \+ their Influence Spoils cards and chooses 1 among them.
   * Expand functions differently when drawn as Spoils of War: instead of paying gold to expand into neutral territory, the winning Faction takes control of the hex on the loser’s side of the Battleground.  
     * In the unlikely event that two Factions both win a War against the same Faction and draw Expand to conquer the same hex, the Faction with greater Power succeeds. A further tie is resolved randomly.  
   * Other Agendas function as normal, including the possibility of Steal starting another War between the same Factions.  
-  * Trade Spoils of War also give 1 gold to every other Faction that resolved Trade normally this turn.  
+  * Trade Spoils of War also give 1 gold (plus their Trade Change modifier) to every other Faction that resolved Trade normally this turn.
 * In the event of a tie, both Factions lose 1 gold and no Spoils of War are drawn.
 
 ## Change modifiers
@@ -65,15 +66,23 @@ Each card modifies one of the other 4 Agendas of this Faction permanently.
 
 ## Idols and Victory Points
 
-Three kinds of Idols exist: Battle Idols that reward winning Wars, Affluence Idols that reward getting gold and Spread Idols that reward gaining territory. Having Presence in a Faction matters for scoring Victory Points \- so long as a Spirit has Presence, they benefit from *all* Idols in that Faction’s territory, not just their own.
+Three kinds of Idols exist: Battle Idols that reward winning Wars, Affluence Idols that reward getting gold and Spread Idols that reward gaining territory. Having a Faction's Worship matters for scoring Victory Points \- so long as a Spirit has a Faction's Worship, they benefit from *all* Idols in that Faction's territory, not just their own.
 
 * Whenever a Spirit Guides a Faction or stops Guiding a Faction and becomes Vagrant:
-  * If there is no other Spirit's Presence in this Faction: they place their Presence in this Faction.
-  * If there is another Spirit's Presence in this Faction: check which Spirit has more Idols in this Faction's territory. In the case of a tie or if the Guiding Spirit has more, they replace the Presence with their own.  
-  * If their Presence is already there: nothing happens.  
-* Factions with a Presence in them can score Victory Points for the Spirit whose Presence is there, based on what kinds of Idols are in its territory (but ignoring which Spirit those Idols belong to):  
-  * 0.5 VP per Battle Idol  
-  * 0.2 VP per Affluence Idol for each gold gained  
-  * 0.5 VP per Spread Idol for each new territory taken  
-  * These Victory Points are summed together and rounded down, then added to that Spirit’s total.
+  * If no other Spirit has this Faction's Worship: they gain this Faction's Worship.
+  * If another Spirit has this Faction's Worship: check which Spirit has more Idols in this Faction's territory. In the case of a tie or if the Guiding Spirit has more, they replace the Worship with their own.
+  * If they already have this Faction's Worship: nothing happens.
+* A Spirit cannot Guide a Faction that Worships them.
+* Factions with a Worshipped Spirit can score Victory Points for that Spirit, based on what kinds of Idols are in its territory (but ignoring which Spirit those Idols belong to):
+  * 0.5 VP per Battle Idol for each War won this turn
+  * 0.2 VP per Affluence Idol for each gold gained this turn
+  * 0.5 VP per Spread Idol for each new territory taken this turn
+  * These Victory Points are summed together and rounded down, then added to that Spirit's total.
+
+## Faction Elimination
+
+A Faction with 0 territories is eliminated. When eliminated:
+* Its guiding Spirit is ejected and becomes Vagrant.
+* Its Worship is cleared.
+* Any active Wars involving the eliminated Faction are cancelled.
 
