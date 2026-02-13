@@ -84,9 +84,9 @@ class AgendaType(str, Enum):
 
 # Resolution order for agendas
 AGENDA_RESOLUTION_ORDER = [
-    AgendaType.STEAL,
-    AgendaType.BOND,
     AgendaType.TRADE,
+    AgendaType.BOND,
+    AgendaType.STEAL,
     AgendaType.EXPAND,
     AgendaType.CHANGE,
 ]

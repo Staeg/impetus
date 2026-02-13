@@ -28,12 +28,12 @@
   * All Spirits currently Guiding a Faction draw 1 \+ \[their Influence\] Agenda cards and choose 1 of them
   * All choices are revealed and all non-Guided Factions draw a random Agenda card
   * All Spirits currently Guiding a Faction lose 1 Influence
-  * Agendas are resolved in order (but each step is simultaneous):  
-    * Steal: \-1 Regard with and \-1 gold to all neighbors. \+1 gold to this Faction for each gold lost by neighbors. Then a War erupts with any neighboring Factions who have \-2 Regard or less with this Faction.  
-    * Bond: \+1 Regard with all neighbors.   
-    * Trade: \+1 gold, \+1 gold for every other Faction playing Trade this turn.  
-    * Expand: spend gold equal to the number of this Faction’s territories to claim a random new one; if none are available or it lacks gold, \+1 gold instead.  
-      * If there are any neutral Territories with Idols in them within reach: the Faction chooses at random between those territories.  
+  * Agendas are resolved in order (but each step is simultaneous):
+    * Trade: \+1 gold, \+1 gold for every other Faction playing Trade this turn.
+    * Bond: \+1 Regard with all neighbors.
+    * Steal: \-1 Regard with and \-1 gold to all neighbors. \+1 gold to this Faction for each gold lost by neighbors. Then a War erupts with any neighboring Factions who have \-2 Regard or less with this Faction.
+    * Expand: spend gold equal to the number of this Faction's territories to claim a random new one; if none are available or it lacks gold, \+1 gold instead.
+      * If there are any neutral Territories with Idols in them within reach: the Faction chooses at random between those territories.
     * Change: draw a card from the Change modifier deck, then shuffle it back in.  
       * If guided, the Spirit draws additional cards equal to their current Influence and chooses 1 among them.
   * Any Spirits with 0 Influence currently Guiding a Faction are ejected; they may add a copy of an Agenda card to that Faction's Agenda deck

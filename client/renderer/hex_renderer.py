@@ -196,8 +196,8 @@ class HexRenderer:
         return pairs
 
     def _draw_hex_arrow(self, surface, h1, h2, color, camera, screen_w, screen_h,
-                        width=2, head_size=6):
-        """Draw a bidirectional arrow between two hex centers."""
+                        width=2, head_size=6, unidirectional=False):
+        """Draw an arrow between two hex centers. Bidirectional unless unidirectional=True."""
         w1x, w1y = axial_to_pixel(h1[0], h1[1], self.hex_size)
         w2x, w2y = axial_to_pixel(h2[0], h2[1], self.hex_size)
         s1 = camera.world_to_screen(w1x, w1y, screen_w, screen_h)
@@ -233,13 +233,14 @@ class HexRenderer:
                  tip[1] - uy * scaled_head - py * scaled_head * 0.5)
         pygame.draw.polygon(surface, color, [tip, left, right])
 
-        # Arrowhead at p1 (pointing towards h1)
-        tip = p1
-        left = (tip[0] + ux * scaled_head + px * scaled_head * 0.5,
-                tip[1] + uy * scaled_head + py * scaled_head * 0.5)
-        right = (tip[0] + ux * scaled_head - px * scaled_head * 0.5,
-                 tip[1] + uy * scaled_head - py * scaled_head * 0.5)
-        pygame.draw.polygon(surface, color, [tip, left, right])
+        # Arrowhead at p1 (pointing towards h1) — skip for unidirectional arrows
+        if not unidirectional:
+            tip = p1
+            left = (tip[0] + ux * scaled_head + px * scaled_head * 0.5,
+                    tip[1] + uy * scaled_head + py * scaled_head * 0.5)
+            right = (tip[0] + ux * scaled_head - px * scaled_head * 0.5,
+                     tip[1] + uy * scaled_head - py * scaled_head * 0.5)
+            pygame.draw.polygon(surface, color, [tip, left, right])
 
     def get_hex_at_screen(self, sx: int, sy: int, camera, screen_w: int, screen_h: int,
                           valid_hexes: set = None) -> tuple[int, int] | None:

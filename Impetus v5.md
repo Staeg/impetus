@@ -21,9 +21,9 @@ All Factions start at 0 Regard with each other.
   * This choice is made in secret, then revealed simultaneously.
 * Factions without a Spirit Guiding them just draw a random Agenda card from their decks.
 * Agendas are resolved in the following order:
-  * Steal
-  * Bond
   * Trade
+  * Bond
+  * Steal
   * Expand
   * Change
 * Spirits with 0 Influence Guiding a Faction add one Agenda card of their choice to that Faction's deck, then become Vagrant.

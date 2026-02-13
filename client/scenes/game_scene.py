@@ -3,16 +3,16 @@
 import pygame
 from shared.constants import (
     MessageType, Phase, AgendaType, IdolType, MAP_SIDE_LENGTH,
-    SCREEN_WIDTH, SCREEN_HEIGHT, HEX_SIZE, FACTION_DISPLAY_NAMES, FACTION_COLORS,
+    SCREEN_WIDTH, SCREEN_HEIGHT, HEX_SIZE, FACTION_NAMES, FACTION_DISPLAY_NAMES, FACTION_COLORS,
     BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPREAD_IDOL_VP,
 )
 from shared.models import GameStateSnapshot, HexCoord, Idol, WarState
 from client.renderer.hex_renderer import HexRenderer
 from client.renderer.ui_renderer import UIRenderer, Button, draw_multiline_tooltip
-from client.renderer.animation import AnimationManager, AgendaAnimation
+from client.renderer.animation import AnimationManager, AgendaAnimation, TextAnimation, ArrowAnimation
 from client.renderer.assets import load_assets, agenda_images, agenda_card_images
 from client.input_handler import InputHandler
-from shared.hex_utils import axial_to_pixel
+from shared.hex_utils import axial_to_pixel, hex_neighbors
 
 # Approximate hex map screen bounds (default camera) for centering UI
 _HEX_MAP_HALF_W = int(HEX_SIZE * 1.5 * (MAP_SIDE_LENGTH - 1)) + HEX_SIZE
@@ -368,11 +368,13 @@ class GameScene:
                 else:
                     wx, wy = self._get_faction_centroid(faction_id)
                     if wx is not None:
+                        delay = agenda_anim_index * 0.5
                         anim = AgendaAnimation(
                             img, wx, wy,
-                            delay=agenda_anim_index * 0.5,
+                            delay=delay,
                         )
                         self.animation.add_agenda_animation(anim)
+                        self._create_effect_animations(event, faction_id, delay)
                         agenda_anim_index += 1
                     else:
                         print(f"[anim] No centroid for faction '{faction_id}'")
@@ -585,6 +587,97 @@ class GameScene:
         best = min(owned, key=lambda h: (h[0] - avg_q) ** 2 + (h[1] - avg_r) ** 2)
         return axial_to_pixel(best[0], best[1], HEX_SIZE)
 
+    def _get_gold_display_pos(self, faction_id: str) -> tuple[int, int]:
+        """Get screen position below the faction's gold text in the overview strip."""
+        try:
+            idx = FACTION_NAMES.index(faction_id)
+        except ValueError:
+            return (SCREEN_WIDTH // 2, 84)
+        cell_w = SCREEN_WIDTH // len(FACTION_NAMES)
+        cx = idx * cell_w
+        abbr = FACTION_DISPLAY_NAMES.get(faction_id, faction_id)
+        abbr_w = self.small_font.size(abbr)[0]
+        gold_x = cx + 6 + abbr_w + 6
+        return (gold_x, 84)  # strip_y(42) + strip_h(42)
+
+    def _get_border_midpoints(self, faction_a: str, faction_b: str) -> list[tuple[float, float]]:
+        """Get world-space midpoints of all border edges between two factions."""
+        pairs = self.hex_renderer._get_border_pairs(self.hex_ownership, faction_a, faction_b)
+        midpoints = []
+        for h1, h2 in pairs:
+            x1, y1 = axial_to_pixel(h1[0], h1[1], HEX_SIZE)
+            x2, y2 = axial_to_pixel(h2[0], h2[1], HEX_SIZE)
+            midpoints.append(((x1 + x2) / 2, (y1 + y2) / 2))
+        return midpoints
+
+    def _create_effect_animations(self, event: dict, faction_id: str, delay: float):
+        """Create effect animations for an agenda event."""
+        etype = event.get("type", "")
+
+        if etype in ("trade", "trade_spoils_bonus"):
+            gold = event.get("gold_gained", 0)
+            if gold > 0:
+                gx, gy = self._get_gold_display_pos(faction_id)
+                self.animation.add_effect_animation(TextAnimation(
+                    f"+{gold}g", gx, gy, (255, 220, 60),
+                    delay=delay, duration=1.5, drift_pixels=20,
+                    direction=1, screen_space=True,
+                ))
+
+        elif etype == "bond":
+            regard_gain = event.get("regard_gain", 1)
+            neighbors = event.get("neighbors", [])
+            for nfid in neighbors:
+                for mx, my in self._get_border_midpoints(faction_id, nfid):
+                    self.animation.add_effect_animation(TextAnimation(
+                        f"+{regard_gain}", mx, my, (100, 200, 255),
+                        delay=delay, duration=1.5, drift_pixels=20,
+                        direction=-1, screen_space=False,
+                    ))
+
+        elif etype == "steal":
+            gold = event.get("gold_gained", 0)
+            regard_penalty = event.get("regard_penalty", -1)
+            neighbors = event.get("neighbors", [])
+            # Gold text in screen space
+            if gold > 0:
+                gx, gy = self._get_gold_display_pos(faction_id)
+                self.animation.add_effect_animation(TextAnimation(
+                    f"+{gold}g", gx, gy, (255, 220, 60),
+                    delay=delay, duration=1.5, drift_pixels=20,
+                    direction=1, screen_space=True,
+                ))
+            # Regard text at border midpoints
+            for nfid in neighbors:
+                for mx, my in self._get_border_midpoints(faction_id, nfid):
+                    self.animation.add_effect_animation(TextAnimation(
+                        str(regard_penalty), mx, my, (255, 80, 80),
+                        delay=delay, duration=1.5, drift_pixels=20,
+                        direction=-1, screen_space=False,
+                    ))
+
+        elif etype in ("expand", "expand_spoils"):
+            target_hex = event.get("hex")
+            if target_hex:
+                tq, tr = target_hex["q"], target_hex["r"]
+                # Find adjacent owned hexes pointing into the new hex
+                for nq, nr in hex_neighbors(tq, tr):
+                    if self.hex_ownership.get((nq, nr)) == faction_id:
+                        self.animation.add_effect_animation(ArrowAnimation(
+                            (nq, nr), (tq, tr), (80, 220, 80),
+                            delay=delay, duration=1.5,
+                        ))
+
+        elif etype == "expand_failed":
+            gold = event.get("gold_gained", 0)
+            if gold > 0:
+                gx, gy = self._get_gold_display_pos(faction_id)
+                self.animation.add_effect_animation(TextAnimation(
+                    f"+{gold}g", gx, gy, (255, 220, 60),
+                    delay=delay, duration=1.5, drift_pixels=20,
+                    direction=1, screen_space=True,
+                ))
+
     def _render_agenda_animations(self, screen: pygame.Surface):
         """Draw active agenda animations, converting world coords to screen."""
         for anim in self.animation.get_active_agenda_animations():
@@ -597,6 +690,42 @@ class GameScene:
             img = anim.image.copy()
             img.set_alpha(anim.alpha)
             screen.blit(img, (sx - img.get_width() // 2, sy - img.get_height() // 2))
+
+    def _render_effect_animations(self, screen: pygame.Surface, screen_space_only: bool):
+        """Draw active effect animations (text and arrows)."""
+        for anim in self.animation.get_active_effect_animations():
+            if not anim.active:
+                continue
+            if screen_space_only and not anim.screen_space:
+                continue
+            if not screen_space_only and anim.screen_space:
+                continue
+
+            if isinstance(anim, TextAnimation):
+                alpha = anim.alpha
+                if alpha <= 0:
+                    continue
+                text_surf = self.small_font.render(anim.text, True, anim.color)
+                text_surf.set_alpha(alpha)
+                if anim.screen_space:
+                    sx, sy = anim.x, anim.y + anim.y_offset
+                else:
+                    sx, sy = self.input_handler.world_to_screen(
+                        anim.x, anim.y + anim.y_offset,
+                        SCREEN_WIDTH, SCREEN_HEIGHT,
+                    )
+                screen.blit(text_surf, (int(sx), int(sy)))
+
+            elif isinstance(anim, ArrowAnimation):
+                alpha = anim.alpha
+                if alpha <= 0:
+                    continue
+                color = tuple(int(c * alpha / 255) for c in anim.color)
+                self.hex_renderer._draw_hex_arrow(
+                    screen, anim.from_hex, anim.to_hex, color,
+                    self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT,
+                    width=3, head_size=8, unidirectional=True,
+                )
 
     def _log_event(self, event: dict):
         etype = event.get("type", "")
@@ -791,6 +920,9 @@ class GameScene:
         # Draw agenda animations (above hex grid, below HUD)
         self._render_agenda_animations(screen)
 
+        # Draw world-space effect animations (border text + arrows)
+        self._render_effect_animations(screen, screen_space_only=False)
+
         # Draw HUD
         self.ui_renderer.draw_hud(screen, self.phase, self.turn,
                                    self.spirits, self.app.my_spirit_id)
@@ -809,6 +941,9 @@ class GameScene:
             spirits=self.spirits,
             preview_guidance=preview_guid_dict,
         )
+
+        # Draw screen-space effect animations (gold text overlays)
+        self._render_effect_animations(screen, screen_space_only=True)
 
         # Draw faction panel (right side)
         pf = self.panel_faction
