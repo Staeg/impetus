@@ -4,7 +4,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from shared.constants import AgendaType
+from shared.constants import AgendaType, AGENDA_RESOLUTION_ORDER
 from server.faction import Faction
 from server.hex_map import HexMap
 from server.agenda import resolve_agendas
@@ -137,3 +137,45 @@ class TestChange:
         # At least one modifier should have increased
         total = sum(factions["mountain"].change_modifiers.values())
         assert total == 1
+
+
+class TestResolutionOrder:
+    def test_order_is_trade_first(self):
+        assert AGENDA_RESOLUTION_ORDER == [
+            AgendaType.TRADE,
+            AgendaType.BOND,
+            AgendaType.STEAL,
+            AgendaType.EXPAND,
+            AgendaType.CHANGE,
+        ]
+
+
+class TestEventFields:
+    def test_steal_event_has_neighbors_and_penalty(self):
+        factions = make_factions()
+        hm = HexMap()
+        factions["mesa"].gold = 5
+        events = []
+        wars = []
+        resolve_agendas(factions, hm, {"mountain": AgendaType.STEAL}, wars, events)
+        steal_events = [e for e in events if e["type"] == "steal"]
+        assert len(steal_events) == 1
+        ev = steal_events[0]
+        assert "regard_penalty" in ev
+        assert ev["regard_penalty"] == -1
+        assert "neighbors" in ev
+        assert isinstance(ev["neighbors"], list)
+        assert len(ev["neighbors"]) > 0
+
+    def test_bond_event_has_neighbors(self):
+        factions = make_factions()
+        hm = HexMap()
+        events = []
+        wars = []
+        resolve_agendas(factions, hm, {"mountain": AgendaType.BOND}, wars, events)
+        bond_events = [e for e in events if e["type"] == "bond"]
+        assert len(bond_events) == 1
+        ev = bond_events[0]
+        assert "neighbors" in ev
+        assert isinstance(ev["neighbors"], list)
+        assert len(ev["neighbors"]) > 0

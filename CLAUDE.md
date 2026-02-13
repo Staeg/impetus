@@ -42,7 +42,7 @@ Each phase: wait for input → validate → resolve → broadcast → transition
 ### Core game concepts
 - **6 factions** (Mountain, Mesa, Sand, Plains, River, Jungle) on a hex grid (axial coords, side-length 5)
 - **Spirits** (players) indirectly control factions via guidance and influence
-- **Agenda resolution order** is always: Steal → Bond → Trade → Expand → Change (same-type resolves simultaneously)
+- **Agenda resolution order** is always: Trade → Bond → Steal → Expand → Change (same-type resolves simultaneously)
 - **Wars** have a two-turn lifecycle: erupt → ripen → resolve (resolve ripe first, then ripen new)
 - **Worship** (called "presence" in code variables): spirits compete for faction Worship via idol counts; a spirit cannot guide a faction that Worships them
 - **Scoring**: VP from idols in faction territories where the spirit has Worship (Battle/Affluence/Spread idol types)

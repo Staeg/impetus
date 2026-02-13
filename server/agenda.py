@@ -48,12 +48,17 @@ def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils)
     gold_gains = {}   # stealing faction -> gold gained
     regard_changes = []
 
+    neighbor_map = {}  # stealing faction -> list of neighbor faction IDs
+    regard_penalty_map = {}  # stealing faction -> regard_penalty value
+
     for fid in playing_factions:
         faction = factions[fid]
         steal_bonus = faction.change_modifiers.get(ChangeModifierTarget.STEAL.value, 0)
         gold_stolen_per_neighbor = 1 + steal_bonus
         regard_penalty = -1 - steal_bonus
+        regard_penalty_map[fid] = regard_penalty
         total_gained = 0
+        neighbors = []
 
         for other_fid, other_faction in factions.items():
             if other_fid == fid:
@@ -62,6 +67,7 @@ def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils)
                 continue
             if not hex_map.are_factions_neighbors(fid, other_fid):
                 continue
+            neighbors.append(other_fid)
             # Mark regard change
             regard_changes.append((fid, other_fid, regard_penalty))
             # Calculate gold loss for neighbor (but don't apply yet - simultaneous)
@@ -70,6 +76,7 @@ def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils)
             gold_losses[key] = actual_loss
             total_gained += actual_loss
 
+        neighbor_map[fid] = neighbors
         gold_gains[fid] = total_gained
 
     # Apply gold changes simultaneously
@@ -108,6 +115,8 @@ def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils)
             "faction": fid,
             "gold_gained": gained,
             "is_spoils": is_spoils,
+            "regard_penalty": regard_penalty_map[fid],
+            "neighbors": neighbor_map[fid],
         })
 
     # Apply regard changes
@@ -148,6 +157,7 @@ def _resolve_bond(factions, hex_map, playing_factions, events):
         faction = factions[fid]
         bond_bonus = faction.change_modifiers.get(ChangeModifierTarget.BOND.value, 0)
         regard_gain = 1 + bond_bonus
+        neighbors = []
 
         for other_fid in factions:
             if other_fid == fid:
@@ -156,6 +166,7 @@ def _resolve_bond(factions, hex_map, playing_factions, events):
                 continue
             if not hex_map.are_factions_neighbors(fid, other_fid):
                 continue
+            neighbors.append(other_fid)
             faction.modify_regard(other_fid, regard_gain)
             factions[other_fid].modify_regard(fid, regard_gain)
 
@@ -163,6 +174,7 @@ def _resolve_bond(factions, hex_map, playing_factions, events):
             "type": "bond",
             "faction": fid,
             "regard_gain": regard_gain,
+            "neighbors": neighbors,
         })
 
 
