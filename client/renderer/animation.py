@@ -247,6 +247,10 @@ class AgendaSlideAnimation:
         self.done = False
         self._fading_out = False
         self._fadeout_elapsed = 0.0
+        # Hex reveal: when set, the display hex map updates when this anim becomes active
+        self.hex_reveal: tuple[int, int] | None = None
+        self.hex_reveal_faction: str | None = None
+        self._hex_revealed: bool = False
 
     def update(self, dt: float):
         self.elapsed += dt

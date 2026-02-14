@@ -187,7 +187,7 @@ class AnimationOrchestrator:
         _ANIM_ORDER = {
             "trade": 0, "bond": 1, "steal": 2,
             "expand": 3, "expand_failed": 3, "expand_spoils": 3,
-            "change": 4, "change_draw": 4,
+            "change": 4,
         }
         regular_events = [e for e in agenda_events if not e.get("is_spoils")]
         spoils_events = [e for e in agenda_events if e.get("is_spoils")]
@@ -203,7 +203,7 @@ class AnimationOrchestrator:
         auto_fade_idx = 0
         for event in regular_events:
             etype = event["type"]
-            if etype in ("change", "change_draw"):
+            if etype == "change":
                 modifier = event.get("modifier", "")
                 img_key = f"change_{modifier}" if f"change_{modifier}" in agenda_images else "change"
             elif etype == "expand_failed":
@@ -234,6 +234,12 @@ class AnimationOrchestrator:
                     delay=delay,
                     auto_fadeout_after=auto_fadeout,
                 )
+                # Tag expand animations with hex reveal info
+                if etype in ("expand", "expand_spoils"):
+                    target_hex = event.get("hex")
+                    if target_hex:
+                        anim.hex_reveal = (target_hex["q"], target_hex["r"])
+                        anim.hex_reveal_faction = faction_id
                 self.animation.add_persistent_agenda_animation(anim)
                 self.create_effect_animations(event, faction_id, delay,
                                               hex_ownership, small_font)
@@ -245,7 +251,7 @@ class AnimationOrchestrator:
         spoils_anim_index = 0
         for event in spoils_events:
             etype = event["type"]
-            if etype in ("change", "change_draw"):
+            if etype == "change":
                 modifier = event.get("modifier", "")
                 img_key = f"change_{modifier}" if f"change_{modifier}" in agenda_images else "change"
             elif etype == "expand_failed":
@@ -275,6 +281,12 @@ class AnimationOrchestrator:
                     delay=delay,
                     is_spoils=True,
                 )
+                # Tag expand spoils animations with hex reveal info
+                if etype in ("expand", "expand_spoils"):
+                    target_hex = event.get("hex")
+                    if target_hex:
+                        anim.hex_reveal = (target_hex["q"], target_hex["r"])
+                        anim.hex_reveal_faction = faction_id
                 self.animation.add_persistent_agenda_animation(anim)
                 self.create_effect_animations(event, faction_id, delay,
                                               hex_ownership, small_font)
@@ -331,6 +343,16 @@ class AnimationOrchestrator:
                     self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT,
                     width=3, head_size=8, unidirectional=True,
                 )
+
+    # --- Hex reveal ---
+
+    def apply_hex_reveals(self, display_hex_ownership: dict):
+        """Incrementally reveal hex ownership as expand animations become active."""
+        for anim in self.animation.get_persistent_agenda_animations():
+            if (anim.active and anim.hex_reveal is not None
+                    and not anim._hex_revealed):
+                display_hex_ownership[anim.hex_reveal] = anim.hex_reveal_faction
+                anim._hex_revealed = True
 
     # --- State queries ---
 

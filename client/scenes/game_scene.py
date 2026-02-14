@@ -50,6 +50,10 @@ class GameScene:
         self.wars: list = []
         self.all_idols: list = []
         self.hex_ownership: dict[tuple[int, int], str | None] = {}
+        # Deferred display state: lags behind real state while animations play
+        self._display_hex_ownership: dict[tuple[int, int], str | None] | None = None
+        self._display_factions: dict | None = None
+        self._display_wars: list | None = None
         self.waiting_for: list[str] = []
         self.event_log: list[str] = []
         self.event_log_scroll_offset: int = 0
@@ -77,6 +81,7 @@ class GameScene:
         self.selected_ejection_type: str | None = None
         self.spoils_cards: list[str] = []
         self.spoils_change_cards: list[str] = []
+        self.spoils_opponent: str = ""
 
         # UI buttons
         self.action_buttons: list[Button] = []
@@ -129,6 +134,39 @@ class GameScene:
             if len(parts) == 2:
                 q, r = int(parts[0]), int(parts[1])
                 self.hex_ownership[(q, r)] = owner
+
+    def _snapshot_display_state(self):
+        """Capture current state into display fields before updating real state.
+
+        Only snapshots if display state isn't already set (preserves display
+        state across multiple PHASE_RESULT messages during animation).
+        """
+        if self._display_hex_ownership is None:
+            self._display_hex_ownership = dict(self.hex_ownership)
+        if self._display_factions is None:
+            import copy
+            self._display_factions = copy.deepcopy(self.factions)
+        if self._display_wars is None:
+            import copy
+            self._display_wars = copy.deepcopy(self.wars)
+
+    def _clear_display_state(self):
+        """Clear deferred display state so rendering uses real state."""
+        self._display_hex_ownership = None
+        self._display_factions = None
+        self._display_wars = None
+
+    @property
+    def display_hex_ownership(self) -> dict:
+        return self._display_hex_ownership if self._display_hex_ownership is not None else self.hex_ownership
+
+    @property
+    def display_factions(self) -> dict:
+        return self._display_factions if self._display_factions is not None else self.factions
+
+    @property
+    def display_wars(self) -> list:
+        return self._display_wars if self._display_wars is not None else self.wars
 
     def handle_event(self, event):
         self.input_handler.handle_camera_event(event)
@@ -316,6 +354,17 @@ class GameScene:
         elif msg_type == MessageType.PHASE_RESULT:
             active_sub_phase = self.phase if self.phase in (
                 "change_choice", "spoils_choice", "spoils_change_choice") else None
+            # Snapshot display state before updating so animations render old state
+            events = payload.get("events", [])
+            _ANIM_ORDER = {
+                "trade": 0, "bond": 1, "steal": 2,
+                "expand": 3, "expand_failed": 3, "expand_spoils": 3,
+                "change": 4,
+            }
+            agenda_events = [e for e in events if e.get("type", "") in _ANIM_ORDER
+                           and not e.get("is_guided_modifier")]
+            if agenda_events and "state" in payload:
+                self._snapshot_display_state()
             if "state" in payload:
                 self._update_state_from_snapshot(payload["state"])
             # Preserve sub-phases while this player still has cards to choose
@@ -325,18 +374,10 @@ class GameScene:
                 self.phase = active_sub_phase
             elif active_sub_phase == "spoils_change_choice" and self.spoils_change_cards:
                 self.phase = active_sub_phase
-            events = payload.get("events", [])
             # Log all events in original order
             for event in events:
                 self._log_event(event)
-            # Collect agenda events for animation queuing
-            _ANIM_ORDER = {
-                "trade": 0, "bond": 1, "steal": 2,
-                "expand": 3, "expand_failed": 3, "expand_spoils": 3,
-                "change": 4, "change_draw": 4,
-            }
-            agenda_events = [e for e in events if e.get("type", "") in _ANIM_ORDER
-                           and not e.get("is_guided_modifier")]
+            # Queue agenda events for animation
             if agenda_events:
                 # Split setup events into a separate batch so they play
                 # before resolution events (and don't visually overlap).
@@ -392,9 +433,11 @@ class GameScene:
 
         elif self.phase == "spoils_choice":
             self.spoils_cards = payload_cards if (payload_cards := self.phase_options.get("cards")) else []
+            self.spoils_opponent = self.phase_options.get("loser", "")
 
         elif self.phase == "spoils_change_choice":
             self.spoils_change_cards = payload_cards if (payload_cards := self.phase_options.get("cards")) else []
+            self.spoils_opponent = self.phase_options.get("loser", "")
 
         elif self.phase == "ejection_choice":
             self.ejection_pending = True
@@ -531,8 +574,14 @@ class GameScene:
 
     def update(self, dt):
         self.animation.update(dt)
+        # Incrementally reveal hexes as expand animations become active
+        if self._display_hex_ownership is not None:
+            self.orchestrator.apply_hex_reveals(self._display_hex_ownership)
         self.orchestrator.try_process_next_batch(self.hex_ownership, self.small_font)
         self.orchestrator.try_show_deferred_phase_ui(self)
+        # Clear display state when all animations are done
+        if self._display_hex_ownership is not None and not self.orchestrator.has_animations_playing():
+            self._clear_display_state()
 
     def render(self, screen: pygame.Surface):
         screen.fill((10, 10, 18))
@@ -550,9 +599,9 @@ class GameScene:
                     'owner_spirit': idol_data.get('owner_spirit'),
                 })())
 
-        # Parse wars for rendering
+        # Parse wars for rendering (use display state if available)
         render_wars = []
-        for w in self.wars:
+        for w in self.display_wars:
             if isinstance(w, dict):
                 war_obj = type('War', (), {
                     'faction_a': w.get('faction_a', ''),
@@ -568,10 +617,11 @@ class GameScene:
                     )
                 render_wars.append(war_obj)
 
-        # Draw hex grid
+        # Draw hex grid (use display state if available)
+        hex_own = self.display_hex_ownership
         highlight = None
         if self.phase == Phase.VAGRANT_PHASE.value:
-            highlight = {h for h, o in self.hex_ownership.items() if o is None}
+            highlight = {h for h, o in hex_own.items() if o is None}
 
         # Compute preview idol (post-confirm or pre-confirm)
         render_preview_idol = self.preview_idol
@@ -585,7 +635,7 @@ class GameScene:
         }
 
         self.hex_renderer.draw_hex_grid(
-            screen, self.hex_ownership,
+            screen, hex_own,
             self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT,
             idols=render_idols, wars=render_wars,
             selected_hex=self.selected_hex,
@@ -608,10 +658,11 @@ class GameScene:
             my_name = self.spirits.get(self.app.my_spirit_id, {}).get("name", "?")
             preview_guid_dict = {preview_fid: my_name}
 
-        # Draw faction overview strip (with war indicators)
+        # Draw faction overview strip (with war indicators, use display state)
+        disp_factions = self.display_factions
         animated_agenda_factions = self.animation.get_persistent_agenda_factions()
         self.ui_renderer.draw_faction_overview(
-            screen, self.factions, self.faction_agendas_this_turn,
+            screen, disp_factions, self.faction_agendas_this_turn,
             wars=render_wars,
             spirits=self.spirits,
             preview_guidance=preview_guid_dict,
@@ -630,9 +681,9 @@ class GameScene:
             # Default to guided faction
             my_spirit = self.spirits.get(self.app.my_spirit_id, {})
             pf = my_spirit.get("guided_faction")
-        if pf and pf in self.factions:
+        if pf and pf in disp_factions:
             self.ui_renderer.draw_faction_panel(
-                screen, self.factions[pf],
+                screen, disp_factions[pf],
                 SCREEN_WIDTH - 240, 102, 230,
                 spirits=self.spirits,
                 preview_guidance=preview_guid_dict,
@@ -841,7 +892,9 @@ class GameScene:
     def _render_spoils_ui(self, screen):
         if not self.spoils_cards:
             return
-        title = self.font.render("Spoils of War - Choose an agenda:", True, (255, 200, 100))
+        opponent_name = FACTION_DISPLAY_NAMES.get(self.spoils_opponent, self.spoils_opponent)
+        title_text = f"Spoils of War vs {opponent_name} - Choose an agenda:" if opponent_name else "Spoils of War - Choose an agenda:"
+        title = self.font.render(title_text, True, (255, 200, 100))
         screen.blit(title, (20, 100))
 
         modifiers = self._get_current_faction_modifiers()
@@ -859,7 +912,9 @@ class GameScene:
     def _render_spoils_change_ui(self, screen):
         if not self.spoils_change_cards:
             return
-        title = self.font.render("Spoils of War - Choose a Change modifier:", True, (255, 200, 100))
+        opponent_name = FACTION_DISPLAY_NAMES.get(self.spoils_opponent, self.spoils_opponent)
+        title_text = f"Spoils of War vs {opponent_name} - Choose a Change modifier:" if opponent_name else "Spoils of War - Choose a Change modifier:"
+        title = self.font.render(title_text, True, (255, 200, 100))
         screen.blit(title, (20, 100))
 
         hand = []

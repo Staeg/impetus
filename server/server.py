@@ -285,7 +285,10 @@ class GameServer:
                         await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
                             "phase": "spoils_change_choice",
                             "turn": room.game_state.turn,
-                            "options": {"cards": [c.value for c in change_cards]},
+                            "options": {
+                                "cards": [c.value for c in change_cards],
+                                "loser": pending.get("loser", ""),
+                            },
                         }))
                         waiting_for = list(room.game_state.spoils_pending.keys())
                         await room.broadcast(create_message(MessageType.WAITING_FOR, {
@@ -421,7 +424,10 @@ class GameServer:
                     await room.send_to(sid, create_message(MessageType.PHASE_START, {
                         "phase": "spoils_choice",
                         "turn": gs.turn,
-                        "options": {"cards": [c.value for c in pending["cards"]]},
+                        "options": {
+                            "cards": [c.value for c in pending["cards"]],
+                            "loser": pending.get("loser", ""),
+                        },
                     }))
                 waiting_for = list(gs.spoils_pending.keys())
                 await room.broadcast(create_message(MessageType.WAITING_FOR, {
