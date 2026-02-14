@@ -30,14 +30,14 @@ def resolve_agendas(factions: dict, hex_map, agenda_choices: dict[str, AgendaTyp
         if agenda_type == AgendaType.STEAL:
             _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils)
         elif agenda_type == AgendaType.BOND:
-            _resolve_bond(factions, hex_map, playing_factions, events)
+            _resolve_bond(factions, hex_map, playing_factions, events, is_spoils)
         elif agenda_type == AgendaType.TRADE:
             _resolve_trade(factions, playing_factions, events, is_spoils,
                           normal_trade_factions or [])
         elif agenda_type == AgendaType.EXPAND:
             _resolve_expand(factions, hex_map, playing_factions, events, is_spoils, spoils_conquests)
         elif agenda_type == AgendaType.CHANGE:
-            _resolve_change(factions, playing_factions, events)
+            _resolve_change(factions, playing_factions, events, is_spoils)
 
 
 def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils):
@@ -151,7 +151,7 @@ def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils)
                     })
 
 
-def _resolve_bond(factions, hex_map, playing_factions, events):
+def _resolve_bond(factions, hex_map, playing_factions, events, is_spoils=False):
     """Bond: +1 regard with all neighbors."""
     for fid in playing_factions:
         faction = factions[fid]
@@ -175,6 +175,7 @@ def _resolve_bond(factions, hex_map, playing_factions, events):
             "faction": fid,
             "regard_gain": regard_gain,
             "neighbors": neighbors,
+            "is_spoils": is_spoils,
         })
 
 
@@ -263,7 +264,7 @@ def _resolve_expand(factions, hex_map, playing_factions, events, is_spoils,
             })
 
 
-def _resolve_change(factions, playing_factions, events):
+def _resolve_change(factions, playing_factions, events, is_spoils=False):
     """Change: draw from the change modifier deck, apply permanent modifier."""
     for fid in playing_factions:
         faction = factions[fid]
@@ -274,6 +275,7 @@ def _resolve_change(factions, playing_factions, events):
             "type": "change",
             "faction": fid,
             "modifier": card.value,
+            "is_spoils": is_spoils,
         })
 
 
