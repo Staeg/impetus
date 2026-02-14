@@ -9,7 +9,7 @@ from shared.constants import (
 from shared.models import GameStateSnapshot, HexCoord, Idol, WarState
 from client.renderer.hex_renderer import HexRenderer
 from client.renderer.ui_renderer import UIRenderer, Button, draw_multiline_tooltip
-from client.renderer.animation import AnimationManager, AgendaAnimation, TextAnimation, ArrowAnimation
+from client.renderer.animation import AnimationManager, AgendaAnimation, AgendaSlideAnimation, TextAnimation, ArrowAnimation
 from client.renderer.assets import load_assets, agenda_images, agenda_card_images
 from client.input_handler import InputHandler
 from shared.hex_utils import axial_to_pixel, hex_neighbors
@@ -366,18 +366,20 @@ class GameScene:
                 elif not faction_id:
                     print(f"[anim] No faction_id in {etype} event")
                 else:
-                    wx, wy = self._get_faction_centroid(faction_id)
-                    if wx is not None:
-                        delay = agenda_anim_index * 0.5
-                        anim = AgendaAnimation(
-                            img, wx, wy,
-                            delay=delay,
-                        )
-                        self.animation.add_agenda_animation(anim)
-                        self._create_effect_animations(event, faction_id, delay)
-                        agenda_anim_index += 1
-                    else:
-                        print(f"[anim] No centroid for faction '{faction_id}'")
+                    delay = agenda_anim_index * 1.0
+                    # Create slide animation into overview strip
+                    img_w = img.get_width()
+                    target_x, target_y = self._get_agenda_label_pos(faction_id, img_w)
+                    start_x, start_y = self._get_agenda_slide_start(faction_id, img_w)
+                    anim = AgendaSlideAnimation(
+                        img, faction_id,
+                        target_x, target_y,
+                        start_x, start_y,
+                        delay=delay,
+                    )
+                    self.animation.add_persistent_agenda_animation(anim)
+                    self._create_effect_animations(event, faction_id, delay)
+                    agenda_anim_index += 1
             if agenda_anim_index > 0:
                 print(f"[anim] Created {agenda_anim_index} agenda animations")
             # Clear previews after processing phase results
@@ -600,6 +602,34 @@ class GameScene:
         gold_x = cx + 6 + abbr_w + 6
         return (gold_x, 84)  # strip_y(42) + strip_h(42)
 
+    def _get_agenda_label_pos(self, faction_id: str, img_width: int) -> tuple[int, int]:
+        """Get the target screen position for an agenda slide animation (right-aligned in strip cell)."""
+        try:
+            idx = FACTION_NAMES.index(faction_id)
+        except ValueError:
+            return (SCREEN_WIDTH // 2, 46)
+        cell_w = SCREEN_WIDTH // len(FACTION_NAMES)
+        cx = idx * cell_w
+        target_x = cx + cell_w - img_width - 6  # right edge minus padding minus image width
+        target_y = 42 + 4  # strip_y + small padding
+        return target_x, target_y
+
+    def _get_agenda_slide_start(self, faction_id: str, img_width: int) -> tuple[int, int]:
+        """Get the start screen position for an agenda slide animation (below strip)."""
+        target_x, _ = self._get_agenda_label_pos(faction_id, img_width)
+        start_y = 42 + 42 + 20  # strip_y + strip_h + offset below
+        return target_x, start_y
+
+    def _get_faction_strip_pos(self, faction_id: str) -> tuple[int, int]:
+        """Get position below a faction's name in the overview strip for regard text."""
+        try:
+            idx = FACTION_NAMES.index(faction_id)
+        except ValueError:
+            return (SCREEN_WIDTH // 2, 88)
+        cell_w = SCREEN_WIDTH // len(FACTION_NAMES)
+        cx = idx * cell_w
+        return (cx + 6, 84 + 4)  # strip_y(42) + strip_h(42) = 84, plus padding
+
     def _get_border_midpoints(self, faction_a: str, faction_b: str) -> list[tuple[float, float]]:
         """Get world-space midpoints of all border edges between two factions."""
         pairs = self.hex_renderer._get_border_pairs(self.hex_ownership, faction_a, faction_b)
@@ -620,7 +650,7 @@ class GameScene:
                 gx, gy = self._get_gold_display_pos(faction_id)
                 self.animation.add_effect_animation(TextAnimation(
                     f"+{gold}g", gx, gy, (255, 220, 60),
-                    delay=delay, duration=1.5, drift_pixels=20,
+                    delay=delay, duration=3.0, drift_pixels=40,
                     direction=1, screen_space=True,
                 ))
 
@@ -628,12 +658,12 @@ class GameScene:
             regard_gain = event.get("regard_gain", 1)
             neighbors = event.get("neighbors", [])
             for nfid in neighbors:
-                for mx, my in self._get_border_midpoints(faction_id, nfid):
-                    self.animation.add_effect_animation(TextAnimation(
-                        f"+{regard_gain}", mx, my, (100, 200, 255),
-                        delay=delay, duration=1.5, drift_pixels=20,
-                        direction=-1, screen_space=False,
-                    ))
+                rx, ry = self._get_faction_strip_pos(nfid)
+                self.animation.add_effect_animation(TextAnimation(
+                    f"+{regard_gain}", rx, ry, (100, 200, 255),
+                    delay=delay, duration=3.0, drift_pixels=40,
+                    direction=1, screen_space=True,
+                ))
 
         elif etype == "steal":
             gold = event.get("gold_gained", 0)
@@ -644,17 +674,17 @@ class GameScene:
                 gx, gy = self._get_gold_display_pos(faction_id)
                 self.animation.add_effect_animation(TextAnimation(
                     f"+{gold}g", gx, gy, (255, 220, 60),
-                    delay=delay, duration=1.5, drift_pixels=20,
+                    delay=delay, duration=3.0, drift_pixels=40,
                     direction=1, screen_space=True,
                 ))
-            # Regard text at border midpoints
+            # Regard text under target faction names in overview strip
             for nfid in neighbors:
-                for mx, my in self._get_border_midpoints(faction_id, nfid):
-                    self.animation.add_effect_animation(TextAnimation(
-                        str(regard_penalty), mx, my, (255, 80, 80),
-                        delay=delay, duration=1.5, drift_pixels=20,
-                        direction=-1, screen_space=False,
-                    ))
+                rx, ry = self._get_faction_strip_pos(nfid)
+                self.animation.add_effect_animation(TextAnimation(
+                    str(regard_penalty), rx, ry, (255, 80, 80),
+                    delay=delay, duration=3.0, drift_pixels=40,
+                    direction=1, screen_space=True,
+                ))
 
         elif etype in ("expand", "expand_spoils"):
             target_hex = event.get("hex")
@@ -665,7 +695,7 @@ class GameScene:
                     if self.hex_ownership.get((nq, nr)) == faction_id:
                         self.animation.add_effect_animation(ArrowAnimation(
                             (nq, nr), (tq, tr), (80, 220, 80),
-                            delay=delay, duration=1.5,
+                            delay=delay, duration=3.0,
                         ))
 
         elif etype == "expand_failed":
@@ -674,22 +704,18 @@ class GameScene:
                 gx, gy = self._get_gold_display_pos(faction_id)
                 self.animation.add_effect_animation(TextAnimation(
                     f"+{gold}g", gx, gy, (255, 220, 60),
-                    delay=delay, duration=1.5, drift_pixels=20,
+                    delay=delay, duration=3.0, drift_pixels=40,
                     direction=1, screen_space=True,
                 ))
 
-    def _render_agenda_animations(self, screen: pygame.Surface):
-        """Draw active agenda animations, converting world coords to screen."""
-        for anim in self.animation.get_active_agenda_animations():
+    def _render_persistent_agenda_animations(self, screen: pygame.Surface):
+        """Draw active persistent agenda slide animations in screen space."""
+        for anim in self.animation.get_persistent_agenda_animations():
             if not anim.active:
                 continue
-            sx, sy = self.input_handler.world_to_screen(
-                anim.world_x, anim.world_y + anim.y_offset,
-                SCREEN_WIDTH, SCREEN_HEIGHT,
-            )
             img = anim.image.copy()
             img.set_alpha(anim.alpha)
-            screen.blit(img, (sx - img.get_width() // 2, sy - img.get_height() // 2))
+            screen.blit(img, (int(anim.x), int(anim.y)))
 
     def _render_effect_animations(self, screen: pygame.Surface, screen_space_only: bool):
         """Draw active effect animations (text and arrows)."""
@@ -849,6 +875,7 @@ class GameScene:
         elif etype == "turn_start":
             self.event_log.append(f"--- Turn {event.get('turn', '?')} ---")
             self.faction_agendas_this_turn.clear()
+            self.animation.start_agenda_fadeout()
         elif etype == "game_over":
             winners = event.get("winners", [])
             names = [self.spirits.get(w, {}).get("name", w[:6]) for w in winners]
@@ -917,9 +944,6 @@ class GameScene:
             preview_idol=render_preview_idol,
         )
 
-        # Draw agenda animations (above hex grid, below HUD)
-        self._render_agenda_animations(screen)
-
         # Draw world-space effect animations (border text + arrows)
         self._render_effect_animations(screen, screen_space_only=False)
 
@@ -935,12 +959,17 @@ class GameScene:
             preview_guid_dict = {preview_fid: my_name}
 
         # Draw faction overview strip (with war indicators)
+        animated_agenda_factions = self.animation.get_persistent_agenda_factions()
         self.ui_renderer.draw_faction_overview(
             screen, self.factions, self.faction_agendas_this_turn,
             wars=render_wars,
             spirits=self.spirits,
             preview_guidance=preview_guid_dict,
+            animated_agenda_factions=animated_agenda_factions,
         )
+
+        # Draw persistent agenda slide animations (on top of overview strip)
+        self._render_persistent_agenda_animations(screen)
 
         # Draw screen-space effect animations (gold text overlays)
         self._render_effect_animations(screen, screen_space_only=True)
