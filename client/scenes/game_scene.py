@@ -357,7 +357,8 @@ class GameScene:
                 "expand": 3, "expand_failed": 3, "expand_spoils": 3,
                 "change": 4, "change_draw": 4,
             }
-            agenda_events = [e for e in events if e.get("type", "") in _ANIM_ORDER]
+            agenda_events = [e for e in events if e.get("type", "") in _ANIM_ORDER
+                           and not e.get("is_guided_modifier")]
             if agenda_events:
                 # Split setup events into a separate batch so they play
                 # before resolution events (and don't visually overlap).

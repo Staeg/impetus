@@ -498,10 +498,17 @@ class GameState:
         chosen = cards[card_index]
         faction.change_modifiers[chosen.value] = faction.change_modifiers.get(chosen.value, 0) + 1
         del self.change_pending[spirit_id]
+        # Store modifier so resolve_agenda_phase_after_changes can emit
+        # a visual event in the normal resolution order.
+        if not hasattr(self, '_guided_change_modifiers'):
+            self._guided_change_modifiers: dict[str, str] = {}
+        self._guided_change_modifiers[spirit.guided_faction] = chosen.value
+        # Mark as non-animated: the visual event comes later in resolution
         events = [{
             "type": "change",
             "faction": spirit.guided_faction,
             "modifier": chosen.value,
+            "is_guided_modifier": True,
         }]
         return None, events
 
@@ -526,6 +533,20 @@ class GameState:
 
         resolve_agendas(self.factions, self.hex_map, resolve_choices,
                        self.wars, events)
+
+        # Add visual change events for guided change factions.
+        # The modifier was already applied; this puts them in the
+        # resolution batch so they animate in normal agenda order.
+        guided_modifiers = getattr(self, '_guided_change_modifiers', {})
+        for fid in guided_change:
+            modifier = guided_modifiers.get(fid, "")
+            if modifier:
+                events.append({
+                    "type": "change",
+                    "faction": fid,
+                    "modifier": modifier,
+                })
+        self._guided_change_modifiers = {}
 
         # Check for ejection (0 influence spirits)
         for spirit in self.spirits.values():
