@@ -6,13 +6,12 @@ from shared.constants import (
     SCREEN_WIDTH, SCREEN_HEIGHT, HEX_SIZE, FACTION_NAMES, FACTION_DISPLAY_NAMES, FACTION_COLORS,
     BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPREAD_IDOL_VP,
 )
-from shared.models import GameStateSnapshot, HexCoord, Idol, WarState
 from client.renderer.hex_renderer import HexRenderer
 from client.renderer.ui_renderer import UIRenderer, Button, draw_multiline_tooltip
-from client.renderer.animation import AnimationManager, AgendaAnimation, AgendaSlideAnimation, TextAnimation, ArrowAnimation
-from client.renderer.assets import load_assets, agenda_images, agenda_card_images
+from client.renderer.animation import AnimationManager
+from client.renderer.assets import load_assets, agenda_card_images
 from client.input_handler import InputHandler
-from shared.hex_utils import axial_to_pixel, hex_neighbors
+from client.scenes.animation_orchestrator import AnimationOrchestrator
 
 # Approximate hex map screen bounds (default camera) for centering UI
 _HEX_MAP_HALF_W = int(HEX_SIZE * 1.5 * (MAP_SIDE_LENGTH - 1)) + HEX_SIZE
@@ -39,6 +38,8 @@ class GameScene:
         self.ui_renderer = UIRenderer()
         self.animation = AnimationManager()
         self.input_handler = InputHandler()
+        self.orchestrator = AnimationOrchestrator(
+            self.animation, self.hex_renderer, self.input_handler)
         load_assets()
 
         self.game_state: dict = {}
@@ -88,12 +89,6 @@ class GameScene:
         self.guidance_title_hovered: bool = False
         self.idol_title_rect: pygame.Rect | None = None
         self.idol_title_hovered: bool = False
-
-        # Animation queue: batches of agenda events processed sequentially
-        self._animation_queue: list[list[dict]] = []
-        self._animation_fading: bool = False
-        # Deferred PHASE_START: held until animations finish
-        self._deferred_phase_start: dict | None = None
 
         self._font = None
         self._small_font = None
@@ -186,34 +181,31 @@ class GameScene:
 
             # Check agenda card clicks
             if self.agenda_hand:
-                card_rects = self._get_card_rects()
-                for i, rect in enumerate(card_rects):
+                for i, rect in enumerate(self._calc_card_rects(
+                        len(self.agenda_hand), y=SCREEN_HEIGHT - 210, centered=True)):
                     if rect.collidepoint(event.pos):
                         self.selected_agenda_index = i
                         return
 
             # Check change card clicks
             if self.change_cards:
-                card_rects = self._get_change_card_rects()
-                for i, rect in enumerate(card_rects):
+                for i, rect in enumerate(self._calc_card_rects(len(self.change_cards))):
                     if rect.collidepoint(event.pos):
-                        self._submit_change_choice(i)
+                        self._submit_card_choice(i, MessageType.SUBMIT_CHANGE_CHOICE, "change_cards")
                         return
 
             # Check spoils card clicks
             if self.spoils_cards:
-                card_rects = self._get_spoils_card_rects()
-                for i, rect in enumerate(card_rects):
+                for i, rect in enumerate(self._calc_card_rects(len(self.spoils_cards))):
                     if rect.collidepoint(event.pos):
-                        self._submit_spoils_choice(i)
+                        self._submit_card_choice(i, MessageType.SUBMIT_SPOILS_CHOICE, "spoils_cards")
                         return
 
             # Check spoils change card clicks
             if self.spoils_change_cards:
-                card_rects = self._get_spoils_change_card_rects()
-                for i, rect in enumerate(card_rects):
+                for i, rect in enumerate(self._calc_card_rects(len(self.spoils_change_cards))):
                     if rect.collidepoint(event.pos):
-                        self._submit_spoils_change_choice(i)
+                        self._submit_card_choice(i, MessageType.SUBMIT_SPOILS_CHANGE_CHOICE, "spoils_change_cards")
                         return
 
             # Hex click
@@ -278,23 +270,9 @@ class GameScene:
                 self._clear_selection()
                 self.ejection_pending = False
 
-    def _submit_change_choice(self, index: int):
-        self.app.network.send(MessageType.SUBMIT_CHANGE_CHOICE, {
-            "card_index": index,
-        })
-        self.change_cards = []
-
-    def _submit_spoils_choice(self, index: int):
-        self.app.network.send(MessageType.SUBMIT_SPOILS_CHOICE, {
-            "card_index": index,
-        })
-        self.spoils_cards = []
-
-    def _submit_spoils_change_choice(self, index: int):
-        self.app.network.send(MessageType.SUBMIT_SPOILS_CHANGE_CHOICE, {
-            "card_index": index,
-        })
-        self.spoils_change_cards = []
+    def _submit_card_choice(self, index: int, msg_type: MessageType, card_attr: str):
+        self.app.network.send(msg_type, {"card_index": index})
+        setattr(self, card_attr, [])
 
     def _clear_selection(self):
         self.selected_faction = None
@@ -324,8 +302,8 @@ class GameScene:
             needs_input = action not in ("none", "") or phase in (
                 "change_choice", "spoils_choice",
                 "spoils_change_choice", "ejection_choice")
-            if needs_input and self._has_animations_playing():
-                self._deferred_phase_start = payload
+            if needs_input and self.orchestrator.has_animations_playing():
+                self.orchestrator.deferred_phase_start = payload
             else:
                 self.phase = payload.get("phase", self.phase)
                 self.turn = payload.get("turn", self.turn)
@@ -365,15 +343,15 @@ class GameScene:
                 setup_events = [e for e in agenda_events if e.get("is_setup")]
                 if setup_events:
                     resolution_events = [e for e in agenda_events if not e.get("is_setup")]
-                    self._animation_queue.append(setup_events)
+                    self.orchestrator.queue.append(setup_events)
                     if resolution_events:
-                        # Mark so _process_animation_batch gives them auto_fadeout
                         for e in resolution_events:
                             e["_setup_turn"] = True
-                        self._animation_queue.append(resolution_events)
+                        self.orchestrator.queue.append(resolution_events)
                 else:
-                    self._animation_queue.append(agenda_events)
-                self._try_process_next_animation_batch()
+                    self.orchestrator.queue.append(agenda_events)
+                self.orchestrator.try_process_next_batch(
+                    self.hex_ownership, self.small_font)
             # Clear previews after processing phase results
             self.preview_guidance = None
             self.preview_idol = None
@@ -451,17 +429,17 @@ class GameScene:
     def _build_guidance_tooltip(self, faction_id: str, is_blocked: bool) -> str:
         """Build tooltip for a Guidance faction button."""
         fdata = self.factions.get(faction_id, {})
-        presence_id = fdata.get("presence_spirit") if isinstance(fdata, dict) else None
+        worship_id = fdata.get("worship_spirit") if isinstance(fdata, dict) else None
         lines = []
         if is_blocked:
             lines.append("This Faction Worships you;")
             lines.append("you cannot Guide them.")
-        elif presence_id:
-            name = self.spirits.get(presence_id, {}).get("name", presence_id[:6])
+        elif worship_id:
+            name = self.spirits.get(worship_id, {}).get("name", worship_id[:6])
             lines.append(f"Worshipped by: {name}")
             my_id = self.app.my_spirit_id
             my_idols = self._count_spirit_idols_in_faction(my_id, faction_id)
-            their_idols = self._count_spirit_idols_in_faction(presence_id, faction_id)
+            their_idols = self._count_spirit_idols_in_faction(worship_id, faction_id)
             if my_idols >= their_idols:
                 lines.append("Guiding will make you Worshipped")
             else:
@@ -477,7 +455,7 @@ class GameScene:
             fid for fid in self.phase_options.get("available_factions", [])
             if not self.factions.get(fid, {}).get("eliminated", False)
         ]
-        blocked = self.phase_options.get("presence_blocked", [])
+        blocked = self.phase_options.get("worship_blocked", [])
         self.faction_buttons = []
         all_factions = available + blocked
         for i, fid in enumerate(all_factions):
@@ -527,519 +505,34 @@ class GameScene:
             _IDOL_CENTER_X - title_w // 2, _TITLE_Y, title_w, 22
         )
 
-    def _get_card_rects(self) -> list[pygame.Rect]:
-        """Calculate card rects for the agenda hand."""
-        rects = []
+    def _calc_card_rects(self, count: int, start_x: int = 20, y: int = 125,
+                         centered: bool = False) -> list[pygame.Rect]:
         card_w, card_h = 110, 170
         spacing = 10
-        total_w = len(self.agenda_hand) * (card_w + spacing) - spacing
-        start_x = SCREEN_WIDTH // 2 - total_w // 2
-        y = SCREEN_HEIGHT - 210
-        for i in range(len(self.agenda_hand)):
-            rects.append(pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h))
-        return rects
+        if centered:
+            total_w = count * (card_w + spacing) - spacing
+            start_x = SCREEN_WIDTH // 2 - total_w // 2
+        return [pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h)
+                for i in range(count)]
 
-    def _get_change_card_rects(self) -> list[pygame.Rect]:
-        rects = []
-        card_w, card_h = 110, 170
-        spacing = 10
-        start_x = 20
-        y = 125
-        for i in range(len(self.change_cards)):
-            rects.append(pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h))
-        return rects
-
-    def _get_spoils_card_rects(self) -> list[pygame.Rect]:
-        rects = []
-        card_w, card_h = 110, 170
-        spacing = 10
-        start_x = 20
-        y = 125
-        for i in range(len(self.spoils_cards)):
-            rects.append(pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h))
-        return rects
-
-    def _get_spoils_change_card_rects(self) -> list[pygame.Rect]:
-        rects = []
-        card_w, card_h = 110, 170
-        spacing = 10
-        start_x = 20
-        y = 125
-        for i in range(len(self.spoils_change_cards)):
-            rects.append(pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h))
-        return rects
-
-    def _get_faction_centroid(self, faction_id: str) -> tuple[float | None, float | None]:
-        """Get the world-coordinate centroid of a faction's territory."""
-        owned = [(q, r) for (q, r), owner in self.hex_ownership.items()
-                 if owner == faction_id]
-        if not owned:
-            return None, None
-        avg_q = sum(q for q, r in owned) / len(owned)
-        avg_r = sum(r for q, r in owned) / len(owned)
-        # Snap to nearest owned hex
-        best = min(owned, key=lambda h: (h[0] - avg_q) ** 2 + (h[1] - avg_r) ** 2)
-        return axial_to_pixel(best[0], best[1], HEX_SIZE)
-
-    def _get_gold_display_pos(self, faction_id: str) -> tuple[int, int]:
-        """Get screen position below the faction's gold text in the overview strip."""
-        try:
-            idx = FACTION_NAMES.index(faction_id)
-        except ValueError:
-            return (SCREEN_WIDTH // 2, 97)
-        cell_w = SCREEN_WIDTH // len(FACTION_NAMES)
-        cx = idx * cell_w
-        abbr = FACTION_DISPLAY_NAMES.get(faction_id, faction_id)
-        abbr_w = self.small_font.size(abbr)[0]
-        gold_x = cx + 6 + abbr_w + 6
-        return (gold_x, 97)  # strip_y(42) + strip_h(55)
-
-    def _get_agenda_label_pos(self, faction_id: str, img_width: int, row: int = 0) -> tuple[int, int]:
-        """Get the target screen position for an agenda slide animation (right-aligned in strip cell).
-
-        row=0 is the default position; row=1+ stacks below with 24px offset per row.
-        """
-        try:
-            idx = FACTION_NAMES.index(faction_id)
-        except ValueError:
-            return (SCREEN_WIDTH // 2, 46)
-        cell_w = SCREEN_WIDTH // len(FACTION_NAMES)
-        cx = idx * cell_w
-        target_x = cx + cell_w - img_width - 6  # right edge minus padding minus image width
-        target_y = 42 + 4 + row * 24  # strip_y + small padding + row offset
-        return target_x, target_y
-
-    def _get_agenda_slide_start(self, faction_id: str, img_width: int, row: int = 0) -> tuple[int, int]:
-        """Get the start screen position for an agenda slide animation (below strip)."""
-        target_x, _ = self._get_agenda_label_pos(faction_id, img_width, row)
-        start_y = 42 + 55 + 20  # strip_y + strip_h + offset below
-        return target_x, start_y
-
-    def _get_faction_strip_pos(self, faction_id: str) -> tuple[int, int]:
-        """Get position below a faction's name in the overview strip for regard text."""
-        try:
-            idx = FACTION_NAMES.index(faction_id)
-        except ValueError:
-            return (SCREEN_WIDTH // 2, 101)
-        cell_w = SCREEN_WIDTH // len(FACTION_NAMES)
-        cx = idx * cell_w
-        return (cx + 6, 97 + 4)  # strip_y(42) + strip_h(55) = 97, plus padding
-
-    def _get_border_midpoints(self, faction_a: str, faction_b: str) -> list[tuple[float, float]]:
-        """Get world-space midpoints of all border edges between two factions."""
-        pairs = self.hex_renderer._get_border_pairs(self.hex_ownership, faction_a, faction_b)
-        midpoints = []
-        for h1, h2 in pairs:
-            x1, y1 = axial_to_pixel(h1[0], h1[1], HEX_SIZE)
-            x2, y2 = axial_to_pixel(h2[0], h2[1], HEX_SIZE)
-            midpoints.append(((x1 + x2) / 2, (y1 + y2) / 2))
-        return midpoints
-
-    def _create_effect_animations(self, event: dict, faction_id: str, delay: float):
-        """Create effect animations for an agenda event."""
-        etype = event.get("type", "")
-
-        if etype in ("trade", "trade_spoils_bonus"):
-            gold = event.get("gold_gained", 0)
-            if gold > 0:
-                gx, gy = self._get_gold_display_pos(faction_id)
-                self.animation.add_effect_animation(TextAnimation(
-                    f"+{gold}g", gx, gy, (255, 220, 60),
-                    delay=delay, duration=3.0, drift_pixels=40,
-                    direction=1, screen_space=True,
-                ))
-
-        elif etype == "bond":
-            regard_gain = event.get("regard_gain", 1)
-            neighbors = event.get("neighbors", [])
-            for nfid in neighbors:
-                rx, ry = self._get_faction_strip_pos(nfid)
-                self.animation.add_effect_animation(TextAnimation(
-                    f"+{regard_gain}", rx, ry, (100, 200, 255),
-                    delay=delay, duration=3.0, drift_pixels=40,
-                    direction=1, screen_space=True,
-                ))
-
-        elif etype == "steal":
-            gold = event.get("gold_gained", 0)
-            regard_penalty = event.get("regard_penalty", -1)
-            neighbors = event.get("neighbors", [])
-            # Gold text in screen space
-            if gold > 0:
-                gx, gy = self._get_gold_display_pos(faction_id)
-                self.animation.add_effect_animation(TextAnimation(
-                    f"+{gold}g", gx, gy, (255, 220, 60),
-                    delay=delay, duration=3.0, drift_pixels=40,
-                    direction=1, screen_space=True,
-                ))
-            # Regard text under target faction names in overview strip
-            for nfid in neighbors:
-                rx, ry = self._get_faction_strip_pos(nfid)
-                self.animation.add_effect_animation(TextAnimation(
-                    str(regard_penalty), rx, ry, (255, 80, 80),
-                    delay=delay, duration=3.0, drift_pixels=40,
-                    direction=1, screen_space=True,
-                ))
-
-        elif etype in ("expand", "expand_spoils"):
-            target_hex = event.get("hex")
-            if target_hex:
-                tq, tr = target_hex["q"], target_hex["r"]
-                # Find adjacent owned hexes pointing into the new hex
-                for nq, nr in hex_neighbors(tq, tr):
-                    if self.hex_ownership.get((nq, nr)) == faction_id:
-                        self.animation.add_effect_animation(ArrowAnimation(
-                            (nq, nr), (tq, tr), (80, 220, 80),
-                            delay=delay, duration=3.0,
-                        ))
-
-        elif etype == "expand_failed":
-            gold = event.get("gold_gained", 0)
-            if gold > 0:
-                gx, gy = self._get_gold_display_pos(faction_id)
-                self.animation.add_effect_animation(TextAnimation(
-                    f"+{gold}g", gx, gy, (255, 220, 60),
-                    delay=delay, duration=3.0, drift_pixels=40,
-                    direction=1, screen_space=True,
-                ))
-
-    def _try_process_next_animation_batch(self):
-        """Process the next queued animation batch when current animations are done."""
-        if not self._animation_queue:
-            return
-        if self._animation_fading:
-            # We started a fadeout; wait for it to finish
-            if not self.animation.has_active_persistent_agenda_animations():
-                self._animation_fading = False
-                batch = self._animation_queue.pop(0)
-                self._process_animation_batch(batch)
-            return
-        if not self.animation.is_all_done():
-            return
-        # All animations done — check if we need to fade old ones first
-        if self.animation.get_persistent_agenda_animations():
-            # There are leftover (finished-sliding but visible) persistent anims
-            self.animation.start_agenda_fadeout()
-            self._animation_fading = True
-            return
-        # Nothing playing, process immediately
-        batch = self._animation_queue.pop(0)
-        self._process_animation_batch(batch)
-
-    def _process_animation_batch(self, agenda_events: list[dict]):
-        """Create animations for a batch of agenda events."""
-        _ANIM_ORDER = {
-            "trade": 0, "bond": 1, "steal": 2,
-            "expand": 3, "expand_failed": 3, "expand_spoils": 3,
-            "change": 4, "change_draw": 4,
-        }
-        regular_events = [e for e in agenda_events if not e.get("is_spoils")]
-        spoils_events = [e for e in agenda_events if e.get("is_spoils")]
-
-        # --- Regular events ---
-        regular_events.sort(key=lambda e: (
-            0 if e.get("is_setup") else 1,
-            _ANIM_ORDER.get(e["type"], 99),
-        ))
-        agenda_anim_index = 0
-        # Count events that should auto-fade (setup changes + setup-turn resolution)
-        auto_fade_count = sum(1 for e in regular_events
-                              if e.get("is_setup") or e.get("_setup_turn"))
-        auto_fade_idx = 0
-        for event in regular_events:
-            etype = event["type"]
-            if etype in ("change", "change_draw"):
-                modifier = event.get("modifier", "")
-                img_key = f"change_{modifier}" if f"change_{modifier}" in agenda_images else "change"
-            elif etype == "expand_failed":
-                img_key = "expand_failed"
-            else:
-                img_key = {"steal": "steal", "bond": "bond", "trade": "trade",
-                           "expand": "expand", "expand_spoils": "expand"}[etype]
-            img = agenda_images.get(img_key)
-            faction_id = event.get("faction")
-            if not img:
-                print(f"[anim] No image for '{img_key}' (loaded: {list(agenda_images.keys())})")
-            elif not faction_id:
-                print(f"[anim] No faction_id in {etype} event")
-            else:
-                delay = agenda_anim_index * 1.0
-                auto_fadeout = None
-                if event.get("is_setup") or event.get("_setup_turn"):
-                    remaining = auto_fade_count - auto_fade_idx - 1
-                    auto_fadeout = remaining * 1.0 + 2.0
-                    auto_fade_idx += 1
-                img_w = img.get_width()
-                target_x, target_y = self._get_agenda_label_pos(faction_id, img_w)
-                start_x, start_y = self._get_agenda_slide_start(faction_id, img_w)
-                anim = AgendaSlideAnimation(
-                    img, faction_id,
-                    target_x, target_y,
-                    start_x, start_y,
-                    delay=delay,
-                    auto_fadeout_after=auto_fadeout,
-                )
-                self.animation.add_persistent_agenda_animation(anim)
-                self._create_effect_animations(event, faction_id, delay)
-                agenda_anim_index += 1
-
-        # --- Spoils events (stack below regular agenda icons) ---
-        spoils_events.sort(key=lambda e: _ANIM_ORDER.get(e["type"], 99))
-        spoils_batch_counts: dict[str, int] = {}
-        spoils_anim_index = 0
-        for event in spoils_events:
-            etype = event["type"]
-            if etype in ("change", "change_draw"):
-                modifier = event.get("modifier", "")
-                img_key = f"change_{modifier}" if f"change_{modifier}" in agenda_images else "change"
-            elif etype == "expand_failed":
-                img_key = "expand_failed"
-            else:
-                img_key = {"steal": "steal", "bond": "bond", "trade": "trade",
-                           "expand": "expand", "expand_spoils": "expand"}[etype]
-            img = agenda_images.get(img_key)
-            faction_id = event.get("faction")
-            if not img:
-                print(f"[anim] No image for '{img_key}' (loaded: {list(agenda_images.keys())})")
-            elif not faction_id:
-                print(f"[anim] No faction_id in {etype} event")
-            else:
-                delay = spoils_anim_index * 1.0
-                existing_spoils = self.animation.get_spoils_count_for_faction(faction_id)
-                batch_local = spoils_batch_counts.get(faction_id, 0)
-                row = 1 + existing_spoils + batch_local
-                spoils_batch_counts[faction_id] = batch_local + 1
-                img_w = img.get_width()
-                target_x, target_y = self._get_agenda_label_pos(faction_id, img_w, row)
-                start_x, start_y = self._get_agenda_slide_start(faction_id, img_w, row)
-                anim = AgendaSlideAnimation(
-                    img, faction_id,
-                    target_x, target_y,
-                    start_x, start_y,
-                    delay=delay,
-                    is_spoils=True,
-                )
-                self.animation.add_persistent_agenda_animation(anim)
-                self._create_effect_animations(event, faction_id, delay)
-                spoils_anim_index += 1
-
-        total_anims = agenda_anim_index + spoils_anim_index
-        if total_anims > 0:
-            print(f"[anim] Created {total_anims} agenda animations ({agenda_anim_index} regular, {spoils_anim_index} spoils)")
-
-    def _render_persistent_agenda_animations(self, screen: pygame.Surface):
-        """Draw active persistent agenda slide animations in screen space."""
-        for anim in self.animation.get_persistent_agenda_animations():
-            if not anim.active:
-                continue
-            img = anim.image.copy()
-            img.set_alpha(anim.alpha)
-            screen.blit(img, (int(anim.x), int(anim.y)))
-
-    def _render_effect_animations(self, screen: pygame.Surface, screen_space_only: bool):
-        """Draw active effect animations (text and arrows)."""
-        for anim in self.animation.get_active_effect_animations():
-            if not anim.active:
-                continue
-            if screen_space_only and not anim.screen_space:
-                continue
-            if not screen_space_only and anim.screen_space:
-                continue
-
-            if isinstance(anim, TextAnimation):
-                alpha = anim.alpha
-                if alpha <= 0:
-                    continue
-                text_surf = self.small_font.render(anim.text, True, anim.color)
-                text_surf.set_alpha(alpha)
-                if anim.screen_space:
-                    sx, sy = anim.x, anim.y + anim.y_offset
-                else:
-                    sx, sy = self.input_handler.world_to_screen(
-                        anim.x, anim.y + anim.y_offset,
-                        SCREEN_WIDTH, SCREEN_HEIGHT,
-                    )
-                screen.blit(text_surf, (int(sx), int(sy)))
-
-            elif isinstance(anim, ArrowAnimation):
-                alpha = anim.alpha
-                if alpha <= 0:
-                    continue
-                color = tuple(int(c * alpha / 255) for c in anim.color)
-                self.hex_renderer._draw_hex_arrow(
-                    screen, anim.from_hex, anim.to_hex, color,
-                    self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT,
-                    width=3, head_size=8, unidirectional=True,
-                )
 
     def _log_event(self, event: dict):
-        etype = event.get("type", "")
-        if etype == "idol_placed":
-            name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
-            self.event_log.append(f"{name} placed {event['idol_type']} idol")
-        elif etype == "guided":
-            name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"{name} is guiding {fname}")
-        elif etype == "guide_contested":
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            spirit_ids = event.get("spirits", [])
-            names = [self.spirits.get(sid, {}).get("name", sid[:6]) for sid in spirit_ids]
-            self.event_log.append(f"Contested guidance of {fname}! ({', '.join(names)})")
-            # Clear preview if local player was in the contested list
-            if self.app.my_spirit_id in spirit_ids:
-                self.preview_guidance = None
-        elif etype == "agenda_chosen":
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"{fname} plays {event['agenda']}")
-            self.faction_agendas_this_turn[event["faction"]] = event["agenda"]
-        elif etype == "agenda_random":
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"{fname} randomly plays {event['agenda']}")
-            self.faction_agendas_this_turn[event["faction"]] = event["agenda"]
-        elif etype == "steal":
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            prefix = "Spoils: " if event.get("is_spoils") else ""
-            self.event_log.append(f"{prefix}{fname} stole {event.get('gold_gained', 0)} gold")
-        elif etype == "bond":
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            prefix = "Spoils: " if event.get("is_spoils") else ""
-            self.event_log.append(f"{prefix}{fname} improved relations")
-        elif etype == "trade":
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            prefix = "Spoils: " if event.get("is_spoils") else ""
-            self.event_log.append(f"{prefix}{fname} traded for {event.get('gold_gained', 0)} gold")
-        elif etype == "trade_spoils_bonus":
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"{fname} gained {event.get('gold_gained', 1)} gold from Spoils Trade")
-        elif etype == "expand":
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"{fname} expanded territory")
-        elif etype == "expand_failed":
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"{fname} couldn't expand, gained gold")
-        elif etype == "change":
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            prefix = "Spoils: " if event.get("is_spoils") else ""
-            self.event_log.append(f"{prefix}{fname} upgraded {event.get('modifier', '?')}")
-        elif etype == "change_draw":
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            cards = event.get("cards", [])
-            self.event_log.append(f"{fname} draws Change: {', '.join(cards)}")
-        elif etype == "war_erupted":
-            fa = FACTION_DISPLAY_NAMES.get(event["faction_a"], event["faction_a"])
-            fb = FACTION_DISPLAY_NAMES.get(event["faction_b"], event["faction_b"])
-            self.event_log.append(f"War erupted between {fa} and {fb}!")
-        elif etype == "war_ripened":
-            fa = FACTION_DISPLAY_NAMES.get(event["faction_a"], event["faction_a"])
-            fb = FACTION_DISPLAY_NAMES.get(event["faction_b"], event["faction_b"])
-            self.event_log.append(f"War between {fa} and {fb} is ripe!")
-        elif etype == "war_resolved":
-            winner = event.get("winner")
-            if winner:
-                wname = FACTION_DISPLAY_NAMES.get(winner, winner)
-                loser = event.get("loser", "?")
-                lname = FACTION_DISPLAY_NAMES.get(loser, loser)
-                self.event_log.append(
-                    f"{wname} won war against {lname}! (Roll: {event.get('roll_a', '?')}+{event.get('power_a', '?')} vs "
-                    f"{event.get('roll_b', '?')}+{event.get('power_b', '?')})")
-            else:
-                self.event_log.append("War ended in a tie!")
-        elif etype == "spoils_drawn":
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"Spoils: {fname} drew {event.get('agenda', '?')}")
-        elif etype == "spoils_choice":
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            cards = event.get("cards", [])
-            self.event_log.append(f"Spoils: {fname} choosing from {', '.join(cards)}")
-        elif etype == "expand_spoils":
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"Spoils: {fname} conquered enemy territory")
-        elif etype == "vp_scored":
-            name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
-            self.event_log.append(f"{name} scored {event.get('vp_gained', 0)} VP (total: {event.get('total_vp', 0)})")
-            b_idols = event.get("battle_idols", 0)
-            b_wars = event.get("wars_won", 0)
-            if b_idols:
-                b_vp = b_idols * BATTLE_IDOL_VP * b_wars
-                self.event_log.append(f"  Battle: {b_idols} idol x {b_wars} wars = {b_vp:.1f}")
-            a_idols = event.get("affluence_idols", 0)
-            a_gold = event.get("gold_gained", 0)
-            if a_idols:
-                a_vp = a_idols * AFFLUENCE_IDOL_VP * a_gold
-                self.event_log.append(f"  Affluence: {a_idols} idol x {a_gold} gold = {a_vp:.1f}")
-            s_idols = event.get("spread_idols", 0)
-            s_terr = event.get("territories_gained", 0)
-            if s_idols:
-                s_vp = s_idols * SPREAD_IDOL_VP * s_terr
-                self.event_log.append(f"  Spread: {s_idols} idol x {s_terr} terr = {s_vp:.1f}")
-        elif etype == "ejected":
-            name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"{name} ejected from {fname}")
-        elif etype == "presence_gained":
-            name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"{fname} now Worships {name}")
-        elif etype == "presence_replaced":
-            name = self.spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
-            old_name = self.spirits.get(event.get("old_spirit", ""), {}).get("name", event.get("old_spirit", "?")[:6])
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"{fname} now Worships {name} (was {old_name})")
-        elif etype == "faction_eliminated":
-            fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"{fname} has been ELIMINATED!")
-        elif etype == "war_ended":
-            self.event_log.append(f"War ended ({event.get('reason', 'unknown')})")
-        elif etype == "setup_start":
-            self.event_log.append("--- Setup ---")
-        elif etype == "turn_start":
-            self.event_log.append(f"--- Turn {event.get('turn', '?')} ---")
+        from client.scenes.event_logger import log_event
+        etype = log_event(event, self.event_log, self.spirits,
+                          self.app.my_spirit_id, self.faction_agendas_this_turn)
+        # Side effects that touch scene state
+        if etype == "turn_start":
             self.faction_agendas_this_turn.clear()
-            # Only fade if no animations are still in motion and no
-            # batches queued; otherwise the queue system handles fading
-            # when the next batch arrives.
-            if not self._animation_queue and self.animation.is_all_done():
+            if not self.orchestrator.queue and self.animation.is_all_done():
                 self.animation.start_agenda_fadeout()
-        elif etype == "game_over":
-            winners = event.get("winners", [])
-            names = [self.spirits.get(w, {}).get("name", w[:6]) for w in winners]
-            self.event_log.append(f"GAME OVER! Winner(s): {', '.join(names)}")
-
-    def _has_animations_playing(self) -> bool:
-        """Check if any animations are active (queued, in motion, or visible)."""
-        if self._animation_queue or self._animation_fading:
-            return True
-        if not self.animation.is_all_done():
-            return True
-        if self.animation.has_active_persistent_agenda_animations():
-            return True
-        return False
-
-    def _try_show_deferred_phase_ui(self):
-        """Show deferred PHASE_START UI once all animations have finished."""
-        if not self._deferred_phase_start:
-            return
-        if self._animation_queue or self._animation_fading:
-            return
-        if not self.animation.is_all_done():
-            return
-        # Fade any settled persistent animations before showing UI
-        if self.animation.has_active_persistent_agenda_animations():
-            self.animation.start_agenda_fadeout()
-            return
-        # All clear — show the deferred UI
-        payload = self._deferred_phase_start
-        self._deferred_phase_start = None
-        self.phase = payload.get("phase", self.phase)
-        self.turn = payload.get("turn", self.turn)
-        self.phase_options = payload.get("options", {})
-        self._setup_phase_ui()
+        elif etype == "guide_contested":
+            if self.app.my_spirit_id in event.get("spirits", []):
+                self.preview_guidance = None
 
     def update(self, dt):
         self.animation.update(dt)
-        self._try_process_next_animation_batch()
-        self._try_show_deferred_phase_ui()
+        self.orchestrator.try_process_next_batch(self.hex_ownership, self.small_font)
+        self.orchestrator.try_show_deferred_phase_ui(self)
 
     def render(self, screen: pygame.Surface):
         screen.fill((10, 10, 18))
@@ -1102,7 +595,7 @@ class GameScene:
         )
 
         # Draw world-space effect animations (border text + arrows)
-        self._render_effect_animations(screen, screen_space_only=False)
+        self.orchestrator.render_effect_animations(screen, screen_space_only=False, small_font=self.small_font)
 
         # Draw HUD
         self.ui_renderer.draw_hud(screen, self.phase, self.turn,
@@ -1126,10 +619,10 @@ class GameScene:
         )
 
         # Draw persistent agenda slide animations (on top of overview strip)
-        self._render_persistent_agenda_animations(screen)
+        self.orchestrator.render_persistent_agenda_animations(screen)
 
         # Draw screen-space effect animations (gold text overlays)
-        self._render_effect_animations(screen, screen_space_only=True)
+        self.orchestrator.render_effect_animations(screen, screen_space_only=True, small_font=self.small_font)
 
         # Draw faction panel (right side)
         pf = self.panel_faction
@@ -1153,7 +646,7 @@ class GameScene:
         )
 
         # Draw waiting indicator (suppress while UI is deferred for animations)
-        if self.waiting_for and not self._deferred_phase_start:
+        if self.waiting_for and not self.orchestrator.deferred_phase_start:
             self.ui_renderer.draw_waiting_overlay(screen, self.waiting_for, self.spirits)
 
         # Phase-specific UI
@@ -1313,9 +806,8 @@ class GameScene:
         for card_name in self.change_cards:
             desc = self.ui_renderer._build_modifier_description(card_name)
             hand.append({"agenda_type": card_name, "description": desc})
-        rects = self._get_change_card_rects()
-        start_x = rects[0].x if rects else 20
-        start_y = rects[0].y if rects else 125
+        start_x = 20
+        start_y = 125
         self.ui_renderer.draw_card_hand(
             screen, hand, -1,
             start_x, start_y,
@@ -1354,9 +846,8 @@ class GameScene:
 
         modifiers = self._get_current_faction_modifiers()
         hand = [{"agenda_type": card} for card in self.spoils_cards]
-        rects = self._get_spoils_card_rects()
-        start_x = rects[0].x if rects else 20
-        start_y = rects[0].y if rects else 125
+        start_x = 20
+        start_y = 125
         self.ui_renderer.draw_card_hand(
             screen, hand, -1,
             start_x, start_y,
@@ -1375,9 +866,8 @@ class GameScene:
         for card_name in self.spoils_change_cards:
             desc = self.ui_renderer._build_modifier_description(card_name)
             hand.append({"agenda_type": card_name, "description": desc})
-        rects = self._get_spoils_change_card_rects()
-        start_x = rects[0].x if rects else 20
-        start_y = rects[0].y if rects else 125
+        start_x = 20
+        start_y = 125
         self.ui_renderer.draw_card_hand(
             screen, hand, -1,
             start_x, start_y,

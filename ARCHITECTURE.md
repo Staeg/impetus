@@ -33,7 +33,7 @@ impetus/
 │   ├── game_state.py           # Core game state machine and turn resolution
 │   ├── hex_map.py              # Hex grid generation, adjacency, pathfinding
 │   ├── faction.py              # Faction model (gold, territories, agenda deck, modifiers)
-│   ├── spirit.py               # Spirit model (influence, presence, idols, VP)
+│   ├── spirit.py               # Spirit model (influence, worship, idols, VP)
 │   ├── war.py                  # War eruption tracking, ripening, resolution
 │   ├── agenda.py               # Agenda card system and resolution logic
 │   └── scoring.py              # Victory point calculation per phase
@@ -137,7 +137,7 @@ Each faction tracks:
 - `change_modifiers: dict[AgendaType, int]` (accumulated Change upgrades per agenda type)
 - `regard: dict[FactionId, int]` (bilateral regard with other factions, starts at 0)
 - `guiding_spirit: Optional[SpiritId]`
-- `presence_spirit: Optional[SpiritId]` (the spirit whose Worship this faction holds)
+- `worship_spirit: Optional[SpiritId]` (the spirit whose Worship this faction holds)
 - `eliminated: bool` (True when faction has 0 territories; eliminated factions skip all phases)
 
 Neighbors are determined dynamically: two factions are neighbors if any of their territories are adjacent on the hex grid.
@@ -315,7 +315,7 @@ class FactionState:
     change_modifiers: dict[str, int]
     regard: dict[str, int]
     guiding_spirit: str | None
-    presence_spirit: str | None
+    worship_spirit: str | None
     eliminated: bool
 
 @dataclass

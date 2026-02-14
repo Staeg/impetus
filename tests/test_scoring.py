@@ -27,7 +27,7 @@ class TestScoring:
         spirits["s1"] = s
         return hm, factions, spirits
 
-    def test_no_presence_no_score(self):
+    def test_no_worship_no_score(self):
         hm, factions, spirits = self._setup()
         events = calculate_scoring(factions, spirits, hm)
         assert len(events) == 0
@@ -36,7 +36,7 @@ class TestScoring:
         hm, factions, spirits = self._setup()
         spirit = spirits["s1"]
         faction = factions["mountain"]
-        faction.presence_spirit = "s1"
+        faction.worship_spirit = "s1"
         faction.wars_won_this_turn = 2
 
         # Place a battle idol in mountain territory (1, -1)
@@ -53,7 +53,7 @@ class TestScoring:
         hm, factions, spirits = self._setup()
         spirit = spirits["s1"]
         faction = factions["mountain"]
-        faction.presence_spirit = "s1"
+        faction.worship_spirit = "s1"
         faction.gold_gained_this_turn = 5
 
         idol = Idol(IdolType.AFFLUENCE, HexCoord(1, -1), "s1")
@@ -69,7 +69,7 @@ class TestScoring:
         hm, factions, spirits = self._setup()
         spirit = spirits["s1"]
         faction = factions["mountain"]
-        faction.presence_spirit = "s1"
+        faction.worship_spirit = "s1"
         faction.territories_gained_this_turn = 2
 
         idol = Idol(IdolType.SPREAD, HexCoord(1, -1), "s1")
@@ -85,7 +85,7 @@ class TestScoring:
         hm, factions, spirits = self._setup()
         spirit = spirits["s1"]
         faction = factions["mountain"]
-        faction.presence_spirit = "s1"
+        faction.worship_spirit = "s1"
         faction.wars_won_this_turn = 1
 
         idol = Idol(IdolType.BATTLE, HexCoord(1, -1), "s1")
@@ -100,7 +100,7 @@ class TestScoring:
         hm, factions, spirits = self._setup()
         spirit = spirits["s1"]
         faction = factions["mountain"]
-        faction.presence_spirit = "s1"
+        faction.worship_spirit = "s1"
         faction.wars_won_this_turn = 1
 
         # Place 2 battle idols
