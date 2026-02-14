@@ -27,7 +27,9 @@
       "Bash(git -C \"C:\\\\Users\\\\Stag\\\\impetus\" tag v1.15 0b51fbb)",
       "Bash(git -C \"C:\\\\Users\\\\Stag\\\\impetus\" tag v1.16 1b5abbd)",
       "Bash(git -C \"C:\\\\Users\\\\Stag\\\\impetus\" push origin v1.14 v1.15 v1.16)",
-      "Bash(gh release create:*)"
+      "Bash(gh release create:*)",
+      "Bash(find:*)",
+      "Bash(sort:*)"
     ]
   }
 }

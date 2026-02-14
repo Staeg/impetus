@@ -58,16 +58,10 @@ def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils)
         regard_penalty = -1 - steal_bonus
         regard_penalty_map[fid] = regard_penalty
         total_gained = 0
-        neighbors = []
+        neighbors = hex_map.get_live_neighbor_ids(fid, factions)
 
-        for other_fid, other_faction in factions.items():
-            if other_fid == fid:
-                continue
-            if other_faction.eliminated:
-                continue
-            if not hex_map.are_factions_neighbors(fid, other_fid):
-                continue
-            neighbors.append(other_fid)
+        for other_fid in neighbors:
+            other_faction = factions[other_fid]
             # Mark regard change
             regard_changes.append((fid, other_fid, regard_penalty))
             # Calculate gold loss for neighbor (but don't apply yet - simultaneous)
@@ -126,13 +120,7 @@ def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils)
 
     # Check for war eruptions
     for fid in playing_factions:
-        for other_fid in factions:
-            if other_fid == fid:
-                continue
-            if factions[other_fid].eliminated:
-                continue
-            if not hex_map.are_factions_neighbors(fid, other_fid):
-                continue
+        for other_fid in hex_map.get_live_neighbor_ids(fid, factions):
             regard = factions[fid].get_regard(other_fid)
             if regard <= -2:
                 # Check if war already exists between these two
@@ -157,16 +145,9 @@ def _resolve_bond(factions, hex_map, playing_factions, events, is_spoils=False):
         faction = factions[fid]
         bond_bonus = faction.change_modifiers.get(ChangeModifierTarget.BOND.value, 0)
         regard_gain = 1 + bond_bonus
-        neighbors = []
+        neighbors = hex_map.get_live_neighbor_ids(fid, factions)
 
-        for other_fid in factions:
-            if other_fid == fid:
-                continue
-            if factions[other_fid].eliminated:
-                continue
-            if not hex_map.are_factions_neighbors(fid, other_fid):
-                continue
-            neighbors.append(other_fid)
+        for other_fid in neighbors:
             faction.modify_regard(other_fid, regard_gain)
             factions[other_fid].modify_regard(fid, regard_gain)
 
@@ -270,7 +251,7 @@ def _resolve_change(factions, playing_factions, events, is_spoils=False):
         faction = factions[fid]
         # Draw a random change card
         card = random.choice(CHANGE_DECK)
-        faction.change_modifiers[card.value] = faction.change_modifiers.get(card.value, 0) + 1
+        faction.add_change_modifier(card.value)
         events.append({
             "type": "change",
             "faction": fid,

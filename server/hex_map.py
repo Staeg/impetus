@@ -54,6 +54,14 @@ class HexMap:
     def are_factions_neighbors(self, faction_a: str, faction_b: str) -> bool:
         return len(self.get_border_hex_pairs(faction_a, faction_b)) > 0
 
+    def get_live_neighbor_ids(self, faction_id: str, factions: dict) -> list[str]:
+        """Return IDs of non-eliminated factions neighboring faction_id."""
+        return [
+            fid for fid, f in factions.items()
+            if fid != faction_id and not f.eliminated
+            and self.are_factions_neighbors(faction_id, fid)
+        ]
+
     def claim_hex(self, hex_coord: tuple[int, int], faction_id: str):
         """Set ownership of a hex to a faction."""
         self.ownership[hex_coord] = faction_id

@@ -180,7 +180,7 @@ class UIRenderer:
                               spirits: dict = None,
                               preview_guidance: dict = None,
                               animated_agenda_factions: set = None):
-        """Draw a compact overview strip showing all factions' gold, agenda, wars, and presence."""
+        """Draw a compact overview strip showing all factions' gold, agenda, wars, and worship."""
         spirits = spirits or {}
         animated_agenda_factions = animated_agenda_factions or set()
         strip_y = 42
@@ -244,20 +244,20 @@ class UIRenderer:
             gold_text = self.small_font.render(f"{gold}g", True, (255, 220, 60))
             surface.blit(gold_text, (cx + 6 + abbr_surf.get_width() + 6, strip_y + 4))
 
-            # Presence indicator (first row, after gold)
-            presence_id = fd.get("presence_spirit") if isinstance(fd, dict) else getattr(fd, "presence_spirit", None)
+            # Worship indicator (first row, after gold)
+            worship_id = fd.get("worship_spirit") if isinstance(fd, dict) else getattr(fd, "worship_spirit", None)
             guiding_id = fd.get("guiding_spirit") if isinstance(fd, dict) else getattr(fd, "guiding_spirit", None)
-            presence_end_x = cx + 6 + abbr_surf.get_width() + 6 + gold_text.get_width()
-            if presence_id:
-                p_name = spirits.get(presence_id, {}).get("name", presence_id[:6])
+            worship_end_x = cx + 6 + abbr_surf.get_width() + 6 + gold_text.get_width()
+            if worship_id:
+                p_name = spirits.get(worship_id, {}).get("name", worship_id[:6])
                 p_surf = self.small_font.render(f" W:{p_name}", True, (100, 200, 180))
-                surface.blit(p_surf, (presence_end_x, strip_y + 4))
+                surface.blit(p_surf, (worship_end_x, strip_y + 4))
 
             # Preview guidance indicator (faded, with ? prefix)
             if preview_guidance and not guiding_id and fid in preview_guidance:
                 preview_name = preview_guidance[fid]
                 pv_surf = self.small_font.render(f" ?{preview_name}", True, (80, 80, 100))
-                surface.blit(pv_surf, (presence_end_x + (p_surf.get_width() if presence_id else 0), strip_y + 4))
+                surface.blit(pv_surf, (worship_end_x + (p_surf.get_width() if worship_id else 0), strip_y + 4))
 
             # Agenda name (right-aligned) - skip if animated
             if fid not in animated_agenda_factions:
@@ -307,12 +307,12 @@ class UIRenderer:
         regard = faction_data.get("regard", {})
         modifiers = faction_data.get("change_modifiers", {})
         guiding = faction_data.get("guiding_spirit")
-        presence = faction_data.get("presence_spirit")
+        worship = faction_data.get("worship_spirit")
 
         spirits = spirits or {}
         preview_guidance = preview_guidance or {}
         guiding_name = spirits.get(guiding, {}).get("name", guiding) if guiding else "none"
-        presence_name = spirits.get(presence, {}).get("name", presence) if presence else "none"
+        worship_name = spirits.get(worship, {}).get("name", worship) if worship else "none"
 
         panel_h = 200 + len(regard) * 18
         panel_rect = pygame.Rect(x, y, width, panel_h)
@@ -338,8 +338,8 @@ class UIRenderer:
             ("Territories", f"Territories: {len(territories)}", None),
             ("Guided by", f"Guided by: {guiding_name}",
              f"Guided by: {preview_guid_name}?" if guiding_name == "none" and preview_guid_name else None),
-            ("Worshipping", f"Worshipping: {presence_name}",
-             f"Worshipping: {preview_guid_name}?" if presence_name == "none" and preview_guid_name else None),
+            ("Worshipping", f"Worshipping: {worship_name}",
+             f"Worshipping: {preview_guid_name}?" if worship_name == "none" and preview_guid_name else None),
         ]
         for label, line, preview_line in info_lines:
             if preview_line:

@@ -31,7 +31,7 @@ class Faction:
         }
         self.regard: dict[str, int] = {}
         self.guiding_spirit: Optional[str] = None
-        self.presence_spirit: Optional[str] = None
+        self.worship_spirit: Optional[str] = None
         self.eliminated: bool = False
         # Turn tracking for scoring
         self.gold_gained_this_turn: int = 0
@@ -91,6 +91,9 @@ class Faction:
     def add_agenda_card(self, agenda_type: AgendaType):
         self.agenda_deck.append(AgendaCard(agenda_type))
 
+    def add_change_modifier(self, card_value: str):
+        self.change_modifiers[card_value] = self.change_modifiers.get(card_value, 0) + 1
+
     def add_spoils_card(self, agenda_type: AgendaType):
         """Stage a Spoils of War card for permanent addition during cleanup."""
         self.spoils_cards_this_turn.append(AgendaCard(agenda_type))
@@ -117,6 +120,6 @@ class Faction:
             change_modifiers=dict(self.change_modifiers),
             regard=dict(self.regard),
             guiding_spirit=self.guiding_spirit,
-            presence_spirit=self.presence_spirit,
+            worship_spirit=self.worship_spirit,
             eliminated=self.eliminated,
         )

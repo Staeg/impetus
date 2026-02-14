@@ -3,6 +3,50 @@
 import time
 
 
+def ease_out_cubic(t):
+    return 1.0 - (1.0 - t) ** 3
+
+
+def ease_out_quad(t):
+    return 1.0 - (1.0 - t) ** 2
+
+
+def fade_alpha(progress, hold=0.3):
+    if progress < hold:
+        return 255
+    return max(0, int(255 * (1.0 - (progress - hold) / (1.0 - hold))))
+
+
+class BaseAnimation:
+    """Base class for delay/duration animations with active, progress, alpha."""
+
+    def __init__(self, delay=0.0, duration=1.5):
+        self.delay = delay
+        self.duration = duration
+        self.elapsed = 0.0
+        self.done = False
+
+    def update(self, dt: float):
+        self.elapsed += dt
+        if self.elapsed >= self.delay + self.duration:
+            self.done = True
+
+    @property
+    def active(self) -> bool:
+        return self.elapsed >= self.delay and not self.done
+
+    @property
+    def progress(self) -> float:
+        if self.elapsed < self.delay:
+            return 0.0
+        t = (self.elapsed - self.delay) / self.duration
+        return min(1.0, max(0.0, t))
+
+    @property
+    def alpha(self) -> int:
+        return fade_alpha(self.progress)
+
+
 class Tween:
     """A simple value tween."""
 
@@ -16,8 +60,7 @@ class Tween:
     def update(self, dt: float) -> float:
         self.elapsed += dt
         t = min(1.0, self.elapsed / self.duration) if self.duration > 0 else 1.0
-        # Ease out cubic
-        t = 1.0 - (1.0 - t) ** 3
+        t = ease_out_cubic(t)
         if self.elapsed >= self.duration:
             self.done = True
         return self.start_val + (self.end_val - self.start_val) * t
@@ -25,7 +68,7 @@ class Tween:
     @property
     def value(self) -> float:
         t = min(1.0, self.elapsed / self.duration) if self.duration > 0 else 1.0
-        t = 1.0 - (1.0 - t) ** 3
+        t = ease_out_cubic(t)
         return self.start_val + (self.end_val - self.start_val) * t
 
 
@@ -35,6 +78,9 @@ class AnimationManager:
     def __init__(self):
         self.tweens: dict[str, Tween] = {}
         self.flash_timers: dict[str, float] = {}
+        self.agenda_animations: list[AgendaAnimation] = []
+        self.effect_animations: list = []
+        self.persistent_agenda_animations: list[AgendaSlideAnimation] = []
 
     def add_tween(self, key: str, start: float, end: float, duration: float):
         self.tweens[key] = Tween(start, end, duration)
@@ -59,24 +105,18 @@ class AnimationManager:
         for key in done_flashes:
             del self.flash_timers[key]
 
-        # Update agenda animations
-        if hasattr(self, "agenda_animations"):
-            for anim in self.agenda_animations:
-                anim.update(dt)
-            self.agenda_animations = [a for a in self.agenda_animations if not a.done]
+        for anim in self.agenda_animations:
+            anim.update(dt)
+        self.agenda_animations = [a for a in self.agenda_animations if not a.done]
 
-        # Update effect animations
-        if hasattr(self, "effect_animations"):
-            for anim in self.effect_animations:
-                anim.update(dt)
-            self.effect_animations = [a for a in self.effect_animations if not a.done]
+        for anim in self.effect_animations:
+            anim.update(dt)
+        self.effect_animations = [a for a in self.effect_animations if not a.done]
 
-        # Update persistent agenda animations
-        if hasattr(self, "persistent_agenda_animations"):
-            for anim in self.persistent_agenda_animations:
-                anim.update(dt)
-            self.persistent_agenda_animations = [
-                a for a in self.persistent_agenda_animations if not a.done]
+        for anim in self.persistent_agenda_animations:
+            anim.update(dt)
+        self.persistent_agenda_animations = [
+            a for a in self.persistent_agenda_animations if not a.done]
 
     def get_tween_value(self, key: str, default: float = 0.0) -> float:
         if key in self.tweens:
@@ -89,25 +129,17 @@ class AnimationManager:
     # --- Agenda animations (old world-space) ---
 
     def add_agenda_animation(self, anim: "AgendaAnimation"):
-        if not hasattr(self, "agenda_animations"):
-            self.agenda_animations: list[AgendaAnimation] = []
         self.agenda_animations.append(anim)
 
     def get_active_agenda_animations(self) -> list["AgendaAnimation"]:
-        if not hasattr(self, "agenda_animations"):
-            return []
         return [a for a in self.agenda_animations if not a.done]
 
     # --- Persistent agenda slide animations ---
 
     def add_persistent_agenda_animation(self, anim: "AgendaSlideAnimation"):
-        if not hasattr(self, "persistent_agenda_animations"):
-            self.persistent_agenda_animations: list[AgendaSlideAnimation] = []
         self.persistent_agenda_animations.append(anim)
 
     def get_persistent_agenda_animations(self) -> list["AgendaSlideAnimation"]:
-        if not hasattr(self, "persistent_agenda_animations"):
-            return []
         return [a for a in self.persistent_agenda_animations if not a.done]
 
     def get_persistent_agenda_factions(self) -> set[str]:
@@ -126,8 +158,6 @@ class AnimationManager:
 
         If spoils_only is True, only fade spoils animations.
         """
-        if not hasattr(self, "persistent_agenda_animations"):
-            return
         for anim in self.persistent_agenda_animations:
             if not anim.done:
                 if spoils_only and not anim.is_spoils:
@@ -139,14 +169,10 @@ class AnimationManager:
 
     def has_active_persistent_agenda_animations(self) -> bool:
         """Return True if any persistent agenda animations are currently visible."""
-        if not hasattr(self, "persistent_agenda_animations"):
-            return False
         return any(a.active and not a.done for a in self.persistent_agenda_animations)
 
     def get_spoils_count_for_faction(self, faction_id: str) -> int:
         """Count non-done spoils animations for a faction (for stacking index)."""
-        if not hasattr(self, "persistent_agenda_animations"):
-            return 0
         return sum(1 for a in self.persistent_agenda_animations
                    if not a.done and a.is_spoils and a.faction_id == faction_id)
 
@@ -154,85 +180,45 @@ class AnimationManager:
         """Return True when no animations are actively in motion.
 
         Settled persistent animations (slide complete, not fading) are
-        NOT considered blocking — the queue system fades them when the
+        NOT considered blocking -- the queue system fades them when the
         next batch needs to play.
         """
-        if hasattr(self, "persistent_agenda_animations"):
-            if any(not a.done and not a.is_settled
-                   for a in self.persistent_agenda_animations):
-                return False
-        if hasattr(self, "effect_animations") and any(not a.done for a in self.effect_animations):
+        if any(not a.done and not a.is_settled
+               for a in self.persistent_agenda_animations):
+            return False
+        if any(not a.done for a in self.effect_animations):
             return False
         return True
 
     def has_active_spoils_animations(self) -> bool:
         """Return True if any active spoils animations exist."""
-        if not hasattr(self, "persistent_agenda_animations"):
-            return False
         return any(a.active and not a.done and a.is_spoils
                    for a in self.persistent_agenda_animations)
 
     # --- Effect animations ---
 
     def add_effect_animation(self, anim):
-        if not hasattr(self, "effect_animations"):
-            self.effect_animations: list = []
         self.effect_animations.append(anim)
 
     def get_active_effect_animations(self) -> list:
-        if not hasattr(self, "effect_animations"):
-            return []
         return [a for a in self.effect_animations if not a.done]
 
 
-class AgendaAnimation:
+class AgendaAnimation(BaseAnimation):
     """Floating agenda icon that rises and fades over a faction's territory."""
 
     def __init__(self, image: "pygame.Surface", world_x: float, world_y: float,
                  delay: float = 0.0, duration: float = 1.5, rise_pixels: float = 40):
+        super().__init__(delay=delay, duration=duration)
         self.image = image
         self.world_x = world_x
         self.world_y = world_y
-        self.delay = delay
-        self.duration = duration
         self.rise_pixels = rise_pixels
-        self.elapsed = 0.0
-        self.done = False
-
-    def update(self, dt: float):
-        self.elapsed += dt
-        if self.elapsed >= self.delay + self.duration:
-            self.done = True
-
-    @property
-    def active(self) -> bool:
-        """True when past the delay and not yet done."""
-        return self.elapsed >= self.delay and not self.done
-
-    @property
-    def progress(self) -> float:
-        """0-1 progress through the visible portion of the animation."""
-        if self.elapsed < self.delay:
-            return 0.0
-        t = (self.elapsed - self.delay) / self.duration
-        return min(1.0, max(0.0, t))
-
-    @property
-    def alpha(self) -> int:
-        """Alpha value: holds full for first 30%, then fades out."""
-        p = self.progress
-        if p < 0.3:
-            return 255
-        # Fade from 1.0 to 0.0 over remaining 70%
-        fade = 1.0 - (p - 0.3) / 0.7
-        return max(0, int(255 * fade))
 
     @property
     def y_offset(self) -> float:
         """Ease-out upward drift in pixels."""
-        p = self.progress
-        # Ease out: 1 - (1-t)^2
-        eased = 1.0 - (1.0 - p) ** 2
+        eased = ease_out_quad(self.progress)
         return -eased * self.rise_pixels
 
 
@@ -297,14 +283,12 @@ class AgendaSlideAnimation:
 
     @property
     def x(self) -> float:
-        p = self.slide_progress
-        eased = 1.0 - (1.0 - p) ** 3  # ease-out cubic
+        eased = ease_out_cubic(self.slide_progress)
         return self.start_x + (self.target_x - self.start_x) * eased
 
     @property
     def y(self) -> float:
-        p = self.slide_progress
-        eased = 1.0 - (1.0 - p) ** 3
+        eased = ease_out_cubic(self.slide_progress)
         return self.start_y + (self.target_y - self.start_y) * eased
 
     @property
@@ -315,90 +299,35 @@ class AgendaSlideAnimation:
         return 255
 
 
-class TextAnimation:
+class TextAnimation(BaseAnimation):
     """Floating text that drifts and fades. Works in world or screen coords."""
 
     def __init__(self, text: str, x: float, y: float, color: tuple,
                  delay: float = 0.0, duration: float = 1.5,
                  drift_pixels: float = 20, direction: int = -1,
                  screen_space: bool = False):
+        super().__init__(delay=delay, duration=duration)
         self.text = text
         self.x = x
         self.y = y
         self.color = color
-        self.delay = delay
-        self.duration = duration
         self.drift_pixels = drift_pixels
         self.direction = direction  # -1 = up, 1 = down
         self.screen_space = screen_space
-        self.elapsed = 0.0
-        self.done = False
-
-    def update(self, dt: float):
-        self.elapsed += dt
-        if self.elapsed >= self.delay + self.duration:
-            self.done = True
-
-    @property
-    def active(self) -> bool:
-        return self.elapsed >= self.delay and not self.done
-
-    @property
-    def progress(self) -> float:
-        if self.elapsed < self.delay:
-            return 0.0
-        t = (self.elapsed - self.delay) / self.duration
-        return min(1.0, max(0.0, t))
-
-    @property
-    def alpha(self) -> int:
-        p = self.progress
-        if p < 0.3:
-            return 255
-        fade = 1.0 - (p - 0.3) / 0.7
-        return max(0, int(255 * fade))
 
     @property
     def y_offset(self) -> float:
-        p = self.progress
-        eased = 1.0 - (1.0 - p) ** 2
+        eased = ease_out_quad(self.progress)
         return self.direction * eased * self.drift_pixels
 
 
-class ArrowAnimation:
+class ArrowAnimation(BaseAnimation):
     """Arrow between two hexes that fades in and out."""
 
     def __init__(self, from_hex: tuple, to_hex: tuple, color: tuple,
                  delay: float = 0.0, duration: float = 1.5):
+        super().__init__(delay=delay, duration=duration)
         self.from_hex = from_hex
         self.to_hex = to_hex
         self.color = color
-        self.delay = delay
-        self.duration = duration
-        self.elapsed = 0.0
-        self.done = False
         self.screen_space = False  # always world-space
-
-    def update(self, dt: float):
-        self.elapsed += dt
-        if self.elapsed >= self.delay + self.duration:
-            self.done = True
-
-    @property
-    def active(self) -> bool:
-        return self.elapsed >= self.delay and not self.done
-
-    @property
-    def progress(self) -> float:
-        if self.elapsed < self.delay:
-            return 0.0
-        t = (self.elapsed - self.delay) / self.duration
-        return min(1.0, max(0.0, t))
-
-    @property
-    def alpha(self) -> int:
-        p = self.progress
-        if p < 0.3:
-            return 255
-        fade = 1.0 - (p - 0.3) / 0.7
-        return max(0, int(255 * fade))

@@ -62,7 +62,7 @@ class GameState:
         events.append({"type": "setup_start"})
         for fid, faction in self.factions.items():
             card = random.choice(CHANGE_DECK)
-            faction.change_modifiers[card.value] = faction.change_modifiers.get(card.value, 0) + 1
+            faction.add_change_modifier(card.value)
             events.append({
                 "type": "change",
                 "faction": fid,
@@ -121,12 +121,12 @@ class GameState:
             available_factions = [
                 fid for fid, f in self.factions.items()
                 if f.guiding_spirit is None and not f.eliminated
-                and f.presence_spirit != spirit_id
+                and f.worship_spirit != spirit_id
             ]
-            presence_blocked = [
+            worship_blocked = [
                 fid for fid, f in self.factions.items()
                 if f.guiding_spirit is None and not f.eliminated
-                and f.presence_spirit == spirit_id
+                and f.worship_spirit == spirit_id
             ]
             neutral_hexes = [
                 {"q": q, "r": r}
@@ -135,7 +135,7 @@ class GameState:
             return {
                 "action": "choose",
                 "available_factions": available_factions,
-                "presence_blocked": presence_blocked,
+                "worship_blocked": worship_blocked,
                 "neutral_hexes": neutral_hexes,
                 "idol_types": [t.value for t in IdolType],
                 "can_place_idol": not spirit.has_placed_idol_as_vagrant,
@@ -207,7 +207,7 @@ class GameState:
         # If both guidance and idol placement are available, require both
         can_guide = any(
             f.guiding_spirit is None and not f.eliminated
-            and f.presence_spirit != spirit.spirit_id
+            and f.worship_spirit != spirit.spirit_id
             for f in self.factions.values()
         )
         can_place_idol = (
@@ -323,8 +323,8 @@ class GameState:
                     "spirit": spirit_id,
                     "faction": target_faction,
                 })
-                # Check presence
-                self._check_presence(faction, spirit, events)
+                # Check worship
+                self._check_worship(faction, spirit, events)
             else:
                 # Contested - all fail, single event with all spirits
                 events.append({
@@ -337,26 +337,26 @@ class GameState:
         self.phase = Phase.AGENDA_PHASE
         return events
 
-    def _check_presence(self, faction: Faction, spirit: Spirit, events: list):
-        """Check and update presence for a faction when a spirit guides or leaves."""
-        if faction.presence_spirit is None:
-            faction.presence_spirit = spirit.spirit_id
+    def _check_worship(self, faction: Faction, spirit: Spirit, events: list):
+        """Check and update worship for a faction when a spirit guides or leaves."""
+        if faction.worship_spirit is None:
+            faction.worship_spirit = spirit.spirit_id
             events.append({
-                "type": "presence_gained",
+                "type": "worship_gained",
                 "spirit": spirit.spirit_id,
                 "faction": faction.faction_id,
             })
-        elif faction.presence_spirit != spirit.spirit_id:
+        elif faction.worship_spirit != spirit.spirit_id:
             # Compare idol counts
             current_idols = self.hex_map.count_spirit_idols_in_faction(
-                faction.presence_spirit, faction.faction_id)
+                faction.worship_spirit, faction.faction_id)
             new_idols = self.hex_map.count_spirit_idols_in_faction(
                 spirit.spirit_id, faction.faction_id)
             if new_idols >= current_idols:
-                old_spirit = faction.presence_spirit
-                faction.presence_spirit = spirit.spirit_id
+                old_spirit = faction.worship_spirit
+                faction.worship_spirit = spirit.spirit_id
                 events.append({
-                    "type": "presence_replaced",
+                    "type": "worship_replaced",
                     "spirit": spirit.spirit_id,
                     "old_spirit": old_spirit,
                     "faction": faction.faction_id,
@@ -385,8 +385,8 @@ class GameState:
                     "spirit": spirit.spirit_id,
                     "faction": fid,
                 })
-            # Clear presence
-            faction.presence_spirit = None
+            # Clear worship
+            faction.worship_spirit = None
             # Remove wars involving this faction
             wars_to_remove = [w for w in self.wars
                               if w.faction_a == fid or w.faction_b == fid]
@@ -496,7 +496,7 @@ class GameState:
         spirit = self.spirits[spirit_id]
         faction = self.factions[spirit.guided_faction]
         chosen = cards[card_index]
-        faction.change_modifiers[chosen.value] = faction.change_modifiers.get(chosen.value, 0) + 1
+        faction.add_change_modifier(chosen.value)
         del self.change_pending[spirit_id]
         # Store modifier so resolve_agenda_phase_after_changes can emit
         # a visual event in the normal resolution order.
@@ -606,8 +606,8 @@ class GameState:
         for spirit in spirits_to_eject:
             faction = self.factions[spirit.guided_faction]
             faction.guiding_spirit = None
-            # Check presence on leaving
-            self._check_presence(faction, spirit, events)
+            # Check worship on leaving
+            self._check_worship(faction, spirit, events)
             spirit.become_vagrant()
             events.append({
                 "type": "ejected",
@@ -746,7 +746,7 @@ class GameState:
         chosen = change_cards[card_index]
         winner = pending["winner"]
         faction = self.factions[winner]
-        faction.change_modifiers[chosen.value] = faction.change_modifiers.get(chosen.value, 0) + 1
+        faction.add_change_modifier(chosen.value)
         events.append({
             "type": "change",
             "faction": winner,

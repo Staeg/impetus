@@ -81,7 +81,7 @@ class FactionState:
     change_modifiers: dict[str, int] = field(default_factory=dict)
     regard: dict[str, int] = field(default_factory=dict)
     guiding_spirit: Optional[str] = None
-    presence_spirit: Optional[str] = None
+    worship_spirit: Optional[str] = None
     eliminated: bool = False
 
     def to_dict(self) -> dict:
@@ -102,7 +102,7 @@ class FactionState:
             "change_modifiers": self.change_modifiers,
             "regard": self.regard,
             "guiding_spirit": self.guiding_spirit,
-            "presence_spirit": self.presence_spirit,
+            "worship_spirit": self.worship_spirit,
             "eliminated": self.eliminated,
         }
 
@@ -116,7 +116,7 @@ class FactionState:
             change_modifiers=d.get("change_modifiers", {}),
             regard=d.get("regard", {}),
             guiding_spirit=d.get("guiding_spirit"),
-            presence_spirit=d.get("presence_spirit"),
+            worship_spirit=d.get("worship_spirit"),
             eliminated=d.get("eliminated", False),
         )
 

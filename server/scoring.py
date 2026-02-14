@@ -12,10 +12,10 @@ def calculate_scoring(factions: dict, spirits: dict, hex_map) -> list[dict]:
     events = []
 
     for faction_id, faction in factions.items():
-        if not faction.presence_spirit:
+        if not faction.worship_spirit:
             continue
 
-        spirit = spirits.get(faction.presence_spirit)
+        spirit = spirits.get(faction.worship_spirit)
         if not spirit:
             continue
 
