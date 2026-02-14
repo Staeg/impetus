@@ -235,12 +235,22 @@ class GameServer:
                 if error:
                     await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
                 else:
-                    # Broadcast the change event
-                    if change_events:
-                        await self._broadcast_phase_result(room, change_events)
-                    # Check if all change choices are in
-                    if not room.game_state.has_pending_change_choices():
-                        # All changes submitted - now resolve all agendas
+                    # Collect change events; don't broadcast until all spirits have chosen
+                    if not hasattr(room, '_pending_change_events'):
+                        room._pending_change_events = []
+                    room._pending_change_events.extend(change_events)
+                    # Update waiting list
+                    if room.game_state.has_pending_change_choices():
+                        waiting_for = list(room.game_state.change_pending.keys())
+                        await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                            "players_remaining": waiting_for,
+                        }))
+                    else:
+                        # All changes submitted - broadcast all change events together
+                        all_change_events = room._pending_change_events
+                        room._pending_change_events = []
+                        await self._broadcast_phase_result(room, all_change_events)
+                        # Now resolve all agendas
                         events = room.game_state.resolve_agenda_phase_after_changes()
                         await self._broadcast_phase_result(room, events)
                         if room.game_state.has_pending_sub_choices():

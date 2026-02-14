@@ -183,7 +183,7 @@ class UIRenderer:
         spirits = spirits or {}
         animated_agenda_factions = animated_agenda_factions or set()
         strip_y = 42
-        strip_h = 42
+        strip_h = 55
         sw = surface.get_width()
         cell_w = sw // len(FACTION_NAMES) if FACTION_NAMES else sw
 

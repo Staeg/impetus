@@ -323,11 +323,13 @@ class GameScene:
 
         elif msg_type == MessageType.PHASE_RESULT:
             active_sub_phase = self.phase if self.phase in (
-                "spoils_choice", "spoils_change_choice") else None
+                "change_choice", "spoils_choice", "spoils_change_choice") else None
             if "state" in payload:
                 self._update_state_from_snapshot(payload["state"])
-            # Preserve spoils sub-phases while this player still has cards to choose
-            if active_sub_phase == "spoils_choice" and self.spoils_cards:
+            # Preserve sub-phases while this player still has cards to choose
+            if active_sub_phase == "change_choice" and self.change_cards:
+                self.phase = active_sub_phase
+            elif active_sub_phase == "spoils_choice" and self.spoils_cards:
                 self.phase = active_sub_phase
             elif active_sub_phase == "spoils_change_choice" and self.spoils_change_cards:
                 self.phase = active_sub_phase
@@ -343,6 +345,12 @@ class GameScene:
                 "change": 4, "change_draw": 4,
             }
             agenda_events = [e for e in events if e.get("type", "") in _ANIM_ORDER]
+            # Fade out existing animations before creating new ones;
+            # add base delay so new animations start after old ones fade
+            base_delay = 0.0
+            if agenda_events and self.animation.get_persistent_agenda_animations():
+                self.animation.start_agenda_fadeout()
+                base_delay = AgendaSlideAnimation.FADEOUT_DURATION
             agenda_events.sort(key=lambda e: (
                 0 if e.get("is_setup") else 1,
                 _ANIM_ORDER[e["type"]],
@@ -366,7 +374,7 @@ class GameScene:
                 elif not faction_id:
                     print(f"[anim] No faction_id in {etype} event")
                 else:
-                    delay = agenda_anim_index * 1.0
+                    delay = base_delay + agenda_anim_index * 1.0
                     # Create slide animation into overview strip
                     img_w = img.get_width()
                     target_x, target_y = self._get_agenda_label_pos(faction_id, img_w)
@@ -404,7 +412,7 @@ class GameScene:
             if self.phase_options.get("can_place_idol", True):
                 self._build_idol_buttons()
             self.submit_button = Button(
-                pygame.Rect(SCREEN_WIDTH // 2 - 65, SCREEN_HEIGHT - 60, 130, 40),
+                pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
                 "Confirm", (60, 130, 60)
             )
 
@@ -413,7 +421,7 @@ class GameScene:
             self.agenda_hand = hand
             self.selected_agenda_index = -1
             self.submit_button = Button(
-                pygame.Rect(20, SCREEN_HEIGHT - 60, 130, 40),
+                pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
                 "Confirm", (60, 130, 60)
             )
 
@@ -440,7 +448,7 @@ class GameScene:
                 )
                 self.action_buttons.append(btn)
             self.submit_button = Button(
-                pygame.Rect(20, SCREEN_HEIGHT - 60, 130, 40),
+                pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
                 "Confirm", (60, 130, 60)
             )
 
@@ -594,13 +602,13 @@ class GameScene:
         try:
             idx = FACTION_NAMES.index(faction_id)
         except ValueError:
-            return (SCREEN_WIDTH // 2, 84)
+            return (SCREEN_WIDTH // 2, 97)
         cell_w = SCREEN_WIDTH // len(FACTION_NAMES)
         cx = idx * cell_w
         abbr = FACTION_DISPLAY_NAMES.get(faction_id, faction_id)
         abbr_w = self.small_font.size(abbr)[0]
         gold_x = cx + 6 + abbr_w + 6
-        return (gold_x, 84)  # strip_y(42) + strip_h(42)
+        return (gold_x, 97)  # strip_y(42) + strip_h(55)
 
     def _get_agenda_label_pos(self, faction_id: str, img_width: int) -> tuple[int, int]:
         """Get the target screen position for an agenda slide animation (right-aligned in strip cell)."""
@@ -617,7 +625,7 @@ class GameScene:
     def _get_agenda_slide_start(self, faction_id: str, img_width: int) -> tuple[int, int]:
         """Get the start screen position for an agenda slide animation (below strip)."""
         target_x, _ = self._get_agenda_label_pos(faction_id, img_width)
-        start_y = 42 + 42 + 20  # strip_y + strip_h + offset below
+        start_y = 42 + 55 + 20  # strip_y + strip_h + offset below
         return target_x, start_y
 
     def _get_faction_strip_pos(self, faction_id: str) -> tuple[int, int]:
@@ -625,10 +633,10 @@ class GameScene:
         try:
             idx = FACTION_NAMES.index(faction_id)
         except ValueError:
-            return (SCREEN_WIDTH // 2, 88)
+            return (SCREEN_WIDTH // 2, 101)
         cell_w = SCREEN_WIDTH // len(FACTION_NAMES)
         cx = idx * cell_w
-        return (cx + 6, 84 + 4)  # strip_y(42) + strip_h(42) = 84, plus padding
+        return (cx + 6, 97 + 4)  # strip_y(42) + strip_h(55) = 97, plus padding
 
     def _get_border_midpoints(self, faction_a: str, faction_b: str) -> list[tuple[float, float]]:
         """Get world-space midpoints of all border edges between two factions."""
@@ -1166,8 +1174,9 @@ class GameScene:
         )
 
     def _render_ejection_ui(self, screen):
-        title = self.font.render("Choose an Agenda card to add to the faction's deck:", True, (200, 200, 220))
-        screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, SCREEN_HEIGHT // 2 - 80))
+        faction_name = FACTION_DISPLAY_NAMES.get(self.ejection_faction, self.ejection_faction)
+        title = self.font.render(f"Choose an Agenda card to add to {faction_name}'s deck:", True, (200, 200, 220))
+        screen.blit(title, (20, SCREEN_HEIGHT // 2 - 80))
 
         # Highlight selected button
         for btn in self.action_buttons:
