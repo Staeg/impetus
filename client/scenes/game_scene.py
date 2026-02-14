@@ -985,7 +985,11 @@ class GameScene:
         elif etype == "turn_start":
             self.event_log.append(f"--- Turn {event.get('turn', '?')} ---")
             self.faction_agendas_this_turn.clear()
-            self.animation.start_agenda_fadeout()
+            # Only fade if no animations are still in motion and no
+            # batches queued; otherwise the queue system handles fading
+            # when the next batch arrives.
+            if not self._animation_queue and self.animation.is_all_done():
+                self.animation.start_agenda_fadeout()
         elif etype == "game_over":
             winners = event.get("winners", [])
             names = [self.spirits.get(w, {}).get("name", w[:6]) for w in winners]

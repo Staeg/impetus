@@ -151,9 +151,16 @@ class AnimationManager:
                    if not a.done and a.is_spoils and a.faction_id == faction_id)
 
     def is_all_done(self) -> bool:
-        """Return True when no animations of any kind are playing."""
-        if self.has_active_persistent_agenda_animations():
-            return False
+        """Return True when no animations are actively in motion.
+
+        Settled persistent animations (slide complete, not fading) are
+        NOT considered blocking — the queue system fades them when the
+        next batch needs to play.
+        """
+        if hasattr(self, "persistent_agenda_animations"):
+            if any(not a.done and not a.is_settled
+                   for a in self.persistent_agenda_animations):
+                return False
         if hasattr(self, "effect_animations") and any(not a.done for a in self.effect_animations):
             return False
         return True
@@ -274,6 +281,11 @@ class AgendaSlideAnimation:
     @property
     def active(self) -> bool:
         return self.elapsed >= self.delay and not self.done
+
+    @property
+    def is_settled(self) -> bool:
+        """True when slide is complete and animation is just displayed (not fading)."""
+        return self.active and not self._fading_out and self.slide_progress >= 1.0
 
     @property
     def slide_progress(self) -> float:
