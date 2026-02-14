@@ -698,12 +698,19 @@ class GameScene:
         if not self.animation.is_all_done():
             return
         # All animations done — check if we need to fade old ones first
-        if self.animation.get_persistent_agenda_animations():
-            # There are leftover (finished-sliding but visible) persistent anims
+        # (only non-auto-fadeout animations need explicit fadeout)
+        leftover = [a for a in self.animation.get_persistent_agenda_animations()
+                    if a.auto_fadeout_after is None]
+        if leftover:
             self.animation.start_agenda_fadeout()
             self._animation_fading = True
             return
-        # Nothing playing, process immediately
+        # Clear any remaining auto-fadeout animations before starting new batch
+        if hasattr(self.animation, "persistent_agenda_animations"):
+            for anim in self.animation.persistent_agenda_animations:
+                if anim.auto_fadeout_after is not None and not anim.done:
+                    anim.done = True
+        # Nothing blocking, process immediately
         batch = self._animation_queue.pop(0)
         self._process_animation_batch(batch)
 
@@ -1224,6 +1231,7 @@ class GameScene:
                     self.submit_button.enabled = has_guide or has_idol
                 self.submit_button.tooltip = None
             self.submit_button.draw(screen, self.font)
+            self.submit_button.draw_tooltip(screen, self.small_font)
 
     def _get_current_faction_modifiers(self) -> dict:
         """Get the change_modifiers for the current player's guided faction."""
@@ -1254,6 +1262,7 @@ class GameScene:
                 self.submit_button.enabled = self.selected_agenda_index >= 0
                 self.submit_button.tooltip = None
             self.submit_button.draw(screen, self.font)
+            self.submit_button.draw_tooltip(screen, self.small_font)
 
     def _render_change_ui(self, screen):
         if not self.change_cards:
@@ -1302,6 +1311,7 @@ class GameScene:
                 self.submit_button.enabled = self.selected_ejection_type is not None
                 self.submit_button.tooltip = None
             self.submit_button.draw(screen, self.font)
+            self.submit_button.draw_tooltip(screen, self.small_font)
 
     def _render_spoils_ui(self, screen):
         if not self.spoils_cards:
