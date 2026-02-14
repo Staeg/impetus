@@ -194,7 +194,7 @@ class AgendaSlideAnimation:
     """Agenda icon that slides from below faction name into the overview strip and persists."""
 
     SLIDE_DURATION = 0.75
-    FADEOUT_DURATION = 1.0
+    FADEOUT_DURATION = 3.0
 
     def __init__(self, image: "pygame.Surface", faction_id: str,
                  target_x: float, target_y: float,
