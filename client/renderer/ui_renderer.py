@@ -1,5 +1,6 @@
 """HUD, cards, faction info panels, phase indicators, event log."""
 
+import math
 import pygame
 from shared.constants import (
     Phase, AgendaType, IdolType, FACTION_COLORS, FACTION_DISPLAY_NAMES,
@@ -200,14 +201,12 @@ class UIRenderer:
             "change": (200, 140, 255),
         }
 
-        # Build war lookup: faction_id -> list of (opponent_abbr, is_ripe)
+        # Build war lookup: faction_id -> list of (opponent_faction_id, is_ripe)
         war_lookup = {}
         if wars:
             for war in wars:
-                fa_abbr = FACTION_DISPLAY_NAMES.get(war.faction_a, war.faction_a)
-                fb_abbr = FACTION_DISPLAY_NAMES.get(war.faction_b, war.faction_b)
-                war_lookup.setdefault(war.faction_a, []).append((fb_abbr, war.is_ripe))
-                war_lookup.setdefault(war.faction_b, []).append((fa_abbr, war.is_ripe))
+                war_lookup.setdefault(war.faction_a, []).append((war.faction_b, war.is_ripe))
+                war_lookup.setdefault(war.faction_b, []).append((war.faction_a, war.is_ripe))
 
         for i, fid in enumerate(FACTION_NAMES):
             fd = factions.get(fid)
@@ -269,14 +268,30 @@ class UIRenderer:
                     a_surf = self.small_font.render(a_label, True, a_color)
                     surface.blit(a_surf, (cx + cell_w - a_surf.get_width() - 6, strip_y + 4))
 
-            # War indicators (second row)
+            # War indicators (second row): crossed swords icon + tiny enemy hex per opponent
             if fid in war_lookup:
                 wx = cx + 6
-                for opponent_abbr, is_ripe in war_lookup[fid]:
-                    war_color = (255, 50, 50) if is_ripe else (180, 60, 60)
-                    war_surf = self.small_font.render(f"vs {opponent_abbr}", True, war_color)
-                    surface.blit(war_surf, (wx, strip_y + 22))
-                    wx += war_surf.get_width() + 6
+                any_ripe = any(ripe for _, ripe in war_lookup[fid])
+                sword_color = (255, 50, 50) if any_ripe else (180, 60, 60)
+                # Draw crossed swords icon (two diagonal lines)
+                sy = strip_y + 28  # vertical center of icon
+                pygame.draw.line(surface, sword_color, (wx, sy - 5), (wx + 10, sy + 5), 2)
+                pygame.draw.line(surface, sword_color, (wx + 10, sy - 5), (wx, sy + 5), 2)
+                wx += 14
+                # Draw tiny hex for each enemy faction
+                for opponent_fid, is_ripe in war_lookup[fid]:
+                    enemy_color = tuple(FACTION_COLORS.get(opponent_fid, (150, 150, 150)))
+                    hx, hy = wx + 5, sy  # center of tiny hex
+                    r = 5  # radius of tiny hex
+                    # Flat-top hexagon points
+                    points = []
+                    for k in range(6):
+                        angle = math.pi / 3 * k
+                        points.append((hx + r * math.cos(angle), hy + r * math.sin(angle)))
+                    pygame.draw.polygon(surface, enemy_color, points)
+                    if is_ripe:
+                        pygame.draw.polygon(surface, (255, 255, 255), points, 1)
+                    wx += 14
 
     def draw_faction_panel(self, surface: pygame.Surface, faction_data: dict,
                            x: int, y: int, width: int = 220, spirits: dict = None,
@@ -321,8 +336,8 @@ class UIRenderer:
         info_lines = [
             ("Gold", f"Gold: {gold}", None),
             ("Territories", f"Territories: {len(territories)}", None),
-            ("Guiding", f"Guiding: {guiding_name}",
-             f"Guiding: {preview_guid_name}?" if guiding_name == "none" and preview_guid_name else None),
+            ("Guided by", f"Guided by: {guiding_name}",
+             f"Guided by: {preview_guid_name}?" if guiding_name == "none" and preview_guid_name else None),
             ("Worshipping", f"Worshipping: {presence_name}",
              f"Worshipping: {preview_guid_name}?" if presence_name == "none" and preview_guid_name else None),
         ]
@@ -538,4 +553,4 @@ class UIRenderer:
         text = f"Waiting for: {', '.join(names)}"
         text_surf = self.font.render(text, True, (200, 200, 100))
         x = surface.get_width() // 2 - text_surf.get_width() // 2
-        surface.blit(text_surf, (x, 92))
+        surface.blit(text_surf, (x, 102))

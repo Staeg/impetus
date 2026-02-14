@@ -27,9 +27,9 @@ _BTN_W = 130
 _GUIDANCE_BTN_X = _GUIDANCE_CENTER_X - _BTN_W // 2
 _IDOL_BTN_X = _IDOL_CENTER_X - _BTN_W // 2
 
-# Title positions
-_TITLE_Y = 93
-_BTN_START_Y = 120
+# Title positions (below faction overview strip which ends at Y=97)
+_TITLE_Y = 102
+_BTN_START_Y = 129
 
 
 class GameScene:
@@ -692,10 +692,6 @@ class GameScene:
                     direction=1, screen_space=True,
                 ))
 
-    def _is_animating(self) -> bool:
-        """True if any animations are playing or queued."""
-        return not self.animation.is_all_done() or bool(self._animation_queue)
-
     def _try_process_next_animation_batch(self):
         """Process the next queued animation batch when current animations are done."""
         if not self._animation_queue:
@@ -1098,7 +1094,7 @@ class GameScene:
         if pf and pf in self.factions:
             self.ui_renderer.draw_faction_panel(
                 screen, self.factions[pf],
-                SCREEN_WIDTH - 240, 92, 230,
+                SCREEN_WIDTH - 240, 102, 230,
                 spirits=self.spirits,
                 preview_guidance=preview_guid_dict,
             )
