@@ -345,20 +345,25 @@ class GameScene:
                 "change": 4, "change_draw": 4,
             }
             agenda_events = [e for e in events if e.get("type", "") in _ANIM_ORDER]
-            # Fade out existing animations before creating new ones;
-            # add base delay so new animations start after old ones fade
+            # Split into regular and spoils events
+            regular_events = [e for e in agenda_events if not e.get("is_spoils")]
+            spoils_events = [e for e in agenda_events if e.get("is_spoils")]
+
+            # --- Regular events ---
             base_delay = 0.0
-            if agenda_events and self.animation.get_persistent_agenda_animations():
+            if regular_events and self.animation.has_active_persistent_agenda_animations():
                 self.animation.start_agenda_fadeout()
                 base_delay = AgendaSlideAnimation.FADEOUT_DURATION
-            agenda_events.sort(key=lambda e: (
+            elif regular_events and self.animation.get_persistent_agenda_animations():
+                self.animation.start_agenda_fadeout()
+            regular_events.sort(key=lambda e: (
                 0 if e.get("is_setup") else 1,
                 _ANIM_ORDER[e["type"]],
             ))
             agenda_anim_index = 0
-            for event in agenda_events:
+            setup_count = sum(1 for e in regular_events if e.get("is_setup"))
+            for event in regular_events:
                 etype = event["type"]
-                # Determine image key
                 if etype in ("change", "change_draw"):
                     modifier = event.get("modifier", "")
                     img_key = f"change_{modifier}" if f"change_{modifier}" in agenda_images else "change"
@@ -375,7 +380,10 @@ class GameScene:
                     print(f"[anim] No faction_id in {etype} event")
                 else:
                     delay = base_delay + agenda_anim_index * 1.0
-                    # Create slide animation into overview strip
+                    auto_fadeout = None
+                    if event.get("is_setup"):
+                        remaining = setup_count - agenda_anim_index - 1
+                        auto_fadeout = remaining * 1.0 + 2.0
                     img_w = img.get_width()
                     target_x, target_y = self._get_agenda_label_pos(faction_id, img_w)
                     start_x, start_y = self._get_agenda_slide_start(faction_id, img_w)
@@ -384,12 +392,59 @@ class GameScene:
                         target_x, target_y,
                         start_x, start_y,
                         delay=delay,
+                        auto_fadeout_after=auto_fadeout,
                     )
                     self.animation.add_persistent_agenda_animation(anim)
                     self._create_effect_animations(event, faction_id, delay)
                     agenda_anim_index += 1
-            if agenda_anim_index > 0:
-                print(f"[anim] Created {agenda_anim_index} agenda animations")
+
+            # --- Spoils events (stack below regular agenda icons) ---
+            spoils_base_delay = 0.0
+            if spoils_events and self.animation.has_active_spoils_animations():
+                self.animation.start_agenda_fadeout(spoils_only=True)
+                spoils_base_delay = AgendaSlideAnimation.FADEOUT_DURATION
+            spoils_events.sort(key=lambda e: _ANIM_ORDER[e["type"]])
+            spoils_batch_counts: dict[str, int] = {}  # faction_id -> count within this batch
+            spoils_anim_index = 0
+            for event in spoils_events:
+                etype = event["type"]
+                if etype in ("change", "change_draw"):
+                    modifier = event.get("modifier", "")
+                    img_key = f"change_{modifier}" if f"change_{modifier}" in agenda_images else "change"
+                elif etype == "expand_failed":
+                    img_key = "expand_failed"
+                else:
+                    img_key = {"steal": "steal", "bond": "bond", "trade": "trade",
+                               "expand": "expand", "expand_spoils": "expand"}[etype]
+                img = agenda_images.get(img_key)
+                faction_id = event.get("faction")
+                if not img:
+                    print(f"[anim] No image for '{img_key}' (loaded: {list(agenda_images.keys())})")
+                elif not faction_id:
+                    print(f"[anim] No faction_id in {etype} event")
+                else:
+                    delay = spoils_base_delay + spoils_anim_index * 1.0
+                    existing_spoils = self.animation.get_spoils_count_for_faction(faction_id)
+                    batch_local = spoils_batch_counts.get(faction_id, 0)
+                    row = 1 + existing_spoils + batch_local
+                    spoils_batch_counts[faction_id] = batch_local + 1
+                    img_w = img.get_width()
+                    target_x, target_y = self._get_agenda_label_pos(faction_id, img_w, row)
+                    start_x, start_y = self._get_agenda_slide_start(faction_id, img_w, row)
+                    anim = AgendaSlideAnimation(
+                        img, faction_id,
+                        target_x, target_y,
+                        start_x, start_y,
+                        delay=delay,
+                        is_spoils=True,
+                    )
+                    self.animation.add_persistent_agenda_animation(anim)
+                    self._create_effect_animations(event, faction_id, delay)
+                    spoils_anim_index += 1
+
+            total_anims = agenda_anim_index + spoils_anim_index
+            if total_anims > 0:
+                print(f"[anim] Created {total_anims} agenda animations ({agenda_anim_index} regular, {spoils_anim_index} spoils)")
             # Clear previews after processing phase results
             self.preview_guidance = None
             self.preview_idol = None
@@ -610,8 +665,11 @@ class GameScene:
         gold_x = cx + 6 + abbr_w + 6
         return (gold_x, 97)  # strip_y(42) + strip_h(55)
 
-    def _get_agenda_label_pos(self, faction_id: str, img_width: int) -> tuple[int, int]:
-        """Get the target screen position for an agenda slide animation (right-aligned in strip cell)."""
+    def _get_agenda_label_pos(self, faction_id: str, img_width: int, row: int = 0) -> tuple[int, int]:
+        """Get the target screen position for an agenda slide animation (right-aligned in strip cell).
+
+        row=0 is the default position; row=1+ stacks below with 24px offset per row.
+        """
         try:
             idx = FACTION_NAMES.index(faction_id)
         except ValueError:
@@ -619,12 +677,12 @@ class GameScene:
         cell_w = SCREEN_WIDTH // len(FACTION_NAMES)
         cx = idx * cell_w
         target_x = cx + cell_w - img_width - 6  # right edge minus padding minus image width
-        target_y = 42 + 4  # strip_y + small padding
+        target_y = 42 + 4 + row * 24  # strip_y + small padding + row offset
         return target_x, target_y
 
-    def _get_agenda_slide_start(self, faction_id: str, img_width: int) -> tuple[int, int]:
+    def _get_agenda_slide_start(self, faction_id: str, img_width: int, row: int = 0) -> tuple[int, int]:
         """Get the start screen position for an agenda slide animation (below strip)."""
-        target_x, _ = self._get_agenda_label_pos(faction_id, img_width)
+        target_x, _ = self._get_agenda_label_pos(faction_id, img_width, row)
         start_y = 42 + 55 + 20  # strip_y + strip_h + offset below
         return target_x, start_y
 
@@ -792,7 +850,8 @@ class GameScene:
             self.event_log.append(f"{prefix}{fname} stole {event.get('gold_gained', 0)} gold")
         elif etype == "bond":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"{fname} improved relations")
+            prefix = "Spoils: " if event.get("is_spoils") else ""
+            self.event_log.append(f"{prefix}{fname} improved relations")
         elif etype == "trade":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
             prefix = "Spoils: " if event.get("is_spoils") else ""
@@ -808,7 +867,8 @@ class GameScene:
             self.event_log.append(f"{fname} couldn't expand, gained gold")
         elif etype == "change":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-            self.event_log.append(f"{fname} upgraded {event.get('modifier', '?')}")
+            prefix = "Spoils: " if event.get("is_spoils") else ""
+            self.event_log.append(f"{prefix}{fname} upgraded {event.get('modifier', '?')}")
         elif etype == "change_draw":
             fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
             cards = event.get("cards", [])

@@ -118,13 +118,44 @@ class AnimationManager:
                 result.add(a.faction_id)
         return result
 
-    def start_agenda_fadeout(self):
-        """Trigger fade-out on all persistent agenda animations."""
+    def start_agenda_fadeout(self, spoils_only=False):
+        """Trigger fade-out on active persistent agenda animations.
+
+        Animations that haven't become active yet (still in delay) are
+        cancelled immediately since they were never visible.
+
+        If spoils_only is True, only fade spoils animations.
+        """
         if not hasattr(self, "persistent_agenda_animations"):
             return
         for anim in self.persistent_agenda_animations:
             if not anim.done:
-                anim.start_fadeout()
+                if spoils_only and not anim.is_spoils:
+                    continue
+                if anim.active:
+                    anim.start_fadeout()
+                else:
+                    anim.done = True
+
+    def has_active_persistent_agenda_animations(self) -> bool:
+        """Return True if any persistent agenda animations are currently visible."""
+        if not hasattr(self, "persistent_agenda_animations"):
+            return False
+        return any(a.active and not a.done for a in self.persistent_agenda_animations)
+
+    def get_spoils_count_for_faction(self, faction_id: str) -> int:
+        """Count non-done spoils animations for a faction (for stacking index)."""
+        if not hasattr(self, "persistent_agenda_animations"):
+            return 0
+        return sum(1 for a in self.persistent_agenda_animations
+                   if not a.done and a.is_spoils and a.faction_id == faction_id)
+
+    def has_active_spoils_animations(self) -> bool:
+        """Return True if any active spoils animations exist."""
+        if not hasattr(self, "persistent_agenda_animations"):
+            return False
+        return any(a.active and not a.done and a.is_spoils
+                   for a in self.persistent_agenda_animations)
 
     # --- Effect animations ---
 
@@ -199,14 +230,18 @@ class AgendaSlideAnimation:
     def __init__(self, image: "pygame.Surface", faction_id: str,
                  target_x: float, target_y: float,
                  start_x: float, start_y: float,
-                 delay: float = 0.0):
+                 delay: float = 0.0,
+                 auto_fadeout_after: float | None = None,
+                 is_spoils: bool = False):
         self.image = image
         self.faction_id = faction_id
+        self.is_spoils = is_spoils
         self.target_x = target_x
         self.target_y = target_y
         self.start_x = start_x
         self.start_y = start_y
         self.delay = delay
+        self.auto_fadeout_after = auto_fadeout_after
         self.elapsed = 0.0
         self.done = False
         self._fading_out = False
@@ -218,6 +253,9 @@ class AgendaSlideAnimation:
             self._fadeout_elapsed += dt
             if self._fadeout_elapsed >= self.FADEOUT_DURATION:
                 self.done = True
+        elif (self.auto_fadeout_after is not None
+              and self.elapsed >= self.delay + self.SLIDE_DURATION + self.auto_fadeout_after):
+            self.start_fadeout()
 
     def start_fadeout(self):
         self._fading_out = True
