@@ -150,6 +150,14 @@ class AnimationManager:
         return sum(1 for a in self.persistent_agenda_animations
                    if not a.done and a.is_spoils and a.faction_id == faction_id)
 
+    def is_all_done(self) -> bool:
+        """Return True when no animations of any kind are playing."""
+        if self.has_active_persistent_agenda_animations():
+            return False
+        if hasattr(self, "effect_animations") and any(not a.done for a in self.effect_animations):
+            return False
+        return True
+
     def has_active_spoils_animations(self) -> bool:
         """Return True if any active spoils animations exist."""
         if not hasattr(self, "persistent_agenda_animations"):

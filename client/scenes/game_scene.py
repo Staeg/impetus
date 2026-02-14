@@ -89,6 +89,10 @@ class GameScene:
         self.idol_title_rect: pygame.Rect | None = None
         self.idol_title_hovered: bool = False
 
+        # Animation queue: batches of agenda events processed sequentially
+        self._animation_queue: list[list[dict]] = []
+        self._animation_fading: bool = False
+
         self._font = None
         self._small_font = None
 
@@ -337,114 +341,16 @@ class GameScene:
             # Log all events in original order
             for event in events:
                 self._log_event(event)
-            # Collect agenda events and sort by animation display order
-            # Setup change events (is_setup=True) play first, then normal agenda order
+            # Collect agenda events for animation queuing
             _ANIM_ORDER = {
                 "trade": 0, "bond": 1, "steal": 2,
                 "expand": 3, "expand_failed": 3, "expand_spoils": 3,
                 "change": 4, "change_draw": 4,
             }
             agenda_events = [e for e in events if e.get("type", "") in _ANIM_ORDER]
-            # Split into regular and spoils events
-            regular_events = [e for e in agenda_events if not e.get("is_spoils")]
-            spoils_events = [e for e in agenda_events if e.get("is_spoils")]
-
-            # --- Regular events ---
-            base_delay = 0.0
-            if regular_events and self.animation.has_active_persistent_agenda_animations():
-                self.animation.start_agenda_fadeout()
-                base_delay = AgendaSlideAnimation.FADEOUT_DURATION
-            elif regular_events and self.animation.get_persistent_agenda_animations():
-                self.animation.start_agenda_fadeout()
-            regular_events.sort(key=lambda e: (
-                0 if e.get("is_setup") else 1,
-                _ANIM_ORDER[e["type"]],
-            ))
-            agenda_anim_index = 0
-            setup_count = sum(1 for e in regular_events if e.get("is_setup"))
-            for event in regular_events:
-                etype = event["type"]
-                if etype in ("change", "change_draw"):
-                    modifier = event.get("modifier", "")
-                    img_key = f"change_{modifier}" if f"change_{modifier}" in agenda_images else "change"
-                elif etype == "expand_failed":
-                    img_key = "expand_failed"
-                else:
-                    img_key = {"steal": "steal", "bond": "bond", "trade": "trade",
-                               "expand": "expand", "expand_spoils": "expand"}[etype]
-                img = agenda_images.get(img_key)
-                faction_id = event.get("faction")
-                if not img:
-                    print(f"[anim] No image for '{img_key}' (loaded: {list(agenda_images.keys())})")
-                elif not faction_id:
-                    print(f"[anim] No faction_id in {etype} event")
-                else:
-                    delay = base_delay + agenda_anim_index * 1.0
-                    auto_fadeout = None
-                    if event.get("is_setup"):
-                        remaining = setup_count - agenda_anim_index - 1
-                        auto_fadeout = remaining * 1.0 + 2.0
-                    img_w = img.get_width()
-                    target_x, target_y = self._get_agenda_label_pos(faction_id, img_w)
-                    start_x, start_y = self._get_agenda_slide_start(faction_id, img_w)
-                    anim = AgendaSlideAnimation(
-                        img, faction_id,
-                        target_x, target_y,
-                        start_x, start_y,
-                        delay=delay,
-                        auto_fadeout_after=auto_fadeout,
-                    )
-                    self.animation.add_persistent_agenda_animation(anim)
-                    self._create_effect_animations(event, faction_id, delay)
-                    agenda_anim_index += 1
-
-            # --- Spoils events (stack below regular agenda icons) ---
-            spoils_base_delay = 0.0
-            if spoils_events and self.animation.has_active_spoils_animations():
-                self.animation.start_agenda_fadeout(spoils_only=True)
-                spoils_base_delay = AgendaSlideAnimation.FADEOUT_DURATION
-            spoils_events.sort(key=lambda e: _ANIM_ORDER[e["type"]])
-            spoils_batch_counts: dict[str, int] = {}  # faction_id -> count within this batch
-            spoils_anim_index = 0
-            for event in spoils_events:
-                etype = event["type"]
-                if etype in ("change", "change_draw"):
-                    modifier = event.get("modifier", "")
-                    img_key = f"change_{modifier}" if f"change_{modifier}" in agenda_images else "change"
-                elif etype == "expand_failed":
-                    img_key = "expand_failed"
-                else:
-                    img_key = {"steal": "steal", "bond": "bond", "trade": "trade",
-                               "expand": "expand", "expand_spoils": "expand"}[etype]
-                img = agenda_images.get(img_key)
-                faction_id = event.get("faction")
-                if not img:
-                    print(f"[anim] No image for '{img_key}' (loaded: {list(agenda_images.keys())})")
-                elif not faction_id:
-                    print(f"[anim] No faction_id in {etype} event")
-                else:
-                    delay = spoils_base_delay + spoils_anim_index * 1.0
-                    existing_spoils = self.animation.get_spoils_count_for_faction(faction_id)
-                    batch_local = spoils_batch_counts.get(faction_id, 0)
-                    row = 1 + existing_spoils + batch_local
-                    spoils_batch_counts[faction_id] = batch_local + 1
-                    img_w = img.get_width()
-                    target_x, target_y = self._get_agenda_label_pos(faction_id, img_w, row)
-                    start_x, start_y = self._get_agenda_slide_start(faction_id, img_w, row)
-                    anim = AgendaSlideAnimation(
-                        img, faction_id,
-                        target_x, target_y,
-                        start_x, start_y,
-                        delay=delay,
-                        is_spoils=True,
-                    )
-                    self.animation.add_persistent_agenda_animation(anim)
-                    self._create_effect_animations(event, faction_id, delay)
-                    spoils_anim_index += 1
-
-            total_anims = agenda_anim_index + spoils_anim_index
-            if total_anims > 0:
-                print(f"[anim] Created {total_anims} agenda animations ({agenda_anim_index} regular, {spoils_anim_index} spoils)")
+            if agenda_events:
+                self._animation_queue.append(agenda_events)
+                self._try_process_next_animation_batch()
             # Clear previews after processing phase results
             self.preview_guidance = None
             self.preview_idol = None
@@ -774,6 +680,130 @@ class GameScene:
                     direction=1, screen_space=True,
                 ))
 
+    def _is_animating(self) -> bool:
+        """True if any animations are playing or queued."""
+        return not self.animation.is_all_done() or bool(self._animation_queue)
+
+    def _try_process_next_animation_batch(self):
+        """Process the next queued animation batch when current animations are done."""
+        if not self._animation_queue:
+            return
+        if self._animation_fading:
+            # We started a fadeout; wait for it to finish
+            if not self.animation.has_active_persistent_agenda_animations():
+                self._animation_fading = False
+                batch = self._animation_queue.pop(0)
+                self._process_animation_batch(batch)
+            return
+        if not self.animation.is_all_done():
+            return
+        # All animations done — check if we need to fade old ones first
+        if self.animation.get_persistent_agenda_animations():
+            # There are leftover (finished-sliding but visible) persistent anims
+            self.animation.start_agenda_fadeout()
+            self._animation_fading = True
+            return
+        # Nothing playing, process immediately
+        batch = self._animation_queue.pop(0)
+        self._process_animation_batch(batch)
+
+    def _process_animation_batch(self, agenda_events: list[dict]):
+        """Create animations for a batch of agenda events."""
+        _ANIM_ORDER = {
+            "trade": 0, "bond": 1, "steal": 2,
+            "expand": 3, "expand_failed": 3, "expand_spoils": 3,
+            "change": 4, "change_draw": 4,
+        }
+        regular_events = [e for e in agenda_events if not e.get("is_spoils")]
+        spoils_events = [e for e in agenda_events if e.get("is_spoils")]
+
+        # --- Regular events ---
+        regular_events.sort(key=lambda e: (
+            0 if e.get("is_setup") else 1,
+            _ANIM_ORDER.get(e["type"], 99),
+        ))
+        agenda_anim_index = 0
+        setup_count = sum(1 for e in regular_events if e.get("is_setup"))
+        for event in regular_events:
+            etype = event["type"]
+            if etype in ("change", "change_draw"):
+                modifier = event.get("modifier", "")
+                img_key = f"change_{modifier}" if f"change_{modifier}" in agenda_images else "change"
+            elif etype == "expand_failed":
+                img_key = "expand_failed"
+            else:
+                img_key = {"steal": "steal", "bond": "bond", "trade": "trade",
+                           "expand": "expand", "expand_spoils": "expand"}[etype]
+            img = agenda_images.get(img_key)
+            faction_id = event.get("faction")
+            if not img:
+                print(f"[anim] No image for '{img_key}' (loaded: {list(agenda_images.keys())})")
+            elif not faction_id:
+                print(f"[anim] No faction_id in {etype} event")
+            else:
+                delay = agenda_anim_index * 1.0
+                auto_fadeout = None
+                if event.get("is_setup"):
+                    remaining = setup_count - agenda_anim_index - 1
+                    auto_fadeout = remaining * 1.0 + 2.0
+                img_w = img.get_width()
+                target_x, target_y = self._get_agenda_label_pos(faction_id, img_w)
+                start_x, start_y = self._get_agenda_slide_start(faction_id, img_w)
+                anim = AgendaSlideAnimation(
+                    img, faction_id,
+                    target_x, target_y,
+                    start_x, start_y,
+                    delay=delay,
+                    auto_fadeout_after=auto_fadeout,
+                )
+                self.animation.add_persistent_agenda_animation(anim)
+                self._create_effect_animations(event, faction_id, delay)
+                agenda_anim_index += 1
+
+        # --- Spoils events (stack below regular agenda icons) ---
+        spoils_events.sort(key=lambda e: _ANIM_ORDER.get(e["type"], 99))
+        spoils_batch_counts: dict[str, int] = {}
+        spoils_anim_index = 0
+        for event in spoils_events:
+            etype = event["type"]
+            if etype in ("change", "change_draw"):
+                modifier = event.get("modifier", "")
+                img_key = f"change_{modifier}" if f"change_{modifier}" in agenda_images else "change"
+            elif etype == "expand_failed":
+                img_key = "expand_failed"
+            else:
+                img_key = {"steal": "steal", "bond": "bond", "trade": "trade",
+                           "expand": "expand", "expand_spoils": "expand"}[etype]
+            img = agenda_images.get(img_key)
+            faction_id = event.get("faction")
+            if not img:
+                print(f"[anim] No image for '{img_key}' (loaded: {list(agenda_images.keys())})")
+            elif not faction_id:
+                print(f"[anim] No faction_id in {etype} event")
+            else:
+                delay = spoils_anim_index * 1.0
+                existing_spoils = self.animation.get_spoils_count_for_faction(faction_id)
+                batch_local = spoils_batch_counts.get(faction_id, 0)
+                row = 1 + existing_spoils + batch_local
+                spoils_batch_counts[faction_id] = batch_local + 1
+                img_w = img.get_width()
+                target_x, target_y = self._get_agenda_label_pos(faction_id, img_w, row)
+                start_x, start_y = self._get_agenda_slide_start(faction_id, img_w, row)
+                anim = AgendaSlideAnimation(
+                    img, faction_id,
+                    target_x, target_y,
+                    start_x, start_y,
+                    delay=delay,
+                    is_spoils=True,
+                )
+                self.animation.add_persistent_agenda_animation(anim)
+                self._create_effect_animations(event, faction_id, delay)
+                spoils_anim_index += 1
+
+        total_anims = agenda_anim_index + spoils_anim_index
+        if total_anims > 0:
+            print(f"[anim] Created {total_anims} agenda animations ({agenda_anim_index} regular, {spoils_anim_index} spoils)")
+
     def _render_persistent_agenda_animations(self, screen: pygame.Surface):
         """Draw active persistent agenda slide animations in screen space."""
         for anim in self.animation.get_persistent_agenda_animations():
@@ -951,6 +981,7 @@ class GameScene:
 
     def update(self, dt):
         self.animation.update(dt)
+        self._try_process_next_animation_batch()
 
     def render(self, screen: pygame.Surface):
         screen.fill((10, 10, 18))
@@ -1179,14 +1210,19 @@ class GameScene:
 
         # Submit button
         if self.submit_button:
-            has_guide = bool(self.selected_faction)
-            has_idol = bool(self.selected_idol_type and self.selected_hex)
-            can_guide = bool(self.phase_options.get("available_factions"))
-            can_place_idol = bool(self.idol_buttons) and bool(self.phase_options.get("neutral_hexes"))
-            if can_guide and can_place_idol:
-                self.submit_button.enabled = has_guide and has_idol
+            if self._is_animating():
+                self.submit_button.enabled = False
+                self.submit_button.tooltip = "Previous actions are resolving..."
             else:
-                self.submit_button.enabled = has_guide or has_idol
+                has_guide = bool(self.selected_faction)
+                has_idol = bool(self.selected_idol_type and self.selected_hex)
+                can_guide = bool(self.phase_options.get("available_factions"))
+                can_place_idol = bool(self.idol_buttons) and bool(self.phase_options.get("neutral_hexes"))
+                if can_guide and can_place_idol:
+                    self.submit_button.enabled = has_guide and has_idol
+                else:
+                    self.submit_button.enabled = has_guide or has_idol
+                self.submit_button.tooltip = None
             self.submit_button.draw(screen, self.font)
 
     def _get_current_faction_modifiers(self) -> dict:
@@ -1211,7 +1247,12 @@ class GameScene:
             )
 
         if self.submit_button:
-            self.submit_button.enabled = self.selected_agenda_index >= 0
+            if self._is_animating():
+                self.submit_button.enabled = False
+                self.submit_button.tooltip = "Previous actions are resolving..."
+            else:
+                self.submit_button.enabled = self.selected_agenda_index >= 0
+                self.submit_button.tooltip = None
             self.submit_button.draw(screen, self.font)
 
     def _render_change_ui(self, screen):
@@ -1254,7 +1295,12 @@ class GameScene:
 
         # Confirm button
         if self.submit_button:
-            self.submit_button.enabled = self.selected_ejection_type is not None
+            if self._is_animating():
+                self.submit_button.enabled = False
+                self.submit_button.tooltip = "Previous actions are resolving..."
+            else:
+                self.submit_button.enabled = self.selected_ejection_type is not None
+                self.submit_button.tooltip = None
             self.submit_button.draw(screen, self.font)
 
     def _render_spoils_ui(self, screen):
