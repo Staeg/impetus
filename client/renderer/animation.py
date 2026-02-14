@@ -151,15 +151,9 @@ class AnimationManager:
                    if not a.done and a.is_spoils and a.faction_id == faction_id)
 
     def is_all_done(self) -> bool:
-        """Return True when no blocking animations are playing.
-
-        Auto-fadeout animations (setup Change modifiers) are non-blocking
-        since they manage their own lifecycle.
-        """
-        if hasattr(self, "persistent_agenda_animations"):
-            if any(a.active and not a.done and a.auto_fadeout_after is None
-                   for a in self.persistent_agenda_animations):
-                return False
+        """Return True when no animations of any kind are playing."""
+        if self.has_active_persistent_agenda_animations():
+            return False
         if hasattr(self, "effect_animations") and any(not a.done for a in self.effect_animations):
             return False
         return True

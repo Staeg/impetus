@@ -349,7 +349,19 @@ class GameScene:
             }
             agenda_events = [e for e in events if e.get("type", "") in _ANIM_ORDER]
             if agenda_events:
-                self._animation_queue.append(agenda_events)
+                # Split setup events into a separate batch so they play
+                # before resolution events (and don't visually overlap).
+                setup_events = [e for e in agenda_events if e.get("is_setup")]
+                if setup_events:
+                    resolution_events = [e for e in agenda_events if not e.get("is_setup")]
+                    self._animation_queue.append(setup_events)
+                    if resolution_events:
+                        # Mark so _process_animation_batch gives them auto_fadeout
+                        for e in resolution_events:
+                            e["_setup_turn"] = True
+                        self._animation_queue.append(resolution_events)
+                else:
+                    self._animation_queue.append(agenda_events)
                 self._try_process_next_animation_batch()
             # Clear previews after processing phase results
             self.preview_guidance = None
@@ -698,19 +710,12 @@ class GameScene:
         if not self.animation.is_all_done():
             return
         # All animations done — check if we need to fade old ones first
-        # (only non-auto-fadeout animations need explicit fadeout)
-        leftover = [a for a in self.animation.get_persistent_agenda_animations()
-                    if a.auto_fadeout_after is None]
-        if leftover:
+        if self.animation.get_persistent_agenda_animations():
+            # There are leftover (finished-sliding but visible) persistent anims
             self.animation.start_agenda_fadeout()
             self._animation_fading = True
             return
-        # Clear any remaining auto-fadeout animations before starting new batch
-        if hasattr(self.animation, "persistent_agenda_animations"):
-            for anim in self.animation.persistent_agenda_animations:
-                if anim.auto_fadeout_after is not None and not anim.done:
-                    anim.done = True
-        # Nothing blocking, process immediately
+        # Nothing playing, process immediately
         batch = self._animation_queue.pop(0)
         self._process_animation_batch(batch)
 
@@ -730,7 +735,10 @@ class GameScene:
             _ANIM_ORDER.get(e["type"], 99),
         ))
         agenda_anim_index = 0
-        setup_count = sum(1 for e in regular_events if e.get("is_setup"))
+        # Count events that should auto-fade (setup changes + setup-turn resolution)
+        auto_fade_count = sum(1 for e in regular_events
+                              if e.get("is_setup") or e.get("_setup_turn"))
+        auto_fade_idx = 0
         for event in regular_events:
             etype = event["type"]
             if etype in ("change", "change_draw"):
@@ -750,9 +758,10 @@ class GameScene:
             else:
                 delay = agenda_anim_index * 1.0
                 auto_fadeout = None
-                if event.get("is_setup"):
-                    remaining = setup_count - agenda_anim_index - 1
+                if event.get("is_setup") or event.get("_setup_turn"):
+                    remaining = auto_fade_count - auto_fade_idx - 1
                     auto_fadeout = remaining * 1.0 + 2.0
+                    auto_fade_idx += 1
                 img_w = img.get_width()
                 target_x, target_y = self._get_agenda_label_pos(faction_id, img_w)
                 start_x, start_y = self._get_agenda_slide_start(faction_id, img_w)
@@ -1217,21 +1226,15 @@ class GameScene:
 
         # Submit button
         if self.submit_button:
-            if self._is_animating():
-                self.submit_button.enabled = False
-                self.submit_button.tooltip = "Previous actions are resolving..."
+            has_guide = bool(self.selected_faction)
+            has_idol = bool(self.selected_idol_type and self.selected_hex)
+            can_guide = bool(self.phase_options.get("available_factions"))
+            can_place_idol = bool(self.idol_buttons) and bool(self.phase_options.get("neutral_hexes"))
+            if can_guide and can_place_idol:
+                self.submit_button.enabled = has_guide and has_idol
             else:
-                has_guide = bool(self.selected_faction)
-                has_idol = bool(self.selected_idol_type and self.selected_hex)
-                can_guide = bool(self.phase_options.get("available_factions"))
-                can_place_idol = bool(self.idol_buttons) and bool(self.phase_options.get("neutral_hexes"))
-                if can_guide and can_place_idol:
-                    self.submit_button.enabled = has_guide and has_idol
-                else:
-                    self.submit_button.enabled = has_guide or has_idol
-                self.submit_button.tooltip = None
+                self.submit_button.enabled = has_guide or has_idol
             self.submit_button.draw(screen, self.font)
-            self.submit_button.draw_tooltip(screen, self.small_font)
 
     def _get_current_faction_modifiers(self) -> dict:
         """Get the change_modifiers for the current player's guided faction."""
@@ -1255,14 +1258,8 @@ class GameScene:
             )
 
         if self.submit_button:
-            if self._is_animating():
-                self.submit_button.enabled = False
-                self.submit_button.tooltip = "Previous actions are resolving..."
-            else:
-                self.submit_button.enabled = self.selected_agenda_index >= 0
-                self.submit_button.tooltip = None
+            self.submit_button.enabled = self.selected_agenda_index >= 0
             self.submit_button.draw(screen, self.font)
-            self.submit_button.draw_tooltip(screen, self.small_font)
 
     def _render_change_ui(self, screen):
         if not self.change_cards:
@@ -1304,14 +1301,8 @@ class GameScene:
 
         # Confirm button
         if self.submit_button:
-            if self._is_animating():
-                self.submit_button.enabled = False
-                self.submit_button.tooltip = "Previous actions are resolving..."
-            else:
-                self.submit_button.enabled = self.selected_ejection_type is not None
-                self.submit_button.tooltip = None
+            self.submit_button.enabled = self.selected_ejection_type is not None
             self.submit_button.draw(screen, self.font)
-            self.submit_button.draw_tooltip(screen, self.small_font)
 
     def _render_spoils_ui(self, screen):
         if not self.spoils_cards:
