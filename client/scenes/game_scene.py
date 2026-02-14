@@ -92,6 +92,8 @@ class GameScene:
         # Animation queue: batches of agenda events processed sequentially
         self._animation_queue: list[list[dict]] = []
         self._animation_fading: bool = False
+        # Deferred PHASE_START: held until animations finish
+        self._deferred_phase_start: dict | None = None
 
         self._font = None
         self._small_font = None
@@ -317,10 +319,18 @@ class GameScene:
             self.event_log.append(f"Game started! Turn {self.turn}")
 
         elif msg_type == MessageType.PHASE_START:
-            self.phase = payload.get("phase", self.phase)
-            self.turn = payload.get("turn", self.turn)
-            self.phase_options = payload.get("options", {})
-            self._setup_phase_ui()
+            phase = payload.get("phase", "")
+            action = payload.get("options", {}).get("action", "")
+            needs_input = action not in ("none", "") or phase in (
+                "change_choice", "spoils_choice",
+                "spoils_change_choice", "ejection_choice")
+            if needs_input and self._has_animations_playing():
+                self._deferred_phase_start = payload
+            else:
+                self.phase = payload.get("phase", self.phase)
+                self.turn = payload.get("turn", self.turn)
+                self.phase_options = payload.get("options", {})
+                self._setup_phase_ui()
 
         elif msg_type == MessageType.WAITING_FOR:
             self.waiting_for = payload.get("players_remaining", [])
@@ -995,9 +1005,40 @@ class GameScene:
             names = [self.spirits.get(w, {}).get("name", w[:6]) for w in winners]
             self.event_log.append(f"GAME OVER! Winner(s): {', '.join(names)}")
 
+    def _has_animations_playing(self) -> bool:
+        """Check if any animations are active (queued, in motion, or visible)."""
+        if self._animation_queue or self._animation_fading:
+            return True
+        if not self.animation.is_all_done():
+            return True
+        if self.animation.has_active_persistent_agenda_animations():
+            return True
+        return False
+
+    def _try_show_deferred_phase_ui(self):
+        """Show deferred PHASE_START UI once all animations have finished."""
+        if not self._deferred_phase_start:
+            return
+        if self._animation_queue or self._animation_fading:
+            return
+        if not self.animation.is_all_done():
+            return
+        # Fade any settled persistent animations before showing UI
+        if self.animation.has_active_persistent_agenda_animations():
+            self.animation.start_agenda_fadeout()
+            return
+        # All clear — show the deferred UI
+        payload = self._deferred_phase_start
+        self._deferred_phase_start = None
+        self.phase = payload.get("phase", self.phase)
+        self.turn = payload.get("turn", self.turn)
+        self.phase_options = payload.get("options", {})
+        self._setup_phase_ui()
+
     def update(self, dt):
         self.animation.update(dt)
         self._try_process_next_animation_batch()
+        self._try_show_deferred_phase_ui()
 
     def render(self, screen: pygame.Surface):
         screen.fill((10, 10, 18))
@@ -1110,8 +1151,8 @@ class GameScene:
             scroll_offset=self.event_log_scroll_offset,
         )
 
-        # Draw waiting indicator
-        if self.waiting_for:
+        # Draw waiting indicator (suppress while UI is deferred for animations)
+        if self.waiting_for and not self._deferred_phase_start:
             self.ui_renderer.draw_waiting_overlay(screen, self.waiting_for, self.spirits)
 
         # Phase-specific UI
