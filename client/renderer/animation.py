@@ -71,6 +71,13 @@ class AnimationManager:
                 anim.update(dt)
             self.effect_animations = [a for a in self.effect_animations if not a.done]
 
+        # Update persistent agenda animations
+        if hasattr(self, "persistent_agenda_animations"):
+            for anim in self.persistent_agenda_animations:
+                anim.update(dt)
+            self.persistent_agenda_animations = [
+                a for a in self.persistent_agenda_animations if not a.done]
+
     def get_tween_value(self, key: str, default: float = 0.0) -> float:
         if key in self.tweens:
             return self.tweens[key].value
@@ -79,7 +86,7 @@ class AnimationManager:
     def is_flashing(self, key: str) -> bool:
         return key in self.flash_timers
 
-    # --- Agenda animations ---
+    # --- Agenda animations (old world-space) ---
 
     def add_agenda_animation(self, anim: "AgendaAnimation"):
         if not hasattr(self, "agenda_animations"):
@@ -90,6 +97,34 @@ class AnimationManager:
         if not hasattr(self, "agenda_animations"):
             return []
         return [a for a in self.agenda_animations if not a.done]
+
+    # --- Persistent agenda slide animations ---
+
+    def add_persistent_agenda_animation(self, anim: "AgendaSlideAnimation"):
+        if not hasattr(self, "persistent_agenda_animations"):
+            self.persistent_agenda_animations: list[AgendaSlideAnimation] = []
+        self.persistent_agenda_animations.append(anim)
+
+    def get_persistent_agenda_animations(self) -> list["AgendaSlideAnimation"]:
+        if not hasattr(self, "persistent_agenda_animations"):
+            return []
+        return [a for a in self.persistent_agenda_animations if not a.done]
+
+    def get_persistent_agenda_factions(self) -> set[str]:
+        """Return set of faction_ids that have active persistent agenda animations."""
+        result = set()
+        for a in self.get_persistent_agenda_animations():
+            if not a.done:
+                result.add(a.faction_id)
+        return result
+
+    def start_agenda_fadeout(self):
+        """Trigger fade-out on all persistent agenda animations."""
+        if not hasattr(self, "persistent_agenda_animations"):
+            return
+        for anim in self.persistent_agenda_animations:
+            if not anim.done:
+                anim.start_fadeout()
 
     # --- Effect animations ---
 
@@ -153,6 +188,71 @@ class AgendaAnimation:
         # Ease out: 1 - (1-t)^2
         eased = 1.0 - (1.0 - p) ** 2
         return -eased * self.rise_pixels
+
+
+class AgendaSlideAnimation:
+    """Agenda icon that slides from below faction name into the overview strip and persists."""
+
+    SLIDE_DURATION = 0.75
+    FADEOUT_DURATION = 1.0
+
+    def __init__(self, image: "pygame.Surface", faction_id: str,
+                 target_x: float, target_y: float,
+                 start_x: float, start_y: float,
+                 delay: float = 0.0):
+        self.image = image
+        self.faction_id = faction_id
+        self.target_x = target_x
+        self.target_y = target_y
+        self.start_x = start_x
+        self.start_y = start_y
+        self.delay = delay
+        self.elapsed = 0.0
+        self.done = False
+        self._fading_out = False
+        self._fadeout_elapsed = 0.0
+
+    def update(self, dt: float):
+        self.elapsed += dt
+        if self._fading_out:
+            self._fadeout_elapsed += dt
+            if self._fadeout_elapsed >= self.FADEOUT_DURATION:
+                self.done = True
+
+    def start_fadeout(self):
+        self._fading_out = True
+        self._fadeout_elapsed = 0.0
+
+    @property
+    def active(self) -> bool:
+        return self.elapsed >= self.delay and not self.done
+
+    @property
+    def slide_progress(self) -> float:
+        """0-1 progress through the slide-in phase."""
+        if self.elapsed < self.delay:
+            return 0.0
+        t = (self.elapsed - self.delay) / self.SLIDE_DURATION
+        return min(1.0, max(0.0, t))
+
+    @property
+    def x(self) -> float:
+        p = self.slide_progress
+        eased = 1.0 - (1.0 - p) ** 3  # ease-out cubic
+        return self.start_x + (self.target_x - self.start_x) * eased
+
+    @property
+    def y(self) -> float:
+        p = self.slide_progress
+        eased = 1.0 - (1.0 - p) ** 3
+        return self.start_y + (self.target_y - self.start_y) * eased
+
+    @property
+    def alpha(self) -> int:
+        if self._fading_out:
+            t = min(1.0, self._fadeout_elapsed / self.FADEOUT_DURATION)
+            return max(0, int(255 * (1.0 - t)))
+        return 255
 
 
 class TextAnimation:

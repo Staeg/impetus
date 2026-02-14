@@ -262,21 +262,6 @@ class GameState:
         del self.ejection_pending[spirit_id]
         return None
 
-    def submit_change_choice(self, spirit_id: str, card_index: int) -> Optional[str]:
-        """Submit the change card choice for guiding spirits."""
-        if spirit_id not in self.change_pending:
-            return "No change pending"
-        cards = self.change_pending[spirit_id]
-        if card_index < 0 or card_index >= len(cards):
-            return f"Invalid card index: {card_index}"
-        # Apply the chosen card
-        spirit = self.spirits[spirit_id]
-        faction = self.factions[spirit.guided_faction]
-        chosen = cards[card_index]
-        faction.change_modifiers[chosen.value] = faction.change_modifiers.get(chosen.value, 0) + 1
-        del self.change_pending[spirit_id]
-        return None
-
     def all_inputs_received(self) -> bool:
         return len(self.get_spirits_needing_input()) == 0
 
@@ -414,10 +399,15 @@ class GameState:
                     "faction": fid,
                 })
 
-    def _resolve_agenda_phase(self) -> list[dict]:
+    def prepare_change_choices(self) -> list[dict]:
+        """Process agenda inputs and identify Change choices needed before resolution.
+
+        Called after all agenda inputs received but BEFORE resolve.
+        Returns events for agenda_chosen/agenda_random + change_draw.
+        Stores agenda_choices on self for later resolution.
+        """
         events = []
         agenda_choices: dict[str, AgendaType] = {}
-        self.normal_trade_factions = []
 
         # Resolve spirit choices
         for spirit_id, action in self.pending_actions.items():
@@ -439,7 +429,6 @@ class GameState:
             })
 
         # Non-guided factions draw random agenda (skip eliminated)
-        # Card is removed from deck by draw_random_agenda and returned at cleanup
         for fid, faction in self.factions.items():
             if fid not in agenda_choices:
                 if faction.eliminated:
@@ -464,49 +453,84 @@ class GameState:
             if at == AgendaType.TRADE
         ]
 
-        # Handle Change differently for guided factions
-        change_factions_guided = []
-        change_factions_auto = []
+        # Store agenda choices for later resolution
+        self._stored_agenda_choices = agenda_choices
+        # Track which factions have guided change (modifier chosen by spirit)
+        self._guided_change_factions: list[str] = []
+
+        # Identify guided Change spirits that need to choose
         for fid, at in agenda_choices.items():
             if at == AgendaType.CHANGE:
                 faction = self.factions[fid]
                 if faction.guiding_spirit:
                     spirit = self.spirits[faction.guiding_spirit]
                     if spirit.influence > 0:
-                        change_factions_guided.append((fid, faction.guiding_spirit))
-                    else:
-                        change_factions_auto.append(fid)
-                else:
-                    change_factions_auto.append(fid)
+                        draw_count = 1 + spirit.influence
+                        cards = random.sample(CHANGE_DECK, min(draw_count, len(CHANGE_DECK)))
+                        self.change_pending[faction.guiding_spirit] = cards
+                        self._guided_change_factions.append(fid)
+                        events.append({
+                            "type": "change_draw",
+                            "spirit": faction.guiding_spirit,
+                            "faction": fid,
+                            "cards": [c.value for c in cards],
+                        })
 
-        # Resolve non-change agendas + auto-change
-        non_change_choices = {fid: at for fid, at in agenda_choices.items()
-                             if at != AgendaType.CHANGE}
-        # Add auto-change factions back
-        for fid in change_factions_auto:
-            non_change_choices[fid] = AgendaType.CHANGE
+        self.pending_actions.clear()
+        self.drawn_hands.clear()
 
-        resolve_agendas(self.factions, self.hex_map, non_change_choices,
+        return events
+
+    def has_pending_change_choices(self) -> bool:
+        """Check if there are still pending Change choices (separate from ejection)."""
+        return bool(self.change_pending)
+
+    def submit_change_choice(self, spirit_id: str, card_index: int) -> tuple[Optional[str], list[dict]]:
+        """Submit the change card choice for guiding spirits. Returns (error, events)."""
+        if spirit_id not in self.change_pending:
+            return "No change pending", []
+        cards = self.change_pending[spirit_id]
+        if card_index < 0 or card_index >= len(cards):
+            return f"Invalid card index: {card_index}", []
+        # Apply the chosen card
+        spirit = self.spirits[spirit_id]
+        faction = self.factions[spirit.guided_faction]
+        chosen = cards[card_index]
+        faction.change_modifiers[chosen.value] = faction.change_modifiers.get(chosen.value, 0) + 1
+        del self.change_pending[spirit_id]
+        events = [{
+            "type": "change",
+            "faction": spirit.guided_faction,
+            "modifier": chosen.value,
+        }]
+        return None, events
+
+    def resolve_agenda_phase_after_changes(self) -> list[dict]:
+        """Resolve all agendas after Change choices have been submitted.
+
+        Uses stored agenda_choices from prepare_change_choices().
+        Guided change factions already had their modifier applied, so exclude
+        them from the Change resolution in resolve_agendas.
+        """
+        events = []
+        agenda_choices = self._stored_agenda_choices
+        guided_change = self._guided_change_factions
+
+        # Build resolution choices excluding guided change factions
+        # (their modifier was already applied via submit_change_choice)
+        resolve_choices = {}
+        for fid, at in agenda_choices.items():
+            if at == AgendaType.CHANGE and fid in guided_change:
+                continue  # Skip - already resolved
+            resolve_choices[fid] = at
+
+        resolve_agendas(self.factions, self.hex_map, resolve_choices,
                        self.wars, events)
-
-        # Handle guided change (spirit gets to choose)
-        for fid, spirit_id in change_factions_guided:
-            spirit = self.spirits[spirit_id]
-            draw_count = 1 + spirit.influence
-            cards = random.sample(CHANGE_DECK, min(draw_count, len(CHANGE_DECK)))
-            self.change_pending[spirit_id] = cards
-            events.append({
-                "type": "change_draw",
-                "spirit": spirit_id,
-                "faction": fid,
-                "cards": [c.value for c in cards],
-            })
 
         # Check for ejection (0 influence spirits)
         for spirit in self.spirits.values():
             if not spirit.is_vagrant and spirit.guided_faction and spirit.influence == 0:
                 faction_id = spirit.guided_faction
-                faction = self.factions[faction_id]
                 self.ejection_pending[spirit.spirit_id] = faction_id
                 events.append({
                     "type": "ejection_pending",
@@ -514,17 +538,32 @@ class GameState:
                     "faction": faction_id,
                 })
 
-        self.pending_actions.clear()
-        self.drawn_hands.clear()
-
-        # If no change/ejection choices needed, advance
-        if not self.change_pending and not self.ejection_pending:
+        # If no ejection choices needed, advance
+        if not self.ejection_pending:
             self._finalize_agenda_phase(events)
 
+        self._stored_agenda_choices = {}
+        self._guided_change_factions = []
         return events
 
+    def _resolve_agenda_phase(self) -> list[dict]:
+        """Resolve agenda phase (direct path via resolve_current_phase).
+
+        Handles both prepare and resolve in one step. Used when called
+        directly (e.g. from tests or when no change choices are needed).
+        """
+        if not hasattr(self, '_stored_agenda_choices') or not self._stored_agenda_choices:
+            # Need to prepare first (direct call path)
+            events = self.prepare_change_choices()
+            if self.change_pending:
+                # Change choices needed - can't resolve yet
+                return events
+            events.extend(self.resolve_agenda_phase_after_changes())
+            return events
+        return self.resolve_agenda_phase_after_changes()
+
     def finalize_sub_choices(self) -> list[dict]:
-        """Called after all change/ejection choices are submitted."""
+        """Called after all ejection choices are submitted."""
         events = []
         self._finalize_agenda_phase(events)
         return events
@@ -699,4 +738,5 @@ class GameState:
         return None, events
 
     def has_pending_sub_choices(self) -> bool:
-        return bool(self.change_pending) or bool(self.ejection_pending)
+        """Check if ejection choices are still pending (change is handled earlier)."""
+        return bool(self.ejection_pending)

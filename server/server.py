@@ -226,18 +226,28 @@ class GameServer:
                 else:
                     await self._broadcast_waiting(room)
                     if room.game_state.all_inputs_received():
-                        await self._resolve_and_advance(room)
+                        await self._handle_agenda_resolution(room)
 
         elif msg_type == MessageType.SUBMIT_CHANGE_CHOICE:
             if room.game_state:
-                error = room.game_state.submit_change_choice(
+                error, change_events = room.game_state.submit_change_choice(
                     spirit_id, payload.get("card_index", 0))
                 if error:
                     await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
-                elif not room.game_state.has_pending_sub_choices():
-                    events = room.game_state.finalize_sub_choices()
-                    await self._broadcast_phase_result(room, events)
-                    await self._auto_resolve_phases(room)
+                else:
+                    # Broadcast the change event
+                    if change_events:
+                        await self._broadcast_phase_result(room, change_events)
+                    # Check if all change choices are in
+                    if not room.game_state.has_pending_change_choices():
+                        # All changes submitted - now resolve all agendas
+                        events = room.game_state.resolve_agenda_phase_after_changes()
+                        await self._broadcast_phase_result(room, events)
+                        if room.game_state.has_pending_sub_choices():
+                            # Ejection choices needed
+                            await self._send_ejection_options(room)
+                        else:
+                            await self._auto_resolve_phases(room)
 
         elif msg_type == MessageType.SUBMIT_EJECTION_AGENDA:
             if room.game_state:
@@ -333,36 +343,58 @@ class GameServer:
             "players_remaining": remaining,
         }))
 
-    async def _resolve_and_advance(self, room: GameRoom):
+    async def _handle_agenda_resolution(self, room: GameRoom):
+        """Handle agenda phase after all inputs received: prepare changes first."""
         gs = room.game_state
-        events = gs.resolve_current_phase()
-        await self._broadcast_phase_result(room, events)
+        change_events = gs.prepare_change_choices()
+        await self._broadcast_phase_result(room, change_events)
 
-        # If sub-choices are needed, wait for them
-        if gs.has_pending_sub_choices():
-            # Send change/ejection options
+        if gs.has_pending_change_choices():
+            # Send change_choice to each pending spirit
             for spirit_id, cards in gs.change_pending.items():
                 await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
                     "phase": "change_choice",
                     "turn": gs.turn,
                     "options": {"cards": [c.value for c in cards]},
                 }))
-            for spirit_id, faction_id in gs.ejection_pending.items():
-                await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
-                    "phase": "ejection_choice",
-                    "turn": gs.turn,
-                    "options": {
-                        "faction": faction_id,
-                        "agenda_types": [at.value for at in AgendaType],
-                    },
-                }))
-            # Broadcast who we're waiting for so other players see the wait state
-            waiting_for = list(gs.change_pending.keys()) + list(gs.ejection_pending.keys())
+            waiting_for = list(gs.change_pending.keys())
             await room.broadcast(create_message(MessageType.WAITING_FOR, {
                 "players_remaining": waiting_for,
             }))
             return
 
+        # No change choices needed - resolve immediately
+        events = gs.resolve_agenda_phase_after_changes()
+        await self._broadcast_phase_result(room, events)
+
+        if gs.has_pending_sub_choices():
+            await self._send_ejection_options(room)
+            return
+
+        await self._auto_resolve_phases(room)
+
+    async def _send_ejection_options(self, room: GameRoom):
+        """Send ejection choice options to spirits that need them."""
+        gs = room.game_state
+        for spirit_id, faction_id in gs.ejection_pending.items():
+            await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
+                "phase": "ejection_choice",
+                "turn": gs.turn,
+                "options": {
+                    "faction": faction_id,
+                    "agenda_types": [at.value for at in AgendaType],
+                },
+            }))
+        waiting_for = list(gs.ejection_pending.keys())
+        await room.broadcast(create_message(MessageType.WAITING_FOR, {
+            "players_remaining": waiting_for,
+        }))
+
+    async def _resolve_and_advance(self, room: GameRoom):
+        """Resolve current phase and advance. Used for non-agenda phases."""
+        gs = room.game_state
+        events = gs.resolve_current_phase()
+        await self._broadcast_phase_result(room, events)
         await self._auto_resolve_phases(room)
 
     async def _auto_resolve_phases(self, room: GameRoom):

@@ -177,9 +177,11 @@ class UIRenderer:
     def draw_faction_overview(self, surface: pygame.Surface, factions: dict,
                               faction_agendas: dict[str, str], wars=None,
                               spirits: dict = None,
-                              preview_guidance: dict = None):
+                              preview_guidance: dict = None,
+                              animated_agenda_factions: set = None):
         """Draw a compact overview strip showing all factions' gold, agenda, wars, and presence."""
         spirits = spirits or {}
+        animated_agenda_factions = animated_agenda_factions or set()
         strip_y = 42
         strip_h = 42
         sw = surface.get_width()
@@ -258,13 +260,14 @@ class UIRenderer:
                 pv_surf = self.small_font.render(f" ?{preview_name}", True, (80, 80, 100))
                 surface.blit(pv_surf, (presence_end_x + (p_surf.get_width() if presence_id else 0), strip_y + 4))
 
-            # Agenda name (right-aligned)
-            agenda_str = faction_agendas.get(fid, "")
-            if agenda_str:
-                a_label = agenda_str.title()
-                a_color = agenda_colors.get(agenda_str, (160, 160, 180))
-                a_surf = self.small_font.render(a_label, True, a_color)
-                surface.blit(a_surf, (cx + cell_w - a_surf.get_width() - 6, strip_y + 4))
+            # Agenda name (right-aligned) - skip if animated
+            if fid not in animated_agenda_factions:
+                agenda_str = faction_agendas.get(fid, "")
+                if agenda_str:
+                    a_label = agenda_str.title()
+                    a_color = agenda_colors.get(agenda_str, (160, 160, 180))
+                    a_surf = self.small_font.render(a_label, True, a_color)
+                    surface.blit(a_surf, (cx + cell_w - a_surf.get_width() - 6, strip_y + 4))
 
             # War indicators (second row)
             if fid in war_lookup:
