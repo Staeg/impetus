@@ -115,7 +115,7 @@ class FactionChangeTracker:
 
         elif etype == "steal":
             gold = event.get("gold_gained", 0)
-            penalty = event.get("regard_penalty", -1)  # server sends negative
+            penalty = event.get("regard_penalty", 1)
             neighbors = event.get("neighbors", [])
             if gold:
                 self._add(faction_id, ChangeEntry(
@@ -124,15 +124,15 @@ class FactionChangeTracker:
                 ))
             for nb in neighbors:
                 # Neighbor loses gold (we don't know exact per-neighbor amounts from the event)
-                # Regard is bilateral; penalty is already negative from server
+                # Regard is bilateral; negate penalty (positive magnitude from server)
                 if penalty:
                     self._add(faction_id, ChangeEntry(
-                        field="regard", delta=penalty,
+                        field="regard", delta=-penalty,
                         label="Steal", log_index=log_index,
                         target=nb,
                     ))
                     self._add(nb, ChangeEntry(
-                        field="regard", delta=penalty,
+                        field="regard", delta=-penalty,
                         label=f"Steal ({FACTION_DISPLAY_NAMES.get(faction_id, faction_id)})",
                         log_index=log_index,
                         target=faction_id,
