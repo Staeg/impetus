@@ -516,6 +516,7 @@ class UIRenderer:
         # --- Guided by ---
         guide_changes = _field_changes("guiding_spirit")
         guided_line_y = dy
+        guided_text_w = 0
         if guide_changes:
             ch = guide_changes[-1]  # latest change
             label_surf = self.small_font.render("Guided by: ", True, (180, 180, 200))
@@ -526,21 +527,25 @@ class UIRenderer:
             cx += 4
             new_surf = self.small_font.render(ch.new_value or "none", True, (180, 220, 255))
             surface.blit(new_surf, (cx, dy))
+            guided_text_w = cx + new_surf.get_width() - (x + 10)
         elif preview_guid_name and guiding_name == "none":
             text = self.small_font.render(f"Guided by: {preview_guid_name}?", True, (100, 100, 130))
             surface.blit(text, (x + 10, dy))
+            guided_text_w = text.get_width()
         else:
             text = self.small_font.render(f"Guided by: {guiding_name}", True, (180, 180, 200))
             surface.blit(text, (x + 10, dy))
-        self.panel_guided_rect = pygame.Rect(x + 10, guided_line_y, width - 20, 16)
+            guided_text_w = text.get_width()
+        self.panel_guided_rect = pygame.Rect(x + 10, guided_line_y, guided_text_w, 16)
         self.panel_guided_spirit_id = guiding
         # Dotted underline to indicate hoverable text
-        draw_dotted_underline(surface, x + 10, guided_line_y + 14, width - 20)
+        draw_dotted_underline(surface, x + 10, guided_line_y + 14, guided_text_w)
         dy += 18
 
         # --- Worshipping ---
         worship_changes = _field_changes("worship_spirit")
         worship_line_y = dy
+        worship_text_w = 0
         if worship_changes:
             ch = worship_changes[-1]
             label_surf = self.small_font.render("Worshipping: ", True, (180, 180, 200))
@@ -551,17 +556,20 @@ class UIRenderer:
             cx += 4
             new_surf = self.small_font.render(ch.new_value or "none", True, (180, 220, 255))
             surface.blit(new_surf, (cx, dy))
+            worship_text_w = cx + new_surf.get_width() - (x + 10)
         elif preview_guid_name and worship_name == "none":
             text = self.small_font.render(f"Worshipping: {preview_guid_name}?", True, (100, 100, 130))
             surface.blit(text, (x + 10, dy))
+            worship_text_w = text.get_width()
         else:
             text = self.small_font.render(f"Worshipping: {worship_name}", True, (180, 180, 200))
             surface.blit(text, (x + 10, dy))
-        self.panel_worship_rect = pygame.Rect(x + 10, worship_line_y, width - 20, 16)
+            worship_text_w = text.get_width()
+        self.panel_worship_rect = pygame.Rect(x + 10, worship_line_y, worship_text_w, 16)
         self.panel_worship_spirit_id = worship
         self.panel_faction_id = fid
         # Dotted underline to indicate hoverable text
-        draw_dotted_underline(surface, x + 10, worship_line_y + 14, width - 20)
+        draw_dotted_underline(surface, x + 10, worship_line_y + 14, worship_text_w)
         dy += 18
 
         if regard:
