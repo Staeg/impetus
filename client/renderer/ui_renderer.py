@@ -167,6 +167,11 @@ class UIRenderer:
         self.panel_worship_rect: pygame.Rect | None = None
         self.panel_worship_spirit_id: str | None = None
         self.panel_faction_id: str | None = None
+        # Spirit panel rects
+        self.spirit_panel_rect: pygame.Rect | None = None
+        self.spirit_panel_guidance_rect: pygame.Rect | None = None
+        self.spirit_panel_influence_rect: pygame.Rect | None = None
+        self.spirit_panel_worship_rects: dict[str, pygame.Rect] = {}  # faction_id -> rect
 
     def _get_font(self, size=16):
         return pygame.font.SysFont("consolas", size)
@@ -650,6 +655,125 @@ class UIRenderer:
                 text = self.small_font.render(f"  {opp_name}{suffix}", True, war_color)
                 surface.blit(text, (x + 10, dy))
                 dy += 18
+
+    def draw_spirit_panel(self, surface: "pygame.Surface", spirit_data: dict,
+                          factions: dict, all_idols: list, hex_ownership: dict,
+                          x: int, y: int, width: int = 230,
+                          my_spirit_id: str = ""):
+        """Draw spirit info panel showing guidance, influence, worship, and idol counts."""
+        if not spirit_data:
+            return
+
+        spirit_id = spirit_data.get("spirit_id", my_spirit_id)
+        name = spirit_data.get("name", spirit_id[:6])
+        influence = spirit_data.get("influence", 0)
+        guided_faction = spirit_data.get("guided_faction")
+        is_vagrant = spirit_data.get("is_vagrant", True)
+        vp = spirit_data.get("victory_points", 0)
+
+        # Find factions worshipping this spirit
+        worshipping_factions = []
+        for fid, fdata in factions.items():
+            if fdata.get("worship_spirit") == spirit_id and not fdata.get("eliminated"):
+                worshipping_factions.append((fid, fdata))
+
+        # Calculate panel height
+        panel_h = 90  # header + guidance + influence
+        if worshipping_factions:
+            panel_h += 22 + len(worshipping_factions) * 36  # section header + per-faction
+        else:
+            panel_h += 22 + 18  # section header + "None"
+
+        panel_rect = pygame.Rect(x, y, width, panel_h)
+        pygame.draw.rect(surface, (30, 30, 40), panel_rect, border_radius=4)
+        pygame.draw.rect(surface, (255, 255, 100), panel_rect, 2, border_radius=4)
+        self.spirit_panel_rect = panel_rect
+
+        dy = y + 8
+
+        # Header: Spirit name
+        name_surf = self.font.render(name, True, (255, 255, 100))
+        surface.blit(name_surf, (x + 10, dy))
+        # VP to the right
+        vp_surf = self.small_font.render(f"{vp} VP", True, (200, 200, 220))
+        surface.blit(vp_surf, (x + width - 10 - vp_surf.get_width(), dy + 2))
+        dy += 24
+
+        # Guidance line
+        guidance_line_y = dy
+        if guided_faction:
+            faction_color = tuple(FACTION_COLORS.get(guided_faction, (150, 150, 150)))
+            faction_name = FACTION_DISPLAY_NAMES.get(guided_faction, guided_faction)
+            label_surf = self.small_font.render("Guiding: ", True, (180, 180, 200))
+            surface.blit(label_surf, (x + 10, dy))
+            value_surf = self.small_font.render(faction_name, True, faction_color)
+            surface.blit(value_surf, (x + 10 + label_surf.get_width(), dy))
+            guidance_text_w = label_surf.get_width() + value_surf.get_width()
+        else:
+            label_surf = self.small_font.render("Vagrant", True, (140, 140, 160))
+            surface.blit(label_surf, (x + 10, dy))
+            guidance_text_w = label_surf.get_width()
+        self.spirit_panel_guidance_rect = pygame.Rect(x + 10, guidance_line_y, guidance_text_w, 16)
+        draw_dotted_underline(surface, x + 10, guidance_line_y + 14, guidance_text_w)
+        dy += 18
+
+        # Influence line
+        influence_line_y = dy
+        inf_surf = self.small_font.render(f"Influence: {influence}", True, (180, 180, 200))
+        surface.blit(inf_surf, (x + 10, dy))
+        self.spirit_panel_influence_rect = pygame.Rect(x + 10, influence_line_y, inf_surf.get_width(), 16)
+        draw_dotted_underline(surface, x + 10, influence_line_y + 14, inf_surf.get_width())
+        dy += 22
+
+        # Worshipped by section
+        self.spirit_panel_worship_rects.clear()
+        section_surf = self.small_font.render("Worshipped by:", True, (150, 150, 170))
+        surface.blit(section_surf, (x + 10, dy))
+        dy += 18
+
+        if worshipping_factions:
+            for fid, fdata in worshipping_factions:
+                faction_color = tuple(FACTION_COLORS.get(fid, (150, 150, 150)))
+                faction_name = FACTION_DISPLAY_NAMES.get(fid, fid)
+                fname_surf = self.small_font.render(faction_name, True, faction_color)
+                surface.blit(fname_surf, (x + 14, dy))
+                fname_w = fname_surf.get_width()
+                self.spirit_panel_worship_rects[fid] = pygame.Rect(x + 14, dy, fname_w, 16)
+                draw_dotted_underline(surface, x + 14, dy + 14, fname_w)
+                dy += 18
+
+                # Count idols of each type owned by this spirit in this faction's territory
+                battle_c = spread_c = affluence_c = 0
+                for idol in all_idols:
+                    if isinstance(idol, dict):
+                        owner = idol.get('owner_spirit', '')
+                        if owner != spirit_id:
+                            continue
+                        pos = idol.get('position', {})
+                        q, r = pos.get('q'), pos.get('r')
+                        if hex_ownership.get((q, r)) == fid:
+                            itype = idol.get('type', '')
+                            if itype == IdolType.BATTLE.value:
+                                battle_c += 1
+                            elif itype == IdolType.SPREAD.value:
+                                spread_c += 1
+                            elif itype == IdolType.AFFLUENCE.value:
+                                affluence_c += 1
+                idol_parts = []
+                if battle_c:
+                    idol_parts.append(f"Battle: {battle_c}")
+                if spread_c:
+                    idol_parts.append(f"Spread: {spread_c}")
+                if affluence_c:
+                    idol_parts.append(f"Affluence: {affluence_c}")
+                idol_text = ", ".join(idol_parts) if idol_parts else "no idols"
+                idol_surf = self.small_font.render(f"  {idol_text}", True, (140, 140, 160))
+                surface.blit(idol_surf, (x + 14, dy))
+                dy += 18
+        else:
+            none_surf = self.small_font.render("  None", True, (140, 140, 160))
+            surface.blit(none_surf, (x + 10, dy))
+            dy += 18
 
     def _build_card_description(self, agenda_type: str, modifiers: dict,
                                 is_spoils: bool = False) -> list[str]:
