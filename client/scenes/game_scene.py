@@ -12,6 +12,7 @@ from client.renderer.animation import AnimationManager
 from client.renderer.assets import load_assets, agenda_card_images
 from client.input_handler import InputHandler
 from client.scenes.animation_orchestrator import AnimationOrchestrator
+from client.scenes.change_tracker import FactionChangeTracker
 
 # Approximate hex map screen bounds (default camera) for centering UI
 _HEX_MAP_HALF_W = int(HEX_SIZE * 1.5 * (MAP_SIDE_LENGTH - 1)) + HEX_SIZE
@@ -97,6 +98,11 @@ class GameScene:
 
         # Idol hover tooltip
         self.hovered_idol = None  # idol object or None
+
+        # Change tracking for faction panel
+        self.change_tracker = FactionChangeTracker()
+        self.highlighted_log_index: int | None = None
+        self.panel_change_rects: list[tuple[pygame.Rect, int]] = []
 
         self._font = None
         self._small_font = None
@@ -251,6 +257,22 @@ class GameScene:
                         self._submit_card_choice(i, MessageType.SUBMIT_SPOILS_CHANGE_CHOICE, "spoils_change_cards")
                         return
 
+            # Check change delta chip clicks (faction panel)
+            for rect, log_idx in self.panel_change_rects:
+                if rect.collidepoint(event.pos):
+                    if self.highlighted_log_index == log_idx:
+                        self.highlighted_log_index = None
+                    else:
+                        self.highlighted_log_index = log_idx
+                        # Auto-scroll event log to show highlighted entry
+                        visible_count = (190 - 26) // 16
+                        total = len(self.event_log)
+                        if total > visible_count:
+                            # scroll_offset=0 shows last entries; we want log_idx visible
+                            offset = total - log_idx - visible_count
+                            self.event_log_scroll_offset = max(0, min(offset, total - visible_count))
+                    return
+
             # Hex click
             hex_coord = self.hex_renderer.get_hex_at_screen(
                 event.pos[0], event.pos[1], self.input_handler,
@@ -342,6 +364,7 @@ class GameScene:
     def handle_network(self, msg_type, payload):
         if msg_type == MessageType.GAME_START:
             self._update_state_from_snapshot(payload)
+            self.change_tracker.snapshot_and_reset(self.factions, self.spirits)
             self.event_log.append(f"Game started! Turn {self.turn}")
 
         elif msg_type == MessageType.PHASE_START:
@@ -601,8 +624,13 @@ class GameScene:
         from client.scenes.event_logger import log_event
         etype = log_event(event, self.event_log, self.spirits,
                           self.app.my_spirit_id, self.faction_agendas_this_turn)
+        # Record change for faction panel delta display
+        self.change_tracker.process_event(
+            event, len(self.event_log) - 1, self.factions, self.spirits)
         # Side effects that touch scene state
         if etype == "turn_start":
+            self.change_tracker.snapshot_and_reset(self.factions, self.spirits)
+            self.highlighted_log_index = None
             self.faction_agendas_this_turn.clear()
             if not self.orchestrator.queue and self.animation.is_all_done():
                 self.animation.start_agenda_fadeout()
@@ -719,12 +747,17 @@ class GameScene:
             # Default to guided faction
             my_spirit = self.spirits.get(self.app.my_spirit_id, {})
             pf = my_spirit.get("guided_faction")
+        self.panel_change_rects = []
         if pf and pf in disp_factions:
             self.ui_renderer.draw_faction_panel(
                 screen, disp_factions[pf],
                 SCREEN_WIDTH - 240, 102, 230,
                 spirits=self.spirits,
                 preview_guidance=preview_guid_dict,
+                change_tracker=self.change_tracker,
+                panel_faction_id=pf,
+                highlight_log_idx=self.highlighted_log_index,
+                change_rects=self.panel_change_rects,
             )
 
         # Draw event log (bottom right)
@@ -732,6 +765,7 @@ class GameScene:
             screen, self.event_log,
             SCREEN_WIDTH - 300, SCREEN_HEIGHT - 200, 290, 190,
             scroll_offset=self.event_log_scroll_offset,
+            highlight_log_idx=self.highlighted_log_index,
         )
 
         # Draw waiting indicator (suppress while UI is deferred for animations)
