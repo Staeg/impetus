@@ -31,6 +31,17 @@ def _wrap_text(text: str, font: "pygame.font.Font", max_width: int) -> list[str]
     return lines
 
 
+def draw_dotted_underline(surface: "pygame.Surface", x: int, y: int, width: int,
+                          color: tuple = (120, 120, 140), dot_len: int = 2, gap_len: int = 3):
+    """Draw a faint dotted underline."""
+    cx = x
+    end_x = x + width
+    while cx < end_x:
+        seg_end = min(cx + dot_len, end_x)
+        pygame.draw.line(surface, color, (cx, y), (seg_end, y), 1)
+        cx += dot_len + gap_len
+
+
 def draw_multiline_tooltip(surface: "pygame.Surface", font: "pygame.font.Font",
                            text: str, anchor_x: int, anchor_y: int,
                            max_width: int = 350, below: bool = False):
@@ -219,6 +230,8 @@ class UIRenderer:
 
             # Store hover rect covering name+tag+VP
             self.vp_hover_rects[sid] = pygame.Rect(entry_start_x, 4, x - entry_start_x, 28)
+            # Dotted underline to indicate hoverable text
+            draw_dotted_underline(surface, entry_start_x, 12 + name_surf.get_height(), x - entry_start_x)
             x += 20
 
     def draw_faction_overview(self, surface: pygame.Surface, factions: dict,
@@ -320,6 +333,8 @@ class UIRenderer:
                     surface.blit(a_surf, a_pos)
                     agenda_label_rects[fid] = pygame.Rect(
                         a_pos[0], a_pos[1], a_surf.get_width(), a_surf.get_height())
+                    draw_dotted_underline(surface, a_pos[0], a_pos[1] + a_surf.get_height(),
+                                          a_surf.get_width())
 
             # War indicators (second row): crossed swords icon + tiny enemy hex per opponent
             if fid in war_lookup:
@@ -519,6 +534,8 @@ class UIRenderer:
             surface.blit(text, (x + 10, dy))
         self.panel_guided_rect = pygame.Rect(x + 10, guided_line_y, width - 20, 16)
         self.panel_guided_spirit_id = guiding
+        # Dotted underline to indicate hoverable text
+        draw_dotted_underline(surface, x + 10, guided_line_y + 14, width - 20)
         dy += 18
 
         # --- Worshipping ---
@@ -543,6 +560,8 @@ class UIRenderer:
         self.panel_worship_rect = pygame.Rect(x + 10, worship_line_y, width - 20, 16)
         self.panel_worship_spirit_id = worship
         self.panel_faction_id = fid
+        # Dotted underline to indicate hoverable text
+        draw_dotted_underline(surface, x + 10, worship_line_y + 14, width - 20)
         dy += 18
 
         if regard:

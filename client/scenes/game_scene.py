@@ -7,7 +7,7 @@ from shared.constants import (
     BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPREAD_IDOL_VP,
 )
 from client.renderer.hex_renderer import HexRenderer
-from client.renderer.ui_renderer import UIRenderer, Button, draw_multiline_tooltip, build_agenda_tooltip, build_modifier_tooltip
+from client.renderer.ui_renderer import UIRenderer, Button, draw_multiline_tooltip, build_agenda_tooltip, build_modifier_tooltip, draw_dotted_underline
 from client.renderer.animation import AnimationManager, TextAnimation
 from client.renderer.assets import load_assets, agenda_card_images
 from client.input_handler import InputHandler
@@ -1094,9 +1094,12 @@ class GameScene:
             my_spirit = self.spirits.get(self.app.my_spirit_id, {})
             pf = my_spirit.get("guided_faction")
         self.panel_change_rects = []
-        if pf and pf in disp_factions:
+        # Use real factions data (not display snapshot) so current values
+        # differ from the change tracker's old-state snapshot.
+        real_faction_data = self.factions.get(pf) if pf else None
+        if pf and real_faction_data:
             self.ui_renderer.draw_faction_panel(
-                screen, disp_factions[pf],
+                screen, real_faction_data,
                 SCREEN_WIDTH - 240, 102, 230,
                 spirits=self.spirits,
                 preview_guidance=preview_guid_dict,
@@ -1256,18 +1259,20 @@ class GameScene:
         # Draw "Guidance" title
         if self.guidance_title_rect and self.faction_buttons:
             title_surf = self.font.render("Guidance", True, (200, 200, 220))
-            screen.blit(title_surf, (
-                self.guidance_title_rect.centerx - title_surf.get_width() // 2,
-                self.guidance_title_rect.y,
-            ))
+            tx = self.guidance_title_rect.centerx - title_surf.get_width() // 2
+            ty = self.guidance_title_rect.y
+            screen.blit(title_surf, (tx, ty))
+            draw_dotted_underline(screen, tx, ty + title_surf.get_height(),
+                                  title_surf.get_width())
 
         # Draw "Idol placement" title
         if self.idol_title_rect and self.idol_buttons:
             title_surf = self.font.render("Idol placement", True, (200, 200, 220))
-            screen.blit(title_surf, (
-                self.idol_title_rect.centerx - title_surf.get_width() // 2,
-                self.idol_title_rect.y,
-            ))
+            tx = self.idol_title_rect.centerx - title_surf.get_width() // 2
+            ty = self.idol_title_rect.y
+            screen.blit(title_surf, (tx, ty))
+            draw_dotted_underline(screen, tx, ty + title_surf.get_height(),
+                                  title_surf.get_width())
 
         # Draw faction buttons (left) with selection highlight
         for btn in self.faction_buttons:
