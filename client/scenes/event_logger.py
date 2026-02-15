@@ -118,7 +118,8 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
 
     elif etype == "vp_scored":
         name = spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
-        event_log.append(f"{name} scored {event.get('vp_gained', 0)} VP (total: {event.get('total_vp', 0)})")
+        faction_name = FACTION_DISPLAY_NAMES.get(event.get("faction", ""), event.get("faction", "?"))
+        event_log.append(f"{name} scored {event.get('vp_gained', 0)} VP from {faction_name} (total: {event.get('total_vp', 0)})")
         b_idols = event.get("battle_idols", 0)
         b_wars = event.get("wars_won", 0)
         if b_idols:

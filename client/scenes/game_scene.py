@@ -7,8 +7,8 @@ from shared.constants import (
     BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPREAD_IDOL_VP,
 )
 from client.renderer.hex_renderer import HexRenderer
-from client.renderer.ui_renderer import UIRenderer, Button, draw_multiline_tooltip
-from client.renderer.animation import AnimationManager
+from client.renderer.ui_renderer import UIRenderer, Button, draw_multiline_tooltip, build_agenda_tooltip, build_modifier_tooltip
+from client.renderer.animation import AnimationManager, TextAnimation
 from client.renderer.assets import load_assets, agenda_card_images
 from client.input_handler import InputHandler
 from client.scenes.animation_orchestrator import AnimationOrchestrator
@@ -98,6 +98,15 @@ class GameScene:
 
         # Idol hover tooltip
         self.hovered_idol = None  # idol object or None
+
+        # Agenda hover tooltip state
+        self.hovered_card_tooltip: str | None = None
+        self.hovered_card_rect: pygame.Rect | None = None
+        self.agenda_label_rects: dict[str, pygame.Rect] = {}
+        self.hovered_agenda_label_fid: str | None = None
+        self.hovered_agenda_label_rect: pygame.Rect | None = None
+        self.hovered_anim_tooltip: str | None = None
+        self.hovered_anim_rect: pygame.Rect | None = None
 
         # Change tracking for faction panel
         self.change_tracker = FactionChangeTracker()
@@ -203,6 +212,8 @@ class GameScene:
                 self.idol_title_hovered = self.idol_title_rect.collidepoint(event.pos)
             # Idol hover detection on hex map
             self._update_idol_hover(event.pos)
+            # Agenda card/label/animation hover detection
+            self._update_agenda_hover(event.pos)
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # Check submit button
@@ -410,6 +421,20 @@ class GameScene:
             # Log all events in original order
             for event in events:
                 self._log_event(event)
+            # VP gain animations
+            for event in events:
+                if event.get("type") == "vp_scored":
+                    vp = event.get("vp_gained", 0)
+                    sid = event.get("spirit", "")
+                    if vp > 0 and sid:
+                        vp_pos = self.ui_renderer.vp_positions.get(sid)
+                        if vp_pos:
+                            self.animation.add_effect_animation(TextAnimation(
+                                f"+{vp:.1f} VP", vp_pos[0], vp_pos[1] + 16,
+                                (80, 255, 80),
+                                delay=0.0, duration=3.0, drift_pixels=40,
+                                direction=1, screen_space=True,
+                            ))
             # Queue agenda events for animation
             if agenda_events:
                 # Split setup events into a separate batch so they play
@@ -620,6 +645,80 @@ class GameScene:
             spirit_index_map,
         )
 
+    def _get_faction_modifiers(self, faction_id: str) -> dict:
+        """Get the change_modifiers for a given faction."""
+        fdata = self.factions.get(faction_id, {})
+        if isinstance(fdata, dict):
+            return fdata.get("change_modifiers", {})
+        return {}
+
+    def _update_agenda_hover(self, mouse_pos):
+        """Check if mouse is hovering over agenda cards, faction labels, or animations."""
+        self.hovered_card_tooltip = None
+        self.hovered_card_rect = None
+        self.hovered_agenda_label_fid = None
+        self.hovered_agenda_label_rect = None
+        self.hovered_anim_tooltip = None
+        self.hovered_anim_rect = None
+
+        mx, my = mouse_pos
+
+        # Check card pickers (agenda hand, change cards, spoils cards, spoils change cards)
+        modifiers = self._get_current_faction_modifiers()
+
+        if self.agenda_hand:
+            for i, rect in enumerate(self._calc_card_rects(
+                    len(self.agenda_hand), y=SCREEN_HEIGHT - 210, centered=True)):
+                if rect.collidepoint(mx, my):
+                    atype = self.agenda_hand[i].get("agenda_type", "")
+                    self.hovered_card_tooltip = build_agenda_tooltip(atype, modifiers)
+                    self.hovered_card_rect = rect
+                    return
+
+        if self.change_cards:
+            for i, rect in enumerate(self._calc_card_rects(len(self.change_cards))):
+                if rect.collidepoint(mx, my):
+                    self.hovered_card_tooltip = build_modifier_tooltip(self.change_cards[i])
+                    self.hovered_card_rect = rect
+                    return
+
+        if self.spoils_cards:
+            for i, rect in enumerate(self._calc_card_rects(len(self.spoils_cards))):
+                if rect.collidepoint(mx, my):
+                    atype = self.spoils_cards[i]
+                    self.hovered_card_tooltip = build_agenda_tooltip(atype, modifiers, is_spoils=True)
+                    self.hovered_card_rect = rect
+                    return
+
+        if self.spoils_change_cards:
+            for i, rect in enumerate(self._calc_card_rects(len(self.spoils_change_cards))):
+                if rect.collidepoint(mx, my):
+                    self.hovered_card_tooltip = build_modifier_tooltip(self.spoils_change_cards[i])
+                    self.hovered_card_rect = rect
+                    return
+
+        # Check faction ribbon agenda labels
+        for fid, rect in self.agenda_label_rects.items():
+            if rect.collidepoint(mx, my):
+                self.hovered_agenda_label_fid = fid
+                self.hovered_agenda_label_rect = rect
+                return
+
+        # Check persistent agenda slide animations
+        for anim in self.animation.get_persistent_agenda_animations():
+            if not anim.active or not anim.agenda_type:
+                continue
+            img_w = anim.image.get_width()
+            img_h = anim.image.get_height()
+            anim_rect = pygame.Rect(int(anim.x), int(anim.y), img_w, img_h)
+            if anim_rect.collidepoint(mx, my):
+                fid = anim.faction_id
+                fmod = self._get_faction_modifiers(fid)
+                self.hovered_anim_tooltip = build_agenda_tooltip(
+                    anim.agenda_type, fmod, is_spoils=anim.is_spoils)
+                self.hovered_anim_rect = anim_rect
+                return
+
     def _log_event(self, event: dict):
         from client.scenes.event_logger import log_event
         etype = log_event(event, self.event_log, self.spirits,
@@ -727,7 +826,7 @@ class GameScene:
         # Draw faction overview strip (with war indicators, use display state)
         disp_factions = self.display_factions
         animated_agenda_factions = self.animation.get_persistent_agenda_factions()
-        self.ui_renderer.draw_faction_overview(
+        self.agenda_label_rects = self.ui_renderer.draw_faction_overview(
             screen, disp_factions, self.faction_agendas_this_turn,
             wars=render_wars,
             spirits=self.spirits,
@@ -785,6 +884,32 @@ class GameScene:
             self._render_spoils_ui(screen)
         elif self.phase == "spoils_change_choice":
             self._render_spoils_change_ui(screen)
+
+        # Agenda hover tooltips
+        if self.hovered_card_tooltip and self.hovered_card_rect:
+            draw_multiline_tooltip(
+                screen, self.small_font, self.hovered_card_tooltip,
+                anchor_x=self.hovered_card_rect.centerx,
+                anchor_y=self.hovered_card_rect.top,
+            )
+        elif self.hovered_agenda_label_fid and self.hovered_agenda_label_rect:
+            fmod = self._get_faction_modifiers(self.hovered_agenda_label_fid)
+            agenda_str = self.faction_agendas_this_turn.get(self.hovered_agenda_label_fid, "")
+            if agenda_str:
+                tooltip = build_agenda_tooltip(agenda_str, fmod)
+                draw_multiline_tooltip(
+                    screen, self.small_font, tooltip,
+                    anchor_x=self.hovered_agenda_label_rect.centerx,
+                    anchor_y=self.hovered_agenda_label_rect.bottom,
+                    below=True,
+                )
+        elif self.hovered_anim_tooltip and self.hovered_anim_rect:
+            draw_multiline_tooltip(
+                screen, self.small_font, self.hovered_anim_tooltip,
+                anchor_x=self.hovered_anim_rect.centerx,
+                anchor_y=self.hovered_anim_rect.bottom,
+                below=True,
+            )
 
         # Idol hover tooltip (drawn last so it's on top)
         if self.hovered_idol:
