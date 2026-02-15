@@ -233,10 +233,8 @@ class UIRenderer:
             surface.blit(vp_surf, (x, 12))
             x += vp_surf.get_width()
 
-            # Store hover rect covering name+tag+VP
+            # Store hover rect covering name+tag+VP (for click detection)
             self.vp_hover_rects[sid] = pygame.Rect(entry_start_x, 4, x - entry_start_x, 28)
-            # Dotted underline to indicate hoverable text
-            draw_dotted_underline(surface, entry_start_x, 12 + name_surf.get_height(), x - entry_start_x)
             x += 20
 
     def draw_faction_overview(self, surface: pygame.Surface, factions: dict,
@@ -445,9 +443,23 @@ class UIRenderer:
                 elif fb == fid:
                     war_opponents.append((FACTION_DISPLAY_NAMES.get(fa, fa), ripe))
 
-        panel_h = 200 + len(regard) * 18
-        if war_opponents:
-            panel_h += 22 + len(war_opponents) * 18
+        # Calculate dynamic panel height based on content
+        panel_h = 8 + 24  # top padding + name header
+        if faction_data.get("eliminated", False):
+            panel_h += 24  # "ELIMINATED" text
+        else:
+            panel_h += 18 * 4  # gold + territories + guided + worship
+            if regard:
+                panel_h += 4 + 18 + len(regard) * 18  # gap + header + entries
+            active_modifiers = sum(1 for v in modifiers.values() if v > 0)
+            if active_modifiers:
+                panel_h += 4 + 18 + active_modifiers * 18
+            extra_agendas = faction_data.get("agenda_deck_extra", {})
+            if extra_agendas:
+                panel_h += 4 + 18 + len(extra_agendas) * 18
+            if war_opponents:
+                panel_h += 4 + 18 + len(war_opponents) * 18
+        panel_h += 8  # bottom padding
         panel_rect = pygame.Rect(x, y, width, panel_h)
         pygame.draw.rect(surface, (30, 30, 40), panel_rect, border_radius=4)
         pygame.draw.rect(surface, color, panel_rect, 2, border_radius=4)

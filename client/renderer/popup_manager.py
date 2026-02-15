@@ -313,8 +313,8 @@ class PopupManager:
             ux = cursor_x
             ux_end = cursor_x + surf.get_width()
             while ux < ux_end:
-                seg_end = min(ux + 2, ux_end)
-                pygame.draw.line(surface, color, (ux, underline_y), (seg_end, underline_y), 1)
+                dot_end = min(ux + 2, ux_end)
+                pygame.draw.line(surface, color, (ux, underline_y), (dot_end, underline_y), 1)
                 ux += 5
             cursor_x += surf.get_width()
             pos = seg_end
