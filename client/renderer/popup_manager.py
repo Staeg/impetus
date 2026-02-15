@@ -308,11 +308,14 @@ class PopupManager:
             color = hover_color if is_hovered else keyword_color
             surf = font.render(kw_text, True, color)
             surface.blit(surf, (cursor_x, y))
-            # Underline
+            # Dotted underline
             underline_y = y + line_h - 2
-            pygame.draw.line(surface, color,
-                             (cursor_x, underline_y),
-                             (cursor_x + surf.get_width(), underline_y), 1)
+            ux = cursor_x
+            ux_end = cursor_x + surf.get_width()
+            while ux < ux_end:
+                seg_end = min(ux + 2, ux_end)
+                pygame.draw.line(surface, color, (ux, underline_y), (seg_end, underline_y), 1)
+                ux += 5
             cursor_x += surf.get_width()
             pos = seg_end
 
