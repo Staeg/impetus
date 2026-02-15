@@ -138,6 +138,29 @@ class HexRenderer:
             text = font.render(symbol, True, (0, 0, 0))
             surface.blit(text, (ix - text.get_width() // 2, iy - text.get_height() // 2))
 
+    def get_idol_at_screen(self, mx, my, idols, camera, screen_w, screen_h,
+                           spirit_index_map):
+        """Return the idol object at screen position (mx, my), or None."""
+        dist = self.hex_size / 2
+        hit_radius = 8  # slightly larger than drawn radius (5) for easier targeting
+        best = None
+        best_dist_sq = hit_radius * hit_radius
+        for idol in idols:
+            wx, wy = axial_to_pixel(idol.position.q, idol.position.r, self.hex_size)
+            player_idx = spirit_index_map.get(getattr(idol, 'owner_spirit', None), 0)
+            angle = math.radians(-90 + player_idx * 60)
+            offset_x = math.cos(angle) * dist
+            offset_y = math.sin(angle) * dist
+            ix, iy = camera.world_to_screen(wx + offset_x, wy + offset_y,
+                                            screen_w, screen_h)
+            dx = mx - ix
+            dy = my - iy
+            d_sq = dx * dx + dy * dy
+            if d_sq < best_dist_sq:
+                best_dist_sq = d_sq
+                best = idol
+        return best
+
     def _draw_preview_idol(self, surface, preview_idol, camera, screen_w, screen_h):
         """Draw a semi-transparent preview idol at hex center.
 

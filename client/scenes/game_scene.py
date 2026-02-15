@@ -95,6 +95,9 @@ class GameScene:
         self.idol_title_rect: pygame.Rect | None = None
         self.idol_title_hovered: bool = False
 
+        # Idol hover tooltip
+        self.hovered_idol = None  # idol object or None
+
         self._font = None
         self._small_font = None
 
@@ -192,6 +195,8 @@ class GameScene:
                 self.guidance_title_hovered = self.guidance_title_rect.collidepoint(event.pos)
             if self.idol_title_rect:
                 self.idol_title_hovered = self.idol_title_rect.collidepoint(event.pos)
+            # Idol hover detection on hex map
+            self._update_idol_hover(event.pos)
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # Check submit button
@@ -271,10 +276,15 @@ class GameScene:
             # Neutral hex during vagrant phase: select for idol placement
             self.selected_hex = hex_coord
         else:
-            # Click to view faction info (sets panel, not guide target)
             owner = self.hex_ownership.get(hex_coord)
             if owner:
                 self.panel_faction = owner
+                # If guidance is available, also set as guide target
+                if self.phase == Phase.VAGRANT_PHASE.value and self.faction_buttons:
+                    available = set(self.phase_options.get("available_factions", []))
+                    blocked = set(self.phase_options.get("worship_blocked", []))
+                    if owner in available and owner not in blocked:
+                        self.selected_faction = owner
 
     def _submit_action(self):
         if self.phase == Phase.VAGRANT_PHASE.value:
@@ -558,6 +568,34 @@ class GameScene:
         return [pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h)
                 for i in range(count)]
 
+    def _update_idol_hover(self, mouse_pos):
+        """Check if mouse is hovering over a placed idol on the hex map."""
+        if not self.all_idols:
+            self.hovered_idol = None
+            return
+        # Build render idols the same way as render()
+        render_idols = []
+        for idol_data in self.all_idols:
+            if isinstance(idol_data, dict):
+                render_idols.append(type('Idol', (), {
+                    'type': IdolType(idol_data['type']),
+                    'position': type('Pos', (), {
+                        'q': idol_data['position']['q'],
+                        'r': idol_data['position']['r'],
+                    })(),
+                    'owner_spirit': idol_data.get('owner_spirit'),
+                })())
+        if not render_idols:
+            self.hovered_idol = None
+            return
+        spirit_index_map = {
+            sid: i for i, sid in enumerate(sorted(self.spirits.keys()))
+        }
+        self.hovered_idol = self.hex_renderer.get_idol_at_screen(
+            mouse_pos[0], mouse_pos[1], render_idols,
+            self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT,
+            spirit_index_map,
+        )
 
     def _log_event(self, event: dict):
         from client.scenes.event_logger import log_event
@@ -714,6 +752,30 @@ class GameScene:
         elif self.phase == "spoils_change_choice":
             self._render_spoils_change_ui(screen)
 
+        # Idol hover tooltip (drawn last so it's on top)
+        if self.hovered_idol:
+            self._render_idol_tooltip(screen)
+
+    _IDOL_VP_TEXT = {
+        IdolType.BATTLE: f"{BATTLE_IDOL_VP} VP for each war won\nby the Worshipping Faction",
+        IdolType.AFFLUENCE: f"{AFFLUENCE_IDOL_VP} VP for each gold gained\nby the Worshipping Faction",
+        IdolType.SPREAD: f"{SPREAD_IDOL_VP} VP for each territory gained\nby the Worshipping Faction",
+    }
+
+    def _render_idol_tooltip(self, screen):
+        idol = self.hovered_idol
+        idol_type = idol.type
+        owner_id = idol.owner_spirit
+        owner_name = self.spirits.get(owner_id, {}).get("name", owner_id[:6]) if owner_id else "Unknown"
+        vp_text = self._IDOL_VP_TEXT.get(idol_type, "")
+        tooltip_text = f"{idol_type.value.title()} Idol\nPlaced by: {owner_name}\n{vp_text}"
+        mx, my = pygame.mouse.get_pos()
+        draw_multiline_tooltip(
+            screen, self.small_font, tooltip_text,
+            anchor_x=mx,
+            anchor_y=my,
+        )
+
     _GUIDANCE_TITLE_TOOLTIP = (
         "Select a Faction to Guide. If you are not the only Spirit "
         "attempting to Guide that Faction this turn, both of you will "
@@ -867,7 +929,7 @@ class GameScene:
 
     def _render_ejection_ui(self, screen):
         faction_name = FACTION_DISPLAY_NAMES.get(self.ejection_faction, self.ejection_faction)
-        title = self.font.render(f"Choose an Agenda card to add to {faction_name}'s deck:", True, (200, 200, 220))
+        title = self.font.render(f"As the last remnants of your presence leave the {faction_name} faction, you nudge their future. Choose an Agenda card to add to {faction_name}'s deck:", True, (200, 200, 220))
         screen.blit(title, (20, SCREEN_HEIGHT // 2 - 80))
 
         # Highlight selected button

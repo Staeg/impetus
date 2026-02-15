@@ -260,6 +260,33 @@ def _resolve_change(factions, playing_factions, events, is_spoils=False):
         })
 
 
+def _cancel_wars_on_hex(wars, hex_coord, events, factions):
+    """Cancel any wars whose battleground includes the given hex.
+
+    Called after a spoils Expand conquers a battleground hex, since the
+    territorial change invalidates other wars' battlegrounds.
+    """
+    from shared.constants import FACTION_DISPLAY_NAMES
+    to_remove = []
+    for w in wars:
+        if not w.battleground:
+            continue
+        if w.battleground[0] == hex_coord or w.battleground[1] == hex_coord:
+            to_remove.append(w)
+    for w in to_remove:
+        wars.remove(w)
+        fa = FACTION_DISPLAY_NAMES.get(w.faction_a, w.faction_a)
+        fb = FACTION_DISPLAY_NAMES.get(w.faction_b, w.faction_b)
+        events.append({
+            "type": "war_ended",
+            "war_id": w.war_id,
+            "reason": "territorial_changes",
+            "faction_a": w.faction_a,
+            "faction_b": w.faction_b,
+            "message": f"War between {fa} and {fb} dissipated due to territorial changes.",
+        })
+
+
 def draw_spoils_agenda() -> AgendaType:
     """Draw a random agenda card for spoils of war."""
     return random.choice(list(AgendaType))
@@ -355,6 +382,10 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
                        is_spoils=True, spoils_conquests=spoils_conquests,
                        normal_trade_factions=normal_trade_factions)
 
+    # Cancel wars whose battleground was conquered by spoils expand
+    for conquered_hex in spoils_conquests.values():
+        _cancel_wars_on_hex(wars, conquered_hex, events, factions)
+
     return spoils_pending
 
 
@@ -406,4 +437,7 @@ def resolve_spoils_choice(factions, hex_map, wars, events, spirit_id,
         resolve_agendas(factions, hex_map, {winner: chosen}, wars, events,
                        is_spoils=True, spoils_conquests=spoils_conquests,
                        normal_trade_factions=normal_trade_factions or [])
+        # Cancel wars whose battleground was conquered by spoils expand
+        for conquered_hex in spoils_conquests.values():
+            _cancel_wars_on_hex(wars, conquered_hex, events, factions)
         del spoils_pending[spirit_id]
