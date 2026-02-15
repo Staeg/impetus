@@ -462,6 +462,9 @@ class UIRenderer:
             cx += self._render_strikethrough(
                 surface, self.small_font, str(old_gold), (180, 180, 200), (cx, dy))
             cx += 4
+            new_surf = self.small_font.render(str(gold), True, (180, 220, 255))
+            surface.blit(new_surf, (cx, dy))
+            cx += new_surf.get_width() + 4
             for ch in gold_changes:
                 cx += self._render_delta_chip(
                     surface, self.small_font, ch.delta, ch.label, ch.log_index,
@@ -482,6 +485,9 @@ class UIRenderer:
             cx += self._render_strikethrough(
                 surface, self.small_font, str(old_terr), (180, 180, 200), (cx, dy))
             cx += 4
+            new_surf = self.small_font.render(str(len(territories)), True, (180, 220, 255))
+            surface.blit(new_surf, (cx, dy))
+            cx += new_surf.get_width() + 4
             for ch in terr_changes:
                 cx += self._render_delta_chip(
                     surface, self.small_font, ch.delta, ch.label, ch.log_index,
@@ -550,12 +556,16 @@ class UIRenderer:
                 if regard_changes:
                     old_regard = change_tracker.get_old_regard(panel_faction_id, other_fid)
                     r_old_color = (100, 255, 100) if old_regard > 0 else (255, 100, 100) if old_regard < 0 else (180, 180, 200)
+                    r_new_color = (100, 255, 100) if val > 0 else (255, 100, 100) if val < 0 else (180, 180, 200)
                     label_surf = self.small_font.render(f"  {other_name}: ", True, (180, 180, 200))
                     surface.blit(label_surf, (x + 10, dy))
                     cx = x + 10 + label_surf.get_width()
                     cx += self._render_strikethrough(
                         surface, self.small_font, f"{old_regard:+d}", r_old_color, (cx, dy))
                     cx += 4
+                    new_surf = self.small_font.render(f"{val:+d}", True, r_new_color)
+                    surface.blit(new_surf, (cx, dy))
+                    cx += new_surf.get_width() + 4
                     for ch in regard_changes:
                         cx += self._render_delta_chip(
                             surface, self.small_font, ch.delta, ch.label, ch.log_index,
