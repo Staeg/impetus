@@ -135,6 +135,12 @@ class GameScene:
         self.hovered_panel_worship: bool = False
         self.hovered_vp_spirit_id: str | None = None
 
+        # Spirit panel state
+        self.show_spirit_panel: bool = False
+        self.hovered_spirit_panel_guidance: bool = False
+        self.hovered_spirit_panel_influence: bool = False
+        self.hovered_spirit_panel_worship: str | None = None  # faction_id or None
+
         # Change tracking for faction panel
         self.change_tracker = FactionChangeTracker()
         self.popup_manager = PopupManager()
@@ -249,6 +255,8 @@ class GameScene:
             self._update_panel_hover(event.pos)
             # VP HUD hover detection
             self._update_vp_hover(event.pos)
+            # Spirit panel hover detection
+            self._update_spirit_panel_hover(event.pos)
             # Popup keyword hover
             self.popup_manager.update_hover(event.pos)
 
@@ -320,6 +328,21 @@ class GameScene:
                             offset = total - log_idx - visible_count
                             self.event_log_scroll_offset = max(0, min(offset, total - visible_count))
                     return
+
+            # Spirit panel: click on own name in HUD toggles panel
+            my_vp_rect = self.ui_renderer.vp_hover_rects.get(self.app.my_spirit_id)
+            if my_vp_rect and my_vp_rect.collidepoint(event.pos):
+                self.show_spirit_panel = not self.show_spirit_panel
+                return
+
+            # Click on spirit panel itself should not close it
+            sp_rect = self.ui_renderer.spirit_panel_rect
+            if self.show_spirit_panel and sp_rect and sp_rect.collidepoint(event.pos):
+                return
+
+            # Clicking elsewhere closes the spirit panel
+            if self.show_spirit_panel:
+                self.show_spirit_panel = False
 
             # Hex click
             hex_coord = self.hex_renderer.get_hex_at_screen(
@@ -780,6 +803,24 @@ class GameScene:
                 self.hovered_vp_spirit_id = sid
                 return
 
+    def _update_spirit_panel_hover(self, mouse_pos):
+        """Check if mouse is hovering over elements in the spirit panel."""
+        mx, my = mouse_pos
+        if not self.show_spirit_panel:
+            self.hovered_spirit_panel_guidance = False
+            self.hovered_spirit_panel_influence = False
+            self.hovered_spirit_panel_worship = None
+            return
+        r = self.ui_renderer.spirit_panel_guidance_rect
+        self.hovered_spirit_panel_guidance = r is not None and r.collidepoint(mx, my)
+        r = self.ui_renderer.spirit_panel_influence_rect
+        self.hovered_spirit_panel_influence = r is not None and r.collidepoint(mx, my)
+        self.hovered_spirit_panel_worship = None
+        for fid, rect in self.ui_renderer.spirit_panel_worship_rects.items():
+            if rect.collidepoint(mx, my):
+                self.hovered_spirit_panel_worship = fid
+                return
+
     def _try_pin_hovered_tooltip(self, mouse_pos):
         """Check all hover states and pin the matching tooltip as a popup."""
         # Faction panel guided tooltip
@@ -801,6 +842,48 @@ class GameScene:
             tooltip = self._build_worship_panel_tooltip(
                 self.ui_renderer.panel_faction_id)
             r = self.ui_renderer.panel_worship_rect
+            self.popup_manager.pin_tooltip(
+                tooltip, [],
+                anchor_x=r.centerx, anchor_y=r.bottom,
+                font=self.small_font, max_width=350,
+                surface_w=SCREEN_WIDTH, below=True,
+            )
+            return
+
+        # Spirit panel guidance tooltip
+        if self.hovered_spirit_panel_guidance:
+            spirit = self.spirits.get(self.app.my_spirit_id, {})
+            if spirit.get("guided_faction"):
+                tooltip = self._build_guidance_panel_tooltip(self.app.my_spirit_id)
+                hover_regions = _GUIDANCE_HOVER_REGIONS
+            else:
+                tooltip = self._GUIDANCE_GENERIC_TOOLTIP
+                hover_regions = []
+            r = self.ui_renderer.spirit_panel_guidance_rect
+            self.popup_manager.pin_tooltip(
+                tooltip, hover_regions,
+                anchor_x=r.centerx, anchor_y=r.bottom,
+                font=self.small_font, max_width=350,
+                surface_w=SCREEN_WIDTH, below=True,
+            )
+            return
+
+        # Spirit panel influence tooltip
+        if self.hovered_spirit_panel_influence:
+            r = self.ui_renderer.spirit_panel_influence_rect
+            self.popup_manager.pin_tooltip(
+                _INFLUENCE_TOOLTIP, [],
+                anchor_x=r.centerx, anchor_y=r.bottom,
+                font=self.small_font, max_width=350,
+                surface_w=SCREEN_WIDTH, below=True,
+            )
+            return
+
+        # Spirit panel worship tooltip
+        if self.hovered_spirit_panel_worship:
+            tooltip = self._build_spirit_worship_tooltip(
+                self.hovered_spirit_panel_worship, self.app.my_spirit_id)
+            r = self.ui_renderer.spirit_panel_worship_rects[self.hovered_spirit_panel_worship]
             self.popup_manager.pin_tooltip(
                 tooltip, [],
                 anchor_x=r.centerx, anchor_y=r.bottom,
@@ -988,6 +1071,21 @@ class GameScene:
                 f"to whoever it Worships. The first Spirit to Guide it will become Worshipped."
             )
 
+    def _build_spirit_worship_tooltip(self, faction_id: str, spirit_id: str) -> str:
+        """Build tooltip for a faction worshipping this spirit in the spirit panel."""
+        battle_vp, spread_vp, affluence_vp = self._count_idol_vp_for_faction(faction_id)
+        faction_name = FACTION_DISPLAY_NAMES.get(faction_id, faction_id)
+
+        def _fmt(v):
+            return f"{v:g}"
+
+        return (
+            f"{faction_name} Worships you. Each turn it gives you "
+            f"{_fmt(battle_vp)} VP per battle won, "
+            f"{_fmt(spread_vp)} VP per territory gained, and "
+            f"{_fmt(affluence_vp)} VP per gold earned."
+        )
+
     def _log_event(self, event: dict):
         from client.scenes.event_logger import log_event
         etype = log_event(event, self.event_log, self.spirits,
@@ -1135,6 +1233,23 @@ class GameScene:
             self.ui_renderer.panel_guided_rect = None
             self.ui_renderer.panel_worship_rect = None
 
+        # Draw spirit panel (left side, below HUD)
+        if self.show_spirit_panel:
+            my_spirit = self.spirits.get(self.app.my_spirit_id, {})
+            # Position under the player's HUD entry
+            sp_x = self.ui_renderer.vp_hover_rects.get(
+                self.app.my_spirit_id, pygame.Rect(300, 4, 0, 0)).x
+            self.ui_renderer.draw_spirit_panel(
+                screen, my_spirit, self.factions, self.all_idols,
+                self.hex_ownership, sp_x, 44, 230,
+                my_spirit_id=self.app.my_spirit_id,
+            )
+        else:
+            self.ui_renderer.spirit_panel_rect = None
+            self.ui_renderer.spirit_panel_guidance_rect = None
+            self.ui_renderer.spirit_panel_influence_rect = None
+            self.ui_renderer.spirit_panel_worship_rects.clear()
+
         # Draw event log (bottom right)
         self.ui_renderer.draw_event_log(
             screen, self.event_log,
@@ -1206,6 +1321,34 @@ class GameScene:
                 tooltip = self._build_worship_panel_tooltip(
                     self.ui_renderer.panel_faction_id)
                 r = self.ui_renderer.panel_worship_rect
+                draw_multiline_tooltip(
+                    screen, self.small_font, tooltip,
+                    anchor_x=r.centerx, anchor_y=r.bottom, below=True,
+                )
+
+            # Spirit panel hover tooltips
+            if self.hovered_spirit_panel_guidance:
+                spirit = self.spirits.get(self.app.my_spirit_id, {})
+                if spirit.get("guided_faction"):
+                    tooltip = self._build_guidance_panel_tooltip(self.app.my_spirit_id)
+                else:
+                    tooltip = self._GUIDANCE_GENERIC_TOOLTIP
+                r = self.ui_renderer.spirit_panel_guidance_rect
+                draw_multiline_tooltip(
+                    screen, self.small_font, tooltip,
+                    anchor_x=r.centerx, anchor_y=r.bottom, below=True,
+                )
+            elif self.hovered_spirit_panel_influence:
+                draw_multiline_tooltip(
+                    screen, self.small_font, _INFLUENCE_TOOLTIP,
+                    anchor_x=self.ui_renderer.spirit_panel_influence_rect.centerx,
+                    anchor_y=self.ui_renderer.spirit_panel_influence_rect.bottom,
+                    below=True,
+                )
+            elif self.hovered_spirit_panel_worship:
+                tooltip = self._build_spirit_worship_tooltip(
+                    self.hovered_spirit_panel_worship, self.app.my_spirit_id)
+                r = self.ui_renderer.spirit_panel_worship_rects[self.hovered_spirit_panel_worship]
                 draw_multiline_tooltip(
                     screen, self.small_font, tooltip,
                     anchor_x=r.centerx, anchor_y=r.bottom, below=True,
