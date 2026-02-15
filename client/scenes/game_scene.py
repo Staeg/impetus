@@ -783,12 +783,13 @@ class GameScene:
     def _try_pin_hovered_tooltip(self, mouse_pos):
         """Check all hover states and pin the matching tooltip as a popup."""
         # Faction panel guided tooltip
-        if self.hovered_panel_guided and self.ui_renderer.panel_guided_spirit_id:
-            tooltip = self._build_guidance_panel_tooltip(
-                self.ui_renderer.panel_guided_spirit_id)
+        if self.hovered_panel_guided:
+            spirit_id = self.ui_renderer.panel_guided_spirit_id
+            tooltip = self._build_guidance_panel_tooltip(spirit_id)
             r = self.ui_renderer.panel_guided_rect
+            hover_regions = _GUIDANCE_HOVER_REGIONS if spirit_id else []
             self.popup_manager.pin_tooltip(
-                tooltip, _GUIDANCE_HOVER_REGIONS,
+                tooltip, hover_regions,
                 anchor_x=r.centerx, anchor_y=r.bottom,
                 font=self.small_font, max_width=350,
                 surface_w=SCREEN_WIDTH, below=True,
@@ -814,14 +815,18 @@ class GameScene:
             if spirit.get("guided_faction"):
                 tooltip = self._build_guidance_panel_tooltip(
                     self.hovered_vp_spirit_id)
-                r = self.ui_renderer.vp_hover_rects[self.hovered_vp_spirit_id]
-                self.popup_manager.pin_tooltip(
-                    tooltip, _GUIDANCE_HOVER_REGIONS,
-                    anchor_x=r.centerx, anchor_y=r.bottom,
-                    font=self.small_font, max_width=350,
-                    surface_w=SCREEN_WIDTH, below=True,
-                )
-                return
+                hover_regions = _GUIDANCE_HOVER_REGIONS
+            else:
+                tooltip = self._GUIDANCE_GENERIC_TOOLTIP
+                hover_regions = []
+            r = self.ui_renderer.vp_hover_rects[self.hovered_vp_spirit_id]
+            self.popup_manager.pin_tooltip(
+                tooltip, hover_regions,
+                anchor_x=r.centerx, anchor_y=r.bottom,
+                font=self.small_font, max_width=350,
+                surface_w=SCREEN_WIDTH, below=True,
+            )
+            return
 
         # Guidance title tooltip
         if self.guidance_title_hovered and self.guidance_title_rect:
@@ -928,8 +933,25 @@ class GameScene:
             affluence_count * AFFLUENCE_IDOL_VP,
         )
 
-    def _build_guidance_panel_tooltip(self, spirit_id: str) -> str:
+    _GUIDANCE_GENERIC_TOOLTIP = (
+        "A Spirit can Guide a Faction by choosing it during the "
+        "Vagrant phase. While Guiding, the Spirit draws from the "
+        "Faction's Agenda deck and picks which Agenda the Faction "
+        "plays each turn. Guidance lasts until the Spirit's "
+        "Influence runs out."
+    )
+
+    _UNGUIDED_FACTION_TOOLTIP = (
+        "This Faction is not currently Guided by any Spirit. "
+        "An unguided Faction draws and plays 1 random Agenda "
+        "from its Agenda deck each turn. A Vagrant Spirit can "
+        "choose to Guide it during the Vagrant phase."
+    )
+
+    def _build_guidance_panel_tooltip(self, spirit_id: str | None) -> str:
         """Build tooltip text for Guided by / VP name hover."""
+        if not spirit_id:
+            return self._UNGUIDED_FACTION_TOOLTIP
         spirit = self.spirits.get(spirit_id, {})
         influence = spirit.get("influence", 0)
         return (
@@ -1172,7 +1194,7 @@ class GameScene:
                 self._render_idol_tooltip(screen)
 
             # Faction panel guided/worship hover tooltips
-            if self.hovered_panel_guided and self.ui_renderer.panel_guided_spirit_id:
+            if self.hovered_panel_guided:
                 tooltip = self._build_guidance_panel_tooltip(
                     self.ui_renderer.panel_guided_spirit_id)
                 r = self.ui_renderer.panel_guided_rect
@@ -1195,11 +1217,13 @@ class GameScene:
                 if spirit.get("guided_faction"):
                     tooltip = self._build_guidance_panel_tooltip(
                         self.hovered_vp_spirit_id)
-                    r = self.ui_renderer.vp_hover_rects[self.hovered_vp_spirit_id]
-                    draw_multiline_tooltip(
-                        screen, self.small_font, tooltip,
-                        anchor_x=r.centerx, anchor_y=r.bottom, below=True,
-                    )
+                else:
+                    tooltip = self._GUIDANCE_GENERIC_TOOLTIP
+                r = self.ui_renderer.vp_hover_rects[self.hovered_vp_spirit_id]
+                draw_multiline_tooltip(
+                    screen, self.small_font, tooltip,
+                    anchor_x=r.centerx, anchor_y=r.bottom, below=True,
+                )
 
         # Pinned popups (drawn on top of everything)
         self.popup_manager.render(screen, self.small_font)
