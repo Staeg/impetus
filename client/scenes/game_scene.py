@@ -108,6 +108,11 @@ class GameScene:
         self.hovered_anim_tooltip: str | None = None
         self.hovered_anim_rect: pygame.Rect | None = None
 
+        # Faction panel / VP hover tooltip state
+        self.hovered_panel_guided: bool = False
+        self.hovered_panel_worship: bool = False
+        self.hovered_vp_spirit_id: str | None = None
+
         # Change tracking for faction panel
         self.change_tracker = FactionChangeTracker()
         self.highlighted_log_index: int | None = None
@@ -214,6 +219,10 @@ class GameScene:
             self._update_idol_hover(event.pos)
             # Agenda card/label/animation hover detection
             self._update_agenda_hover(event.pos)
+            # Faction panel guided/worship hover detection
+            self._update_panel_hover(event.pos)
+            # VP HUD hover detection
+            self._update_vp_hover(event.pos)
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # Check submit button
@@ -719,6 +728,87 @@ class GameScene:
                 self.hovered_anim_rect = anim_rect
                 return
 
+    def _update_panel_hover(self, mouse_pos):
+        """Check if mouse is hovering over Guided by / Worshipping in faction panel."""
+        mx, my = mouse_pos
+        r = self.ui_renderer.panel_guided_rect
+        self.hovered_panel_guided = r is not None and r.collidepoint(mx, my)
+        r = self.ui_renderer.panel_worship_rect
+        self.hovered_panel_worship = r is not None and r.collidepoint(mx, my)
+
+    def _update_vp_hover(self, mouse_pos):
+        """Check if mouse is hovering over a player name in the VP HUD."""
+        mx, my = mouse_pos
+        self.hovered_vp_spirit_id = None
+        for sid, rect in self.ui_renderer.vp_hover_rects.items():
+            if rect.collidepoint(mx, my):
+                self.hovered_vp_spirit_id = sid
+                return
+
+    def _count_idol_vp_for_faction(self, faction_id: str):
+        """Count total VP per event type from idols in a faction's territory.
+
+        Returns (battle_vp, spread_vp, affluence_vp) totals.
+        """
+        battle_count = 0
+        spread_count = 0
+        affluence_count = 0
+        for idol in self.all_idols:
+            if isinstance(idol, dict):
+                pos = idol.get('position', {})
+                q, r = pos.get('q'), pos.get('r')
+                if self.hex_ownership.get((q, r)) == faction_id:
+                    itype = idol.get('type', '')
+                    if itype == IdolType.BATTLE.value:
+                        battle_count += 1
+                    elif itype == IdolType.SPREAD.value:
+                        spread_count += 1
+                    elif itype == IdolType.AFFLUENCE.value:
+                        affluence_count += 1
+        return (
+            battle_count * BATTLE_IDOL_VP,
+            spread_count * SPREAD_IDOL_VP,
+            affluence_count * AFFLUENCE_IDOL_VP,
+        )
+
+    def _build_guidance_panel_tooltip(self, spirit_id: str) -> str:
+        """Build tooltip text for Guided by / VP name hover."""
+        spirit = self.spirits.get(spirit_id, {})
+        influence = spirit.get("influence", 0)
+        return (
+            "When Guidance begins, the Spirit's Influence is set to 3. "
+            "Spirits draw 1 Agenda card + however much Influence they have "
+            "from the Guided Faction's Agenda deck, choose 1 of the drawn "
+            "Agendas for their Guided Faction to play, then lose 1 Influence. "
+            f"This Spirit currently has {influence} remaining Influence and "
+            f"will become Vagrant again after that many turns."
+        )
+
+    def _build_worship_panel_tooltip(self, faction_id: str) -> str:
+        """Build tooltip text for Worshipping hover."""
+        worship_id = self.ui_renderer.panel_worship_spirit_id
+        battle_vp, spread_vp, affluence_vp = self._count_idol_vp_for_faction(faction_id)
+
+        def _fmt(v):
+            return f"{v:g}"
+
+        if worship_id:
+            name = self.spirits.get(worship_id, {}).get("name", worship_id[:6])
+            return (
+                f"At the end of every turn, this Faction will give {name} "
+                f"{_fmt(battle_vp)} VPs for each battle it won, "
+                f"{_fmt(spread_vp)} VPs for each new Territory it acquired and "
+                f"{_fmt(affluence_vp)} VPs for each gold it acquired during that turn."
+            )
+        else:
+            return (
+                f"At the end of every turn, this Faction would give "
+                f"{_fmt(battle_vp)} VPs for each battle it won, "
+                f"{_fmt(spread_vp)} VPs for each new Territory it acquired and "
+                f"{_fmt(affluence_vp)} VPs for each gold it acquired during that turn "
+                f"to whoever it Worships. The first Spirit to Guide it will become Worshipped."
+            )
+
     def _log_event(self, event: dict):
         from client.scenes.event_logger import log_event
         etype = log_event(event, self.event_log, self.spirits,
@@ -859,6 +949,9 @@ class GameScene:
                 change_rects=self.panel_change_rects,
                 wars=render_wars,
             )
+        else:
+            self.ui_renderer.panel_guided_rect = None
+            self.ui_renderer.panel_worship_rect = None
 
         # Draw event log (bottom right)
         self.ui_renderer.draw_event_log(
@@ -915,6 +1008,36 @@ class GameScene:
         # Idol hover tooltip (drawn last so it's on top)
         if self.hovered_idol:
             self._render_idol_tooltip(screen)
+
+        # Faction panel guided/worship hover tooltips
+        if self.hovered_panel_guided and self.ui_renderer.panel_guided_spirit_id:
+            tooltip = self._build_guidance_panel_tooltip(
+                self.ui_renderer.panel_guided_spirit_id)
+            r = self.ui_renderer.panel_guided_rect
+            draw_multiline_tooltip(
+                screen, self.small_font, tooltip,
+                anchor_x=r.centerx, anchor_y=r.bottom, below=True,
+            )
+        elif self.hovered_panel_worship and self.ui_renderer.panel_faction_id:
+            tooltip = self._build_worship_panel_tooltip(
+                self.ui_renderer.panel_faction_id)
+            r = self.ui_renderer.panel_worship_rect
+            draw_multiline_tooltip(
+                screen, self.small_font, tooltip,
+                anchor_x=r.centerx, anchor_y=r.bottom, below=True,
+            )
+
+        # VP HUD name hover tooltip
+        if self.hovered_vp_spirit_id:
+            spirit = self.spirits.get(self.hovered_vp_spirit_id, {})
+            if spirit.get("guided_faction"):
+                tooltip = self._build_guidance_panel_tooltip(
+                    self.hovered_vp_spirit_id)
+                r = self.ui_renderer.vp_hover_rects[self.hovered_vp_spirit_id]
+                draw_multiline_tooltip(
+                    screen, self.small_font, tooltip,
+                    anchor_x=r.centerx, anchor_y=r.bottom, below=True,
+                )
 
     _IDOL_VP_TEXT = {
         IdolType.BATTLE: f"{BATTLE_IDOL_VP} VP for each war won\nby the Worshipping Faction",

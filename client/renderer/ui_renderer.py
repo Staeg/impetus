@@ -150,6 +150,12 @@ class UIRenderer:
         self._small_font = None
         self._title_font = None
         self.vp_positions: dict[str, tuple[int, int]] = {}  # spirit_id -> (x, y)
+        self.vp_hover_rects: dict[str, pygame.Rect] = {}  # spirit_id -> rect
+        self.panel_guided_rect: pygame.Rect | None = None
+        self.panel_guided_spirit_id: str | None = None
+        self.panel_worship_rect: pygame.Rect | None = None
+        self.panel_worship_spirit_id: str | None = None
+        self.panel_faction_id: str | None = None
 
     def _get_font(self, size=16):
         return pygame.font.SysFont("consolas", size)
@@ -184,6 +190,7 @@ class UIRenderer:
 
         # VP display
         x = 300
+        self.vp_hover_rects.clear()
         for sid, spirit in spirits.items():
             color = (255, 255, 100) if sid == my_spirit_id else (180, 180, 200)
             name = spirit.get("name", sid[:6])
@@ -191,6 +198,7 @@ class UIRenderer:
             faction_id = spirit.get("guided_faction")
 
             # Render name
+            entry_start_x = x
             name_surf = self.small_font.render(name, True, color)
             surface.blit(name_surf, (x, 12))
             x += name_surf.get_width()
@@ -207,7 +215,11 @@ class UIRenderer:
             self.vp_positions[sid] = (x, 12)
             vp_surf = self.small_font.render(f": {vp}VP", True, color)
             surface.blit(vp_surf, (x, 12))
-            x += vp_surf.get_width() + 20
+            x += vp_surf.get_width()
+
+            # Store hover rect covering name+tag+VP
+            self.vp_hover_rects[sid] = pygame.Rect(entry_start_x, 4, x - entry_start_x, 28)
+            x += 20
 
     def draw_faction_overview(self, surface: pygame.Surface, factions: dict,
                               faction_agendas: dict[str, str], wars=None,
@@ -482,6 +494,7 @@ class UIRenderer:
 
         # --- Guided by ---
         guide_changes = _field_changes("guiding_spirit")
+        guided_line_y = dy
         if guide_changes:
             ch = guide_changes[-1]  # latest change
             label_surf = self.small_font.render("Guided by: ", True, (180, 180, 200))
@@ -498,10 +511,13 @@ class UIRenderer:
         else:
             text = self.small_font.render(f"Guided by: {guiding_name}", True, (180, 180, 200))
             surface.blit(text, (x + 10, dy))
+        self.panel_guided_rect = pygame.Rect(x + 10, guided_line_y, width - 20, 16)
+        self.panel_guided_spirit_id = guiding
         dy += 18
 
         # --- Worshipping ---
         worship_changes = _field_changes("worship_spirit")
+        worship_line_y = dy
         if worship_changes:
             ch = worship_changes[-1]
             label_surf = self.small_font.render("Worshipping: ", True, (180, 180, 200))
@@ -518,6 +534,9 @@ class UIRenderer:
         else:
             text = self.small_font.render(f"Worshipping: {worship_name}", True, (180, 180, 200))
             surface.blit(text, (x + 10, dy))
+        self.panel_worship_rect = pygame.Rect(x + 10, worship_line_y, width - 20, 16)
+        self.panel_worship_spirit_id = worship
+        self.panel_faction_id = fid
         dy += 18
 
         if regard:
