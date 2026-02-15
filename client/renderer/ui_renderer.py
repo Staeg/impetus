@@ -293,9 +293,50 @@ class UIRenderer:
                         pygame.draw.polygon(surface, (255, 255, 255), points, 1)
                     wx += 14
 
+    def _render_strikethrough(self, surface, font, text_str, color, pos):
+        """Render text with a strikethrough line."""
+        dim_color = tuple(max(c // 2, 40) for c in color)
+        text_surf = font.render(text_str, True, dim_color)
+        surface.blit(text_surf, pos)
+        # Draw horizontal line through vertical center
+        line_y = pos[1] + text_surf.get_height() // 2
+        pygame.draw.line(surface, dim_color,
+                         (pos[0], line_y),
+                         (pos[0] + text_surf.get_width(), line_y), 1)
+        return text_surf.get_width()
+
+    def _render_delta_chip(self, surface, font, delta, label, log_index,
+                           pos, highlight_log_idx, change_rects):
+        """Render a +X or -Y delta chip. Returns chip width."""
+        if delta > 0:
+            chip_text = f"+{delta}"
+            chip_color = (80, 220, 80)
+        else:
+            chip_text = f"{delta}"
+            chip_color = (255, 90, 90)
+
+        is_highlighted = highlight_log_idx is not None and log_index == highlight_log_idx
+        text_surf = font.render(chip_text, True, chip_color)
+        chip_w = text_surf.get_width() + 6
+        chip_h = text_surf.get_height() + 2
+        chip_rect = pygame.Rect(pos[0], pos[1], chip_w, chip_h)
+
+        if is_highlighted:
+            pygame.draw.rect(surface, (80, 80, 40), chip_rect, border_radius=3)
+        pygame.draw.rect(surface, chip_color, chip_rect, 1, border_radius=3)
+        surface.blit(text_surf, (pos[0] + 3, pos[1] + 1))
+
+        if change_rects is not None:
+            change_rects.append((chip_rect, log_index))
+
+        return chip_w
+
     def draw_faction_panel(self, surface: pygame.Surface, faction_data: dict,
                            x: int, y: int, width: int = 220, spirits: dict = None,
-                           preview_guidance: dict = None):
+                           preview_guidance: dict = None,
+                           change_tracker=None, panel_faction_id: str = None,
+                           highlight_log_idx: int = None,
+                           change_rects: list = None):
         """Draw faction info panel."""
         if not faction_data:
             return
@@ -333,21 +374,91 @@ class UIRenderer:
         # Check for preview guidance name
         preview_guid_name = preview_guidance.get(fid)
 
-        info_lines = [
-            ("Gold", f"Gold: {gold}", None),
-            ("Territories", f"Territories: {len(territories)}", None),
-            ("Guided by", f"Guided by: {guiding_name}",
-             f"Guided by: {preview_guid_name}?" if guiding_name == "none" and preview_guid_name else None),
-            ("Worshipping", f"Worshipping: {worship_name}",
-             f"Worshipping: {preview_guid_name}?" if worship_name == "none" and preview_guid_name else None),
-        ]
-        for label, line, preview_line in info_lines:
-            if preview_line:
-                text = self.small_font.render(preview_line, True, (100, 100, 130))
-            else:
-                text = self.small_font.render(line, True, (180, 180, 200))
+        # Helper: get field changes from tracker
+        def _field_changes(field_name, target=None):
+            if change_tracker and panel_faction_id:
+                return change_tracker.get_field_changes(panel_faction_id, field_name, target)
+            return []
+
+        # --- Gold ---
+        gold_changes = _field_changes("gold")
+        if gold_changes:
+            old_gold = change_tracker.get_old_value(panel_faction_id, "gold")
+            label_surf = self.small_font.render("Gold: ", True, (180, 180, 200))
+            surface.blit(label_surf, (x + 10, dy))
+            cx = x + 10 + label_surf.get_width()
+            cx += self._render_strikethrough(
+                surface, self.small_font, str(old_gold), (180, 180, 200), (cx, dy))
+            cx += 4
+            for ch in gold_changes:
+                cx += self._render_delta_chip(
+                    surface, self.small_font, ch.delta, ch.label, ch.log_index,
+                    (cx, dy), highlight_log_idx, change_rects)
+                cx += 3
+        else:
+            text = self.small_font.render(f"Gold: {gold}", True, (180, 180, 200))
             surface.blit(text, (x + 10, dy))
-            dy += 18
+        dy += 18
+
+        # --- Territories ---
+        terr_changes = _field_changes("territories")
+        if terr_changes:
+            old_terr = change_tracker.get_old_value(panel_faction_id, "territories")
+            label_surf = self.small_font.render("Territories: ", True, (180, 180, 200))
+            surface.blit(label_surf, (x + 10, dy))
+            cx = x + 10 + label_surf.get_width()
+            cx += self._render_strikethrough(
+                surface, self.small_font, str(old_terr), (180, 180, 200), (cx, dy))
+            cx += 4
+            for ch in terr_changes:
+                cx += self._render_delta_chip(
+                    surface, self.small_font, ch.delta, ch.label, ch.log_index,
+                    (cx, dy), highlight_log_idx, change_rects)
+                cx += 3
+        else:
+            text = self.small_font.render(f"Territories: {len(territories)}", True, (180, 180, 200))
+            surface.blit(text, (x + 10, dy))
+        dy += 18
+
+        # --- Guided by ---
+        guide_changes = _field_changes("guiding_spirit")
+        if guide_changes:
+            ch = guide_changes[-1]  # latest change
+            label_surf = self.small_font.render("Guided by: ", True, (180, 180, 200))
+            surface.blit(label_surf, (x + 10, dy))
+            cx = x + 10 + label_surf.get_width()
+            cx += self._render_strikethrough(
+                surface, self.small_font, ch.old_value or "none", (180, 180, 200), (cx, dy))
+            cx += 4
+            new_surf = self.small_font.render(ch.new_value or "none", True, (180, 220, 255))
+            surface.blit(new_surf, (cx, dy))
+        elif preview_guid_name and guiding_name == "none":
+            text = self.small_font.render(f"Guided by: {preview_guid_name}?", True, (100, 100, 130))
+            surface.blit(text, (x + 10, dy))
+        else:
+            text = self.small_font.render(f"Guided by: {guiding_name}", True, (180, 180, 200))
+            surface.blit(text, (x + 10, dy))
+        dy += 18
+
+        # --- Worshipping ---
+        worship_changes = _field_changes("worship_spirit")
+        if worship_changes:
+            ch = worship_changes[-1]
+            label_surf = self.small_font.render("Worshipping: ", True, (180, 180, 200))
+            surface.blit(label_surf, (x + 10, dy))
+            cx = x + 10 + label_surf.get_width()
+            cx += self._render_strikethrough(
+                surface, self.small_font, ch.old_value or "none", (180, 180, 200), (cx, dy))
+            cx += 4
+            new_surf = self.small_font.render(ch.new_value or "none", True, (180, 220, 255))
+            surface.blit(new_surf, (cx, dy))
+        elif preview_guid_name and worship_name == "none":
+            text = self.small_font.render(f"Worshipping: {preview_guid_name}?", True, (100, 100, 130))
+            surface.blit(text, (x + 10, dy))
+        else:
+            text = self.small_font.render(f"Worshipping: {worship_name}", True, (180, 180, 200))
+            surface.blit(text, (x + 10, dy))
+        dy += 18
 
         if regard:
             dy += 4
@@ -355,10 +466,26 @@ class UIRenderer:
             surface.blit(text, (x + 10, dy))
             dy += 18
             for other_fid, val in regard.items():
-                r_color = (100, 255, 100) if val > 0 else (255, 100, 100) if val < 0 else (180, 180, 200)
+                regard_changes = _field_changes("regard", target=other_fid)
                 other_name = FACTION_DISPLAY_NAMES.get(other_fid, other_fid)
-                text = self.small_font.render(f"  {other_name}: {val:+d}", True, r_color)
-                surface.blit(text, (x + 10, dy))
+                if regard_changes:
+                    old_regard = change_tracker.get_old_regard(panel_faction_id, other_fid)
+                    r_old_color = (100, 255, 100) if old_regard > 0 else (255, 100, 100) if old_regard < 0 else (180, 180, 200)
+                    label_surf = self.small_font.render(f"  {other_name}: ", True, (180, 180, 200))
+                    surface.blit(label_surf, (x + 10, dy))
+                    cx = x + 10 + label_surf.get_width()
+                    cx += self._render_strikethrough(
+                        surface, self.small_font, f"{old_regard:+d}", r_old_color, (cx, dy))
+                    cx += 4
+                    for ch in regard_changes:
+                        cx += self._render_delta_chip(
+                            surface, self.small_font, ch.delta, ch.label, ch.log_index,
+                            (cx, dy), highlight_log_idx, change_rects)
+                        cx += 3
+                else:
+                    r_color = (100, 255, 100) if val > 0 else (255, 100, 100) if val < 0 else (180, 180, 200)
+                    text = self.small_font.render(f"  {other_name}: {val:+d}", True, r_color)
+                    surface.blit(text, (x + 10, dy))
                 dy += 18
 
         if any(v > 0 for v in modifiers.values()):
@@ -368,8 +495,19 @@ class UIRenderer:
             dy += 18
             for mod, val in modifiers.items():
                 if val > 0:
-                    text = self.small_font.render(f"  {mod}: +{val}", True, (150, 200, 255))
-                    surface.blit(text, (x + 10, dy))
+                    mod_changes = _field_changes("modifier", target=mod)
+                    if mod_changes:
+                        ch = mod_changes[-1]
+                        mod_surf = self.small_font.render(f"  {mod}: +{val}", True, (150, 200, 255))
+                        surface.blit(mod_surf, (x + 10, dy))
+                        # Highlight glow for new modifier
+                        glow_rect = pygame.Rect(x + 8, dy - 1, mod_surf.get_width() + 4, mod_surf.get_height() + 2)
+                        pygame.draw.rect(surface, (100, 160, 255), glow_rect, 1, border_radius=3)
+                        if change_rects is not None:
+                            change_rects.append((glow_rect, ch.log_index))
+                    else:
+                        text = self.small_font.render(f"  {mod}: +{val}", True, (150, 200, 255))
+                        surface.blit(text, (x + 10, dy))
                     dy += 18
 
         # Extra agenda cards
@@ -501,7 +639,8 @@ class UIRenderer:
 
     def draw_event_log(self, surface: pygame.Surface, events: list[str],
                        x: int, y: int, width: int, height: int,
-                       scroll_offset: int = 0):
+                       scroll_offset: int = 0,
+                       highlight_log_idx: int = None):
         """Draw scrollable event log."""
         panel_rect = pygame.Rect(x, y, width, height)
         pygame.draw.rect(surface, (20, 20, 30), panel_rect, border_radius=4)
@@ -517,16 +656,24 @@ class UIRenderer:
         if scroll_offset > 0:
             end = total - scroll_offset
             start = max(0, end - visible_count)
-            visible_events = events[start:end]
         else:
-            visible_events = events[-visible_count:] if total > visible_count else events
+            start = max(0, total - visible_count)
+            end = total
+        visible_events = events[start:end]
 
         clip_rect = pygame.Rect(x + 4, y + 22, width - 8, height - 26)
         surface.set_clip(clip_rect)
 
         dy = y + 22
-        for event_text in visible_events:
-            text = self.small_font.render(event_text, True, (160, 160, 180))
+        for i, event_text in enumerate(visible_events):
+            abs_index = start + i
+            # Highlight background if this entry matches the highlighted log index
+            if highlight_log_idx is not None and abs_index == highlight_log_idx:
+                hl_rect = pygame.Rect(x + 4, dy, width - 8, 16)
+                pygame.draw.rect(surface, (80, 75, 20), hl_rect)
+                text = self.small_font.render(event_text, True, (255, 240, 150))
+            else:
+                text = self.small_font.render(event_text, True, (160, 160, 180))
             surface.blit(text, (x + 8, dy))
             dy += 16
 
