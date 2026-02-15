@@ -253,11 +253,7 @@ class GameServer:
                         # Now resolve all agendas
                         events = room.game_state.resolve_agenda_phase_after_changes()
                         await self._broadcast_phase_result(room, events)
-                        if room.game_state.has_pending_sub_choices():
-                            # Ejection choices needed
-                            await self._send_ejection_options(room)
-                        else:
-                            await self._auto_resolve_phases(room)
+                        await self._auto_resolve_phases(room)
 
         elif msg_type == MessageType.SUBMIT_EJECTION_AGENDA:
             if room.game_state:
@@ -379,11 +375,6 @@ class GameServer:
         # No change choices needed - resolve immediately
         events = gs.resolve_agenda_phase_after_changes()
         await self._broadcast_phase_result(room, events)
-
-        if gs.has_pending_sub_choices():
-            await self._send_ejection_options(room)
-            return
-
         await self._auto_resolve_phases(room)
 
     async def _send_ejection_options(self, room: GameRoom):
@@ -433,6 +424,10 @@ class GameServer:
                 await room.broadcast(create_message(MessageType.WAITING_FOR, {
                     "players_remaining": waiting_for,
                 }))
+                return
+            # If ejection choices are pending (after scoring), send options and stop
+            if gs.ejection_pending:
+                await self._send_ejection_options(room)
                 return
 
         # Now at a phase that needs player input

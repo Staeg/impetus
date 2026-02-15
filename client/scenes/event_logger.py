@@ -156,7 +156,10 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
         event_log.append(f"{fname} has been ELIMINATED!")
 
     elif etype == "war_ended":
-        event_log.append(f"War ended ({event.get('reason', 'unknown')})")
+        if event.get("message"):
+            event_log.append(event["message"])
+        else:
+            event_log.append(f"War ended ({event.get('reason', 'unknown')})")
 
     elif etype == "setup_start":
         event_log.append("--- Setup ---")

@@ -548,20 +548,7 @@ class GameState:
                 })
         self._guided_change_modifiers = {}
 
-        # Check for ejection (0 influence spirits)
-        for spirit in self.spirits.values():
-            if not spirit.is_vagrant and spirit.guided_faction and spirit.influence == 0:
-                faction_id = spirit.guided_faction
-                self.ejection_pending[spirit.spirit_id] = faction_id
-                events.append({
-                    "type": "ejection_pending",
-                    "spirit": spirit.spirit_id,
-                    "faction": faction_id,
-                })
-
-        # If no ejection choices needed, advance
-        if not self.ejection_pending:
-            self._finalize_agenda_phase(events)
+        self._finalize_agenda_phase(events)
 
         self._stored_agenda_choices = {}
         self._guided_change_factions = []
@@ -584,19 +571,18 @@ class GameState:
         return self.resolve_agenda_phase_after_changes()
 
     def finalize_sub_choices(self) -> list[dict]:
-        """Called after all ejection choices are submitted."""
+        """Called after all ejection choices are submitted. Ejects spirits and advances to CLEANUP."""
         events = []
-        self._finalize_agenda_phase(events)
+        self._process_ejections(events)
+        self.phase = Phase.CLEANUP
         return events
 
     def _finalize_agenda_phase(self, events: list):
-        """Handle ejections and advance to war phase."""
-        # Process ejections
-        for spirit_id, faction_id in list(self.ejection_pending.items()):
-            # If still pending (not yet submitted), auto-resolve
-            pass
+        """Clear agenda state and advance to war phase."""
+        self.phase = Phase.WAR_PHASE
 
-        # Actually eject spirits whose ejection has been resolved
+    def _process_ejections(self, events: list):
+        """Eject all 0-influence spirits whose ejection choices have been submitted."""
         spirits_to_eject = []
         for spirit in self.spirits.values():
             if not spirit.is_vagrant and spirit.guided_faction and spirit.influence == 0:
@@ -616,7 +602,6 @@ class GameState:
             })
 
         self.ejection_pending.clear()
-        self.phase = Phase.WAR_PHASE
 
     def _resolve_war_phase(self) -> list[dict]:
         events = []
@@ -687,7 +672,20 @@ class GameState:
                 "scores": {s.spirit_id: s.victory_points for s in self.spirits.values()},
             })
         else:
-            self.phase = Phase.CLEANUP
+            # Check for ejection (0 influence spirits) before cleanup
+            for spirit in self.spirits.values():
+                if not spirit.is_vagrant and spirit.guided_faction and spirit.influence == 0:
+                    faction_id = spirit.guided_faction
+                    self.ejection_pending[spirit.spirit_id] = faction_id
+                    events.append({
+                        "type": "ejection_pending",
+                        "spirit": spirit.spirit_id,
+                        "faction": faction_id,
+                    })
+
+            if not self.ejection_pending:
+                self.phase = Phase.CLEANUP
+            # Otherwise stay in SCORING until ejection choices are submitted
 
         return events
 
