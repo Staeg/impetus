@@ -122,7 +122,7 @@ class AnimationOrchestrator:
 
         elif etype == "steal":
             gold = event.get("gold_gained", 0)
-            regard_penalty = event.get("regard_penalty", -1)
+            regard_penalty = event.get("regard_penalty", 1)
             neighbors = event.get("neighbors", [])
             if gold > 0:
                 gx, gy = self._get_gold_display_pos(faction_id, small_font)
@@ -134,7 +134,7 @@ class AnimationOrchestrator:
             for nfid in neighbors:
                 rx, ry = self._get_faction_strip_pos(nfid)
                 self.animation.add_effect_animation(TextAnimation(
-                    str(regard_penalty), rx, ry, (255, 80, 80),
+                    f"-{regard_penalty}", rx, ry, (255, 80, 80),
                     delay=delay, duration=3.0, drift_pixels=40,
                     direction=1, screen_space=True,
                 ))

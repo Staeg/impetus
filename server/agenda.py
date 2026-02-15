@@ -55,15 +55,15 @@ def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils)
         faction = factions[fid]
         steal_bonus = faction.change_modifiers.get(ChangeModifierTarget.STEAL.value, 0)
         gold_stolen_per_neighbor = 1 + steal_bonus
-        regard_penalty = -1 - steal_bonus
+        regard_penalty = 1 + steal_bonus
         regard_penalty_map[fid] = regard_penalty
         total_gained = 0
         neighbors = hex_map.get_live_neighbor_ids(fid, factions)
 
         for other_fid in neighbors:
             other_faction = factions[other_fid]
-            # Mark regard change
-            regard_changes.append((fid, other_fid, regard_penalty))
+            # Mark regard change (negate: regard_penalty is positive magnitude)
+            regard_changes.append((fid, other_fid, -regard_penalty))
             # Calculate gold loss for neighbor (but don't apply yet - simultaneous)
             key = (fid, other_fid)
             actual_loss = min(other_faction.gold, gold_stolen_per_neighbor)

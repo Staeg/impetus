@@ -162,7 +162,7 @@ class TestEventFields:
         assert len(steal_events) == 1
         ev = steal_events[0]
         assert "regard_penalty" in ev
-        assert ev["regard_penalty"] == -1
+        assert ev["regard_penalty"] == 1
         assert "neighbors" in ev
         assert isinstance(ev["neighbors"], list)
         assert len(ev["neighbors"]) > 0

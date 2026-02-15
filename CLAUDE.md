@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Workflow rules
+
+- **Never commit or push** unless the user explicitly asks you to. Do not proactively create commits, tags, or push to remote after completing a task.
+
 ## Project Overview
 
 Impetus is a multiplayer turn-based strategy game built with PyGame (client) and Python asyncio/websockets (server). It uses an **authoritative server** architecture — all game logic runs on the server; clients only render state and send inputs.
@@ -87,6 +91,40 @@ When the client receives a `PHASE_RESULT` message, it doesn't immediately update
 - Server: asyncio + websockets, supports multiple concurrent game rooms
 - Client: WebSocket on background thread with message queue, polled each frame by the PyGame main loop
 - Information hiding: players only see their own drawn cards during choice phases
+
+## Common modification patterns
+
+### Adding a hover tooltip
+This is a multi-file pattern used repeatedly:
+1. **`client/renderer/ui_renderer.py`**: Store a `pygame.Rect` as an instance variable (e.g., `self.panel_foo_rect`) during rendering
+2. **`client/scenes/game_scene.py` init**: Add hover state bool/string (e.g., `self.hovered_foo = False`)
+3. **`game_scene.py` MOUSEMOTION handler**: Add collision check (`rect.collidepoint(mx, my)`) to update hover state
+4. **`game_scene.py` render method**: Draw tooltip with `draw_multiline_tooltip()` when hover state is active
+5. Clear rects when the parent UI element is not drawn (to avoid phantom tooltips from stale rects)
+
+### PHASE_RESULT data flow
+When a `PHASE_RESULT` arrives in `game_scene.handle_network()`:
+1. Display state is snapshotted for animations (`_snapshot_display_state`)
+2. `self.factions`/`self.spirits` are updated to the **final post-event state** via `_update_state_from_snapshot`
+3. Events are then logged sequentially via `_log_event`, which feeds the change tracker
+4. **Important**: By the time `change_tracker.process_event` runs, `self.factions` already has the final state — the tracker relies on its own `old_state` snapshots, not on comparing `self.factions` before/after
+
+### Change tracker / display state lifecycle
+- `snapshot_and_reset()` is called on `turn_start` events — it deep-copies current faction state as `old_state` and preserves the previous turn's data in `prev_old_state`/`prev_changes`
+- `_use_prev()` returns True between turns (no current changes yet), causing the panel to show previous turn's deltas until new events arrive
+- Display state (`_display_hex_ownership`) is a separate snapshot used only by the animation system to render hex ownership from before the state update
+
+## Key file sizes
+- `client/scenes/game_scene.py` — ~1500 lines, the largest file; handles all gameplay phases, hover detection, UI setup, and network message processing
+- `client/renderer/ui_renderer.py` — ~650 lines; all HUD, panels, tooltips, and card rendering
+- `client/scenes/animation_orchestrator.py` — ~250 lines; translates game events into animation calls
+- `server/agenda.py` — ~300 lines; all agenda resolution logic
+- `server/game_state.py` — ~700 lines; the game state machine driving all phase transitions
+
+## Testing
+- Tests live in `tests/` and cover **server logic only** (agenda resolution, war, scoring, protocol serialization)
+- There are **no client rendering tests** — client UI changes must be verified manually by running the game
+- Always run `python -m pytest tests/` after modifying server code
 
 ## Game design docs
 - `Impetus v5.md` — Game rules and mechanics
