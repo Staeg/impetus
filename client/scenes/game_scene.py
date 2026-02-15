@@ -857,6 +857,7 @@ class GameScene:
                 panel_faction_id=pf,
                 highlight_log_idx=self.highlighted_log_index,
                 change_rects=self.panel_change_rects,
+                wars=render_wars,
             )
 
         # Draw event log (bottom right)

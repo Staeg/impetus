@@ -379,7 +379,8 @@ class UIRenderer:
                            preview_guidance: dict = None,
                            change_tracker=None, panel_faction_id: str = None,
                            highlight_log_idx: int = None,
-                           change_rects: list = None):
+                           change_rects: list = None,
+                           wars: list = None):
         """Draw faction info panel."""
         if not faction_data:
             return
@@ -398,7 +399,23 @@ class UIRenderer:
         guiding_name = spirits.get(guiding, {}).get("name", guiding) if guiding else "none"
         worship_name = spirits.get(worship, {}).get("name", worship) if worship else "none"
 
+        # Build war opponents for this faction
+        war_opponents = []  # list of (opponent_name, is_ripe)
+        if wars:
+            for w in wars:
+                fa = getattr(w, 'faction_a', None) or (w.get('faction_a') if isinstance(w, dict) else None)
+                fb = getattr(w, 'faction_b', None) or (w.get('faction_b') if isinstance(w, dict) else None)
+                ripe = getattr(w, 'is_ripe', None)
+                if ripe is None and isinstance(w, dict):
+                    ripe = w.get('is_ripe', False)
+                if fa == fid:
+                    war_opponents.append((FACTION_DISPLAY_NAMES.get(fb, fb), ripe))
+                elif fb == fid:
+                    war_opponents.append((FACTION_DISPLAY_NAMES.get(fa, fa), ripe))
+
         panel_h = 200 + len(regard) * 18
+        if war_opponents:
+            panel_h += 22 + len(war_opponents) * 18
         panel_rect = pygame.Rect(x, y, width, panel_h)
         pygame.draw.rect(surface, (30, 30, 40), panel_rect, border_radius=4)
         pygame.draw.rect(surface, color, panel_rect, 2, border_radius=4)
@@ -562,6 +579,19 @@ class UIRenderer:
             dy += 18
             for atype, count in extra_agendas.items():
                 text = self.small_font.render(f"  {atype}: +{count}", True, (200, 180, 100))
+                surface.blit(text, (x + 10, dy))
+                dy += 18
+
+        # Wars
+        if war_opponents:
+            dy += 4
+            text = self.small_font.render("At war with:", True, (150, 150, 170))
+            surface.blit(text, (x + 10, dy))
+            dy += 18
+            for opp_name, is_ripe in war_opponents:
+                suffix = " (ripe)" if is_ripe else " (new)"
+                war_color = (255, 120, 120) if is_ripe else (255, 180, 100)
+                text = self.small_font.render(f"  {opp_name}{suffix}", True, war_color)
                 surface.blit(text, (x + 10, dy))
                 dy += 18
 

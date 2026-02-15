@@ -23,15 +23,26 @@ class FactionChangeTracker:
         self.old_state: dict[str, dict] = {}   # faction_id -> snapshot of faction data
         self.old_spirits: dict[str, dict] = {}  # spirit_id -> snapshot of spirit data
         self.changes: dict[str, list[ChangeEntry]] = {}  # faction_id -> list of changes
+        # Previous turn's data, shown until current turn has changes
+        self.prev_old_state: dict[str, dict] = {}
+        self.prev_changes: dict[str, list[ChangeEntry]] = {}
 
     def snapshot_and_reset(self, factions: dict, spirits: dict):
-        """Deep-copy current faction state and clear accumulated changes."""
+        """Deep-copy current faction state and clear accumulated changes.
+        Preserves previous turn's data so deltas remain visible until new events arrive."""
+        self.prev_old_state = self.old_state
+        self.prev_changes = self.changes
         self.old_state = copy.deepcopy(factions)
         self.old_spirits = copy.deepcopy(spirits)
-        self.changes.clear()
+        self.changes = {}
+
+    def _use_prev(self) -> bool:
+        """True when current turn has no changes yet, so we show previous turn's."""
+        return not self.changes and bool(self.prev_changes)
 
     def get_changes(self, faction_id: str) -> list[ChangeEntry]:
-        return self.changes.get(faction_id, [])
+        source = self.prev_changes if self._use_prev() else self.changes
+        return source.get(faction_id, [])
 
     def get_field_changes(self, faction_id: str, field_name: str,
                           target: str | None = None) -> list[ChangeEntry]:
@@ -43,7 +54,8 @@ class FactionChangeTracker:
 
     def get_old_value(self, faction_id: str, field_name: str):
         """Get the snapshotted old value for a faction field."""
-        fd = self.old_state.get(faction_id, {})
+        state = self.prev_old_state if self._use_prev() else self.old_state
+        fd = state.get(faction_id, {})
         if field_name == "gold":
             return fd.get("gold", 0)
         elif field_name == "territories":
@@ -55,7 +67,8 @@ class FactionChangeTracker:
         return None
 
     def get_old_regard(self, faction_id: str, neighbor_id: str) -> int:
-        fd = self.old_state.get(faction_id, {})
+        state = self.prev_old_state if self._use_prev() else self.old_state
+        fd = state.get(faction_id, {})
         return fd.get("regard", {}).get(neighbor_id, 0)
 
     def _add(self, faction_id: str, entry: ChangeEntry):
