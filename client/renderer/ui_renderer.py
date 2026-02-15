@@ -67,6 +67,38 @@ def draw_multiline_tooltip(surface: "pygame.Surface", font: "pygame.font.Font",
         surface.blit(surf, (tip_x + 8, tip_y + 6 + i * line_h))
 
 
+def build_agenda_tooltip(agenda_type: str, modifiers: dict,
+                         is_spoils: bool = False) -> str:
+    """Build full rules-text tooltip for an agenda type with modifiers applied."""
+    steal_mod = modifiers.get("steal", 0)
+    bond_mod = modifiers.get("bond", 0)
+    trade_mod = modifiers.get("trade", 0)
+    expand_mod = modifiers.get("expand", 0)
+
+    if is_spoils and agenda_type == "expand":
+        return "Spoils Expand\nConquer the hex on the loser's side of the Battleground (free)."
+
+    tooltips = {
+        "trade": f"Trade\n+1 gold, +{1 + trade_mod} gold for every other Faction playing Trade this turn.",
+        "bond": f"Bond\n+{1 + bond_mod} Regard with all neighbors.",
+        "steal": f"Steal\n-{1 + steal_mod} Regard with and -{1 + steal_mod} gold to all neighbors. +1 gold for each gold lost. War erupts at -2 Regard.",
+        "expand": f"Expand\nSpend gold equal to territories{' -' + str(expand_mod) if expand_mod else ''} to claim a neutral hex. If unavailable or lacking gold, +{1 + expand_mod} gold instead. Idol hexes prioritized.",
+        "change": "Change\nDraw a modifier card. If guided, draw extra cards equal to Influence and choose 1.",
+    }
+    return tooltips.get(agenda_type, agenda_type.title())
+
+
+def build_modifier_tooltip(modifier_type: str) -> str:
+    """Build full rules-text tooltip for a Change modifier card."""
+    tooltips = {
+        "trade": "Trade modifier\nPermanently increases gold gained per extra trader by 1.",
+        "bond": "Bond modifier\nPermanently increases Regard gained with neighbors by 1.",
+        "steal": "Steal modifier\nPermanently increases gold stolen and Regard penalty by 1 per neighbor.",
+        "expand": "Expand modifier\nPermanently decreases expand cost by 1 gold and increases fail bonus by 1 gold.",
+    }
+    return tooltips.get(modifier_type, modifier_type.title())
+
+
 class Button:
     def __init__(self, rect: pygame.Rect, text: str, color=(80, 80, 120),
                  text_color=(255, 255, 255), hover_color=(100, 100, 150),
@@ -117,6 +149,7 @@ class UIRenderer:
         self._font = None
         self._small_font = None
         self._title_font = None
+        self.vp_positions: dict[str, tuple[int, int]] = {}  # spirit_id -> (x, y)
 
     def _get_font(self, size=16):
         return pygame.font.SysFont("consolas", size)
@@ -171,6 +204,7 @@ class UIRenderer:
                 x += tag_surf.get_width()
 
             # Render VP
+            self.vp_positions[sid] = (x, 12)
             vp_surf = self.small_font.render(f": {vp}VP", True, color)
             surface.blit(vp_surf, (x, 12))
             x += vp_surf.get_width() + 20
@@ -180,9 +214,13 @@ class UIRenderer:
                               spirits: dict = None,
                               preview_guidance: dict = None,
                               animated_agenda_factions: set = None):
-        """Draw a compact overview strip showing all factions' gold, agenda, wars, and worship."""
+        """Draw a compact overview strip showing all factions' gold, agenda, wars, and worship.
+
+        Returns dict mapping faction_id -> pygame.Rect for agenda label rects (for hover tooltips).
+        """
         spirits = spirits or {}
         animated_agenda_factions = animated_agenda_factions or set()
+        agenda_label_rects: dict[str, pygame.Rect] = {}
         strip_y = 42
         strip_h = 55
         sw = surface.get_width()
@@ -266,7 +304,10 @@ class UIRenderer:
                     a_label = agenda_str.title()
                     a_color = agenda_colors.get(agenda_str, (160, 160, 180))
                     a_surf = self.small_font.render(a_label, True, a_color)
-                    surface.blit(a_surf, (cx + cell_w - a_surf.get_width() - 6, strip_y + 4))
+                    a_pos = (cx + cell_w - a_surf.get_width() - 6, strip_y + 4)
+                    surface.blit(a_surf, a_pos)
+                    agenda_label_rects[fid] = pygame.Rect(
+                        a_pos[0], a_pos[1], a_surf.get_width(), a_surf.get_height())
 
             # War indicators (second row): crossed swords icon + tiny enemy hex per opponent
             if fid in war_lookup:
@@ -292,6 +333,8 @@ class UIRenderer:
                     if is_ripe:
                         pygame.draw.polygon(surface, (255, 255, 255), points, 1)
                     wx += 14
+
+        return agenda_label_rects
 
     def _render_strikethrough(self, surface, font, text_str, color, pos):
         """Render text with a strikethrough line."""

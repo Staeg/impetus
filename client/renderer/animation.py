@@ -233,10 +233,12 @@ class AgendaSlideAnimation:
                  start_x: float, start_y: float,
                  delay: float = 0.0,
                  auto_fadeout_after: float | None = None,
-                 is_spoils: bool = False):
+                 is_spoils: bool = False,
+                 agenda_type: str = ""):
         self.image = image
         self.faction_id = faction_id
         self.is_spoils = is_spoils
+        self.agenda_type = agenda_type
         self.target_x = target_x
         self.target_y = target_y
         self.start_x = start_x

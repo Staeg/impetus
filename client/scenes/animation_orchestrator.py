@@ -233,6 +233,7 @@ class AnimationOrchestrator:
                     start_x, start_y,
                     delay=delay,
                     auto_fadeout_after=auto_fadeout,
+                    agenda_type=etype,
                 )
                 # Tag expand animations with hex reveal info
                 if etype in ("expand", "expand_spoils"):
@@ -280,6 +281,7 @@ class AnimationOrchestrator:
                     start_x, start_y,
                     delay=delay,
                     is_spoils=True,
+                    agenda_type=etype,
                 )
                 # Tag expand spoils animations with hex reveal info
                 if etype in ("expand", "expand_spoils"):
