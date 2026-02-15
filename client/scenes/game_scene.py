@@ -13,6 +13,7 @@ from client.renderer.assets import load_assets, agenda_card_images
 from client.input_handler import InputHandler
 from client.scenes.animation_orchestrator import AnimationOrchestrator
 from client.scenes.change_tracker import FactionChangeTracker
+from client.renderer.popup_manager import PopupManager, HoverRegion
 
 # Approximate hex map screen bounds (default camera) for centering UI
 _HEX_MAP_HALF_W = int(HEX_SIZE * 1.5 * (MAP_SIDE_LENGTH - 1)) + HEX_SIZE
@@ -30,6 +31,27 @@ _IDOL_BTN_X = _IDOL_CENTER_X - _BTN_W // 2
 # Title positions (below faction overview strip which ends at Y=97)
 _TITLE_Y = 102
 _BTN_START_Y = 129
+
+_INFLUENCE_TOOLTIP = (
+    "The number of additional Agenda cards a Spirit draws when "
+    "choosing for their Guided Faction. Set to 3 when Guidance "
+    "begins, it decreases by 1 each turn. The Spirit is ejected "
+    "when it reaches 0."
+)
+
+_AGENDA_DECK_TOOLTIP = (
+    "All possible Agendas a Faction can draw and play. The base "
+    "deck contains 2 of each type: Trade, Bond, Steal, Expand, "
+    "and Change. Extra cards can be added via the Change agenda "
+    "or when a Spirit is ejected from Guidance. Spirits with "
+    "more Influence draw more options from it."
+)
+
+_GUIDANCE_HOVER_REGIONS = [
+    HoverRegion("Agenda deck", _AGENDA_DECK_TOOLTIP, sub_regions=[
+        HoverRegion("Influence", _INFLUENCE_TOOLTIP, sub_regions=[]),
+    ]),
+]
 
 
 class GameScene:
@@ -115,6 +137,7 @@ class GameScene:
 
         # Change tracking for faction panel
         self.change_tracker = FactionChangeTracker()
+        self.popup_manager = PopupManager()
         self.highlighted_log_index: int | None = None
         self.panel_change_rects: list[tuple[pygame.Rect, int]] = []
 
@@ -205,6 +228,9 @@ class GameScene:
                 self.event_log_scroll_offset += event.y
                 self.event_log_scroll_offset = max(0, min(self.event_log_scroll_offset, max_offset))
 
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            self.popup_manager.handle_escape()
+
         if event.type == pygame.MOUSEMOTION:
             for btn in self.action_buttons + self.faction_buttons + self.idol_buttons:
                 btn.update(event.pos)
@@ -223,6 +249,8 @@ class GameScene:
             self._update_panel_hover(event.pos)
             # VP HUD hover detection
             self._update_vp_hover(event.pos)
+            # Popup keyword hover
+            self.popup_manager.update_hover(event.pos)
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # Check submit button
@@ -300,6 +328,13 @@ class GameScene:
             )
             if hex_coord:
                 self._handle_hex_click(hex_coord)
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+            if self.popup_manager.has_popups():
+                self.popup_manager.handle_right_click(
+                    event.pos, self.small_font, SCREEN_WIDTH)
+            else:
+                self._try_pin_hovered_tooltip(event.pos)
 
     def _handle_action_button(self, text: str):
         if self.ejection_pending:
@@ -745,6 +780,128 @@ class GameScene:
                 self.hovered_vp_spirit_id = sid
                 return
 
+    def _try_pin_hovered_tooltip(self, mouse_pos):
+        """Check all hover states and pin the matching tooltip as a popup."""
+        # Faction panel guided tooltip
+        if self.hovered_panel_guided and self.ui_renderer.panel_guided_spirit_id:
+            tooltip = self._build_guidance_panel_tooltip(
+                self.ui_renderer.panel_guided_spirit_id)
+            r = self.ui_renderer.panel_guided_rect
+            self.popup_manager.pin_tooltip(
+                tooltip, _GUIDANCE_HOVER_REGIONS,
+                anchor_x=r.centerx, anchor_y=r.bottom,
+                font=self.small_font, max_width=350,
+                surface_w=SCREEN_WIDTH, below=True,
+            )
+            return
+
+        # Faction panel worship tooltip
+        if self.hovered_panel_worship and self.ui_renderer.panel_faction_id:
+            tooltip = self._build_worship_panel_tooltip(
+                self.ui_renderer.panel_faction_id)
+            r = self.ui_renderer.panel_worship_rect
+            self.popup_manager.pin_tooltip(
+                tooltip, [],
+                anchor_x=r.centerx, anchor_y=r.bottom,
+                font=self.small_font, max_width=350,
+                surface_w=SCREEN_WIDTH, below=True,
+            )
+            return
+
+        # VP HUD guidance tooltip
+        if self.hovered_vp_spirit_id:
+            spirit = self.spirits.get(self.hovered_vp_spirit_id, {})
+            if spirit.get("guided_faction"):
+                tooltip = self._build_guidance_panel_tooltip(
+                    self.hovered_vp_spirit_id)
+                r = self.ui_renderer.vp_hover_rects[self.hovered_vp_spirit_id]
+                self.popup_manager.pin_tooltip(
+                    tooltip, _GUIDANCE_HOVER_REGIONS,
+                    anchor_x=r.centerx, anchor_y=r.bottom,
+                    font=self.small_font, max_width=350,
+                    surface_w=SCREEN_WIDTH, below=True,
+                )
+                return
+
+        # Guidance title tooltip
+        if self.guidance_title_hovered and self.guidance_title_rect:
+            self.popup_manager.pin_tooltip(
+                self._GUIDANCE_TITLE_TOOLTIP, [],
+                anchor_x=self.guidance_title_rect.centerx,
+                anchor_y=self.guidance_title_rect.bottom,
+                font=self.small_font, max_width=350,
+                surface_w=SCREEN_WIDTH, below=True,
+            )
+            return
+
+        # Idol title tooltip
+        if self.idol_title_hovered and self.idol_title_rect:
+            self.popup_manager.pin_tooltip(
+                self._IDOL_TITLE_TOOLTIP, [],
+                anchor_x=self.idol_title_rect.centerx,
+                anchor_y=self.idol_title_rect.bottom,
+                font=self.small_font, max_width=350,
+                surface_w=SCREEN_WIDTH, below=True,
+            )
+            return
+
+        # Agenda card tooltip
+        if self.hovered_card_tooltip and self.hovered_card_rect:
+            self.popup_manager.pin_tooltip(
+                self.hovered_card_tooltip, [],
+                anchor_x=self.hovered_card_rect.centerx,
+                anchor_y=self.hovered_card_rect.top,
+                font=self.small_font, max_width=350,
+                surface_w=SCREEN_WIDTH,
+            )
+            return
+
+        # Agenda label tooltip
+        if self.hovered_agenda_label_fid and self.hovered_agenda_label_rect:
+            fmod = self._get_faction_modifiers(self.hovered_agenda_label_fid)
+            agenda_str = self.faction_agendas_this_turn.get(
+                self.hovered_agenda_label_fid, "")
+            if agenda_str:
+                tooltip = build_agenda_tooltip(agenda_str, fmod)
+                self.popup_manager.pin_tooltip(
+                    tooltip, [],
+                    anchor_x=self.hovered_agenda_label_rect.centerx,
+                    anchor_y=self.hovered_agenda_label_rect.bottom,
+                    font=self.small_font, max_width=350,
+                    surface_w=SCREEN_WIDTH, below=True,
+                )
+                return
+
+        # Animation tooltip
+        if self.hovered_anim_tooltip and self.hovered_anim_rect:
+            self.popup_manager.pin_tooltip(
+                self.hovered_anim_tooltip, [],
+                anchor_x=self.hovered_anim_rect.centerx,
+                anchor_y=self.hovered_anim_rect.bottom,
+                font=self.small_font, max_width=350,
+                surface_w=SCREEN_WIDTH, below=True,
+            )
+            return
+
+        # Idol hover tooltip
+        if self.hovered_idol:
+            idol = self.hovered_idol
+            idol_type = idol.type
+            owner_id = idol.owner_spirit
+            owner_name = (self.spirits.get(owner_id, {}).get("name", owner_id[:6])
+                          if owner_id else "Unknown")
+            vp_text = self._IDOL_VP_TEXT.get(idol_type, "")
+            tooltip_text = (f"{idol_type.value.title()} Idol\n"
+                            f"Placed by: {owner_name}\n{vp_text}")
+            mx, my = mouse_pos
+            self.popup_manager.pin_tooltip(
+                tooltip_text, [],
+                anchor_x=mx, anchor_y=my,
+                font=self.small_font, max_width=350,
+                surface_w=SCREEN_WIDTH,
+            )
+            return
+
     def _count_idol_vp_for_faction(self, faction_id: str):
         """Count total VP per event type from idols in a faction's territory.
 
@@ -979,65 +1136,70 @@ class GameScene:
         elif self.phase == "spoils_change_choice":
             self._render_spoils_change_ui(screen)
 
-        # Agenda hover tooltips
-        if self.hovered_card_tooltip and self.hovered_card_rect:
-            draw_multiline_tooltip(
-                screen, self.small_font, self.hovered_card_tooltip,
-                anchor_x=self.hovered_card_rect.centerx,
-                anchor_y=self.hovered_card_rect.top,
-            )
-        elif self.hovered_agenda_label_fid and self.hovered_agenda_label_rect:
-            fmod = self._get_faction_modifiers(self.hovered_agenda_label_fid)
-            agenda_str = self.faction_agendas_this_turn.get(self.hovered_agenda_label_fid, "")
-            if agenda_str:
-                tooltip = build_agenda_tooltip(agenda_str, fmod)
+        # Hover tooltips (suppressed when pinned popups are open)
+        if not self.popup_manager.has_popups():
+            # Agenda hover tooltips
+            if self.hovered_card_tooltip and self.hovered_card_rect:
                 draw_multiline_tooltip(
-                    screen, self.small_font, tooltip,
-                    anchor_x=self.hovered_agenda_label_rect.centerx,
-                    anchor_y=self.hovered_agenda_label_rect.bottom,
+                    screen, self.small_font, self.hovered_card_tooltip,
+                    anchor_x=self.hovered_card_rect.centerx,
+                    anchor_y=self.hovered_card_rect.top,
+                )
+            elif self.hovered_agenda_label_fid and self.hovered_agenda_label_rect:
+                fmod = self._get_faction_modifiers(self.hovered_agenda_label_fid)
+                agenda_str = self.faction_agendas_this_turn.get(self.hovered_agenda_label_fid, "")
+                if agenda_str:
+                    tooltip = build_agenda_tooltip(agenda_str, fmod)
+                    draw_multiline_tooltip(
+                        screen, self.small_font, tooltip,
+                        anchor_x=self.hovered_agenda_label_rect.centerx,
+                        anchor_y=self.hovered_agenda_label_rect.bottom,
+                        below=True,
+                    )
+            elif self.hovered_anim_tooltip and self.hovered_anim_rect:
+                draw_multiline_tooltip(
+                    screen, self.small_font, self.hovered_anim_tooltip,
+                    anchor_x=self.hovered_anim_rect.centerx,
+                    anchor_y=self.hovered_anim_rect.bottom,
                     below=True,
                 )
-        elif self.hovered_anim_tooltip and self.hovered_anim_rect:
-            draw_multiline_tooltip(
-                screen, self.small_font, self.hovered_anim_tooltip,
-                anchor_x=self.hovered_anim_rect.centerx,
-                anchor_y=self.hovered_anim_rect.bottom,
-                below=True,
-            )
 
-        # Idol hover tooltip (drawn last so it's on top)
-        if self.hovered_idol:
-            self._render_idol_tooltip(screen)
+            # Idol hover tooltip (drawn last so it's on top)
+            if self.hovered_idol:
+                self._render_idol_tooltip(screen)
 
-        # Faction panel guided/worship hover tooltips
-        if self.hovered_panel_guided and self.ui_renderer.panel_guided_spirit_id:
-            tooltip = self._build_guidance_panel_tooltip(
-                self.ui_renderer.panel_guided_spirit_id)
-            r = self.ui_renderer.panel_guided_rect
-            draw_multiline_tooltip(
-                screen, self.small_font, tooltip,
-                anchor_x=r.centerx, anchor_y=r.bottom, below=True,
-            )
-        elif self.hovered_panel_worship and self.ui_renderer.panel_faction_id:
-            tooltip = self._build_worship_panel_tooltip(
-                self.ui_renderer.panel_faction_id)
-            r = self.ui_renderer.panel_worship_rect
-            draw_multiline_tooltip(
-                screen, self.small_font, tooltip,
-                anchor_x=r.centerx, anchor_y=r.bottom, below=True,
-            )
-
-        # VP HUD name hover tooltip
-        if self.hovered_vp_spirit_id:
-            spirit = self.spirits.get(self.hovered_vp_spirit_id, {})
-            if spirit.get("guided_faction"):
+            # Faction panel guided/worship hover tooltips
+            if self.hovered_panel_guided and self.ui_renderer.panel_guided_spirit_id:
                 tooltip = self._build_guidance_panel_tooltip(
-                    self.hovered_vp_spirit_id)
-                r = self.ui_renderer.vp_hover_rects[self.hovered_vp_spirit_id]
+                    self.ui_renderer.panel_guided_spirit_id)
+                r = self.ui_renderer.panel_guided_rect
                 draw_multiline_tooltip(
                     screen, self.small_font, tooltip,
                     anchor_x=r.centerx, anchor_y=r.bottom, below=True,
                 )
+            elif self.hovered_panel_worship and self.ui_renderer.panel_faction_id:
+                tooltip = self._build_worship_panel_tooltip(
+                    self.ui_renderer.panel_faction_id)
+                r = self.ui_renderer.panel_worship_rect
+                draw_multiline_tooltip(
+                    screen, self.small_font, tooltip,
+                    anchor_x=r.centerx, anchor_y=r.bottom, below=True,
+                )
+
+            # VP HUD name hover tooltip
+            if self.hovered_vp_spirit_id:
+                spirit = self.spirits.get(self.hovered_vp_spirit_id, {})
+                if spirit.get("guided_faction"):
+                    tooltip = self._build_guidance_panel_tooltip(
+                        self.hovered_vp_spirit_id)
+                    r = self.ui_renderer.vp_hover_rects[self.hovered_vp_spirit_id]
+                    draw_multiline_tooltip(
+                        screen, self.small_font, tooltip,
+                        anchor_x=r.centerx, anchor_y=r.bottom, below=True,
+                    )
+
+        # Pinned popups (drawn on top of everything)
+        self.popup_manager.render(screen, self.small_font)
 
     _IDOL_VP_TEXT = {
         IdolType.BATTLE: f"{BATTLE_IDOL_VP} VP for each war won\nby the Worshipping Faction",
@@ -1119,27 +1281,28 @@ class GameScene:
                 pygame.draw.rect(screen, (255, 255, 255), btn.rect.inflate(4, 4), 2, border_radius=8)
             btn.draw(screen, self.font)
 
-        # Tooltips (drawn last so they appear on top)
-        for btn in self.faction_buttons:
-            btn.draw_tooltip(screen, self.small_font)
-        for btn in self.idol_buttons:
-            btn.draw_tooltip(screen, self.small_font)
+        # Tooltips (drawn last so they appear on top; suppressed when popups open)
+        if not self.popup_manager.has_popups():
+            for btn in self.faction_buttons:
+                btn.draw_tooltip(screen, self.small_font)
+            for btn in self.idol_buttons:
+                btn.draw_tooltip(screen, self.small_font)
 
-        # Title tooltips (drawn below title)
-        if self.guidance_title_hovered and self.guidance_title_rect:
-            draw_multiline_tooltip(
-                screen, self.small_font, self._GUIDANCE_TITLE_TOOLTIP,
-                anchor_x=self.guidance_title_rect.centerx,
-                anchor_y=self.guidance_title_rect.bottom,
-                below=True,
-            )
-        if self.idol_title_hovered and self.idol_title_rect:
-            draw_multiline_tooltip(
-                screen, self.small_font, self._IDOL_TITLE_TOOLTIP,
-                anchor_x=self.idol_title_rect.centerx,
-                anchor_y=self.idol_title_rect.bottom,
-                below=True,
-            )
+            # Title tooltips (drawn below title)
+            if self.guidance_title_hovered and self.guidance_title_rect:
+                draw_multiline_tooltip(
+                    screen, self.small_font, self._GUIDANCE_TITLE_TOOLTIP,
+                    anchor_x=self.guidance_title_rect.centerx,
+                    anchor_y=self.guidance_title_rect.bottom,
+                    below=True,
+                )
+            if self.idol_title_hovered and self.idol_title_rect:
+                draw_multiline_tooltip(
+                    screen, self.small_font, self._IDOL_TITLE_TOOLTIP,
+                    anchor_x=self.idol_title_rect.centerx,
+                    anchor_y=self.idol_title_rect.bottom,
+                    below=True,
+                )
 
         # Selection info at bottom
         y = SCREEN_HEIGHT - 110
