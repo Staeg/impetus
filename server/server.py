@@ -275,15 +275,31 @@ class GameServer:
                 else:
                     await self._broadcast_phase_result(room, events)
                     # Check if this spirit now needs a change modifier choice
-                    pending = room.game_state.spoils_pending.get(spirit_id)
-                    if pending and pending.get("stage") == "change_choice":
-                        change_cards = pending.get("change_cards", [])
+                    pending_list = room.game_state.spoils_pending.get(spirit_id)
+                    if pending_list and pending_list[0].get("stage") == "change_choice":
+                        first = pending_list[0]
+                        change_cards = first.get("change_cards", [])
                         await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
                             "phase": "spoils_change_choice",
                             "turn": room.game_state.turn,
                             "options": {
                                 "cards": [c.value for c in change_cards],
-                                "loser": pending.get("loser", ""),
+                                "loser": first.get("loser", ""),
+                            },
+                        }))
+                        waiting_for = list(room.game_state.spoils_pending.keys())
+                        await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                            "players_remaining": waiting_for,
+                        }))
+                    elif pending_list:
+                        # Spirit has another queued spoils choice — send it
+                        first = pending_list[0]
+                        await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
+                            "phase": "spoils_choice",
+                            "turn": room.game_state.turn,
+                            "options": {
+                                "cards": [c.value for c in first["cards"]],
+                                "loser": first.get("loser", ""),
                             },
                         }))
                         waiting_for = list(room.game_state.spoils_pending.keys())
@@ -293,7 +309,7 @@ class GameServer:
                     elif not room.game_state.spoils_pending:
                         await self._auto_resolve_phases(room)
                     else:
-                        # Still waiting for other spoils choices
+                        # Still waiting for other spirits' spoils choices
                         waiting_for = list(room.game_state.spoils_pending.keys())
                         await room.broadcast(create_message(MessageType.WAITING_FOR, {
                             "players_remaining": waiting_for,
@@ -307,7 +323,23 @@ class GameServer:
                     await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
                 else:
                     await self._broadcast_phase_result(room, events)
-                    if not room.game_state.spoils_pending:
+                    # After change choice resolved, check for queued spoils
+                    pending_list = room.game_state.spoils_pending.get(spirit_id)
+                    if pending_list:
+                        first = pending_list[0]
+                        await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
+                            "phase": "spoils_choice",
+                            "turn": room.game_state.turn,
+                            "options": {
+                                "cards": [c.value for c in first["cards"]],
+                                "loser": first.get("loser", ""),
+                            },
+                        }))
+                        waiting_for = list(room.game_state.spoils_pending.keys())
+                        await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                            "players_remaining": waiting_for,
+                        }))
+                    elif not room.game_state.spoils_pending:
                         await self._auto_resolve_phases(room)
                     else:
                         waiting_for = list(room.game_state.spoils_pending.keys())
@@ -411,13 +443,14 @@ class GameServer:
                 return
             # If spoils choices are pending, send options and stop
             if gs.spoils_pending:
-                for sid, pending in gs.spoils_pending.items():
+                for sid, pending_list in gs.spoils_pending.items():
+                    first = pending_list[0]
                     await room.send_to(sid, create_message(MessageType.PHASE_START, {
                         "phase": "spoils_choice",
                         "turn": gs.turn,
                         "options": {
-                            "cards": [c.value for c in pending["cards"]],
-                            "loser": pending.get("loser", ""),
+                            "cards": [c.value for c in first["cards"]],
+                            "loser": first.get("loser", ""),
                         },
                     }))
                 waiting_for = list(gs.spoils_pending.keys())

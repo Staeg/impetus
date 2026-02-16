@@ -39,7 +39,6 @@ class Faction:
         self.wars_won_this_turn: int = 0
         # Agenda deck tracking for cleanup
         self.played_agenda_this_turn: list[AgendaCard] = []
-        self.spoils_cards_this_turn: list[AgendaCard] = []
 
     def reset_turn_tracking(self):
         self.gold_gained_this_turn = 0
@@ -94,16 +93,10 @@ class Faction:
     def add_change_modifier(self, card_value: str):
         self.change_modifiers[card_value] = self.change_modifiers.get(card_value, 0) + 1
 
-    def add_spoils_card(self, agenda_type: AgendaType):
-        """Stage a Spoils of War card for permanent addition during cleanup."""
-        self.spoils_cards_this_turn.append(AgendaCard(agenda_type))
-
     def cleanup_deck(self):
-        """Return all played and spoils cards to the deck and shuffle."""
+        """Return all played cards to the deck and shuffle."""
         self.agenda_deck.extend(self.played_agenda_this_turn)
-        self.agenda_deck.extend(self.spoils_cards_this_turn)
         self.played_agenda_this_turn.clear()
-        self.spoils_cards_this_turn.clear()
         random.shuffle(self.agenda_deck)
 
     def shuffle_agenda_deck(self):
