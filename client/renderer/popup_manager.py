@@ -305,13 +305,8 @@ class PopupManager:
                         )
                     return
 
-        # Check if click inside any popup -> absorb
-        for p in reversed(self._stack):
-            if p.rect.collidepoint(mx, my):
-                return
-
-        # Click outside all popups -> close all
-        self.close_all()
+        # Non-keyword right-click closes only the newest popup.
+        self._stack.pop()
 
     def render(self, surface: pygame.Surface, font: pygame.font.Font):
         """Draw all pinned popups and transient keyword hover tooltip."""

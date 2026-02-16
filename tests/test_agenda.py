@@ -151,6 +151,26 @@ class TestResolutionOrder:
             AgendaType.CHANGE,
         ]
 
+    def test_steal_resolves_before_expand_cost_check(self):
+        factions = make_factions()
+        hm = HexMap()
+        wars = []
+        events = []
+
+        # Mountain can afford Expand only before Mesa steals from it.
+        factions["mountain"].gold = 1
+        factions["mesa"].gold = 0
+
+        resolve_agendas(factions, hm, {
+            "mountain": AgendaType.EXPAND,
+            "mesa": AgendaType.STEAL,
+        }, wars, events)
+
+        types = [e["type"] for e in events]
+        assert "steal" in types
+        assert "expand_failed" in types
+        assert types.index("steal") < types.index("expand_failed")
+
 
 class TestEventFields:
     def test_steal_event_has_neighbors_and_penalty(self):

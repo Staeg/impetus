@@ -9,10 +9,13 @@ from client.renderer.popup_manager import (
 
 
 class LobbyScene:
-    _LOBBY_TIP_TOOLTIP = "While hovering you can right-click to freeze the popup window!"
+    _LOBBY_TIP_TOOLTIP = (
+        "While hovering you can right-click to freeze the popup window. "
+        "When popups are frozen, right-click closes only the newest one."
+    )
     _LOBBY_FREEZE_TOOLTIP = (
-        "To remove all frozen windows, simply right-click somewhere that isn't "
-        "one of the popup windows."
+        "Right-click closes only the newest frozen popup. Keep right-clicking "
+        "to close older popups one by one."
     )
     _LOBBY_HOVER_REGIONS = [
         HoverRegion("freeze", _LOBBY_FREEZE_TOOLTIP, sub_regions=[]),
