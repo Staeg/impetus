@@ -48,7 +48,7 @@ class TestGameStateSetup:
             for other_fid in gs.factions:
                 if other_fid != faction.faction_id:
                     # Regard is initialized for all pairs (may be non-zero
-                    # due to opening automated turns resolving Bond/Steal)
+                    # due to opening automated turns resolving Trade/Steal)
                     assert other_fid in faction.regard
 
     def test_turn2_declared_wars_are_ripe_by_turn3(self, monkeypatch):

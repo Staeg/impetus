@@ -29,8 +29,7 @@
   * All choices are revealed and all non-Guided Factions draw a random Agenda card
   * All Spirits currently Guiding a Faction lose 1 Influence
   * Agendas are resolved in order (but each step is simultaneous):
-    * Trade: \+1 gold, \+1 gold for every other Faction playing Trade this turn.
-    * Bond: \+1 Regard with all neighbors.
+    * Trade: \+1 gold, \+1 gold for every other Faction playing Trade this turn. \+1 Regard with each other Faction playing Trade this turn.
     * Steal: \-1 Regard with and \-1 gold to all neighbors. \+1 gold to this Faction for each gold lost by neighbors. Then a War erupts with any neighboring Factions who have \-2 Regard or less with this Faction.
     * Expand: spend gold equal to the number of this Faction's territories to claim a random new one; if none are available or it lacks gold, \+1 gold instead.
       * If there are any neutral Territories with Idols in them within reach: the Faction chooses at random between those territories.

@@ -22,7 +22,6 @@ All Factions start at 0 Regard with each other.
 * Factions without a Spirit Guiding them just draw a random Agenda card from their decks.
 * Agendas are resolved in the following order:
   * Trade
-  * Bond
   * Steal
   * Expand
   * Change
@@ -32,13 +31,12 @@ All Factions start at 0 Regard with each other.
 
 Each Faction starts with 1 of each Agenda in their deck.
 
-* Steal: \-1 Regard with and \-1 gold to all neighbors. \+1 gold to this Faction for each gold lost by neighbors. Then a War erupts with any neighboring Factions who have \-2 Regard or less with this Faction.  
-* Bond: \+1 Regard with all neighbors.   
-* Trade: \+1 gold, \+1 gold for every other Faction playing Trade this turn.  
+* Steal: \-1 Regard with and \-1 gold to all neighbors. \+1 gold to this Faction for each gold lost by neighbors. Then a War erupts with any neighboring Factions who have \-2 Regard or less with this Faction.
+* Trade: \+1 gold, \+1 gold for every other Faction playing Trade this turn. \+1 Regard with each other Faction playing Trade this turn.
 * Expand: spend gold equal to the number of this Faction’s territories to claim a random new one; if none are available or it lacks gold, \+1 gold instead.  
   * If there are any neutral Territories with Idols in them within reach: the Faction chooses at random between those territories.  
 * Change: draw a card from the Change modifier deck, then shuffle it back in.  
-  * If guided, the Spirit draws additional cards equal to their current Influence and chooses 1 among them.
+  * If guided, the Spirit draws additional cards equal to their current Influence and chooses 1 among them to modify.
 
 ## War
 
@@ -52,16 +50,15 @@ Each Faction’s Power baseline is equal to the number of Territories it control
   * Expand functions differently when drawn as Spoils of War: instead of paying gold to expand into neutral territory, the winning Faction takes control of the hex on the loser’s side of the Battleground.  
     * In the unlikely event that two Factions both win a War against the same Faction and draw Expand to conquer the same hex, the Faction with greater Power succeeds. A further tie is resolved randomly.  
   * Other Agendas function as normal, including the possibility of Steal starting another War between the same Factions.  
-  * Trade Spoils of War also give 1 gold (plus their Trade Change modifier) to every other Faction that resolved Trade normally this turn.
+  * Trade Spoils of War also give 1 gold and Regard (plus their Trade Change modifier) to every other Faction that resolved Trade normally this turn.
 * In the event of a tie, both Factions lose 1 gold and no Spoils of War are drawn.
 
 ## Change modifiers
 
-Each card modifies one of the other 4 Agendas of this Faction permanently.
+Each card modifies one of the other 3 Agendas of this Faction permanently.
 
-* Trade: \+1 gold for each other Trade Agenda  
-* Bond: \+1 Regard  
-* Steal: \+1 gold stolen and \-1 regard to affected neighbors  
+* Trade: \+1 gold and \+1 Regard per co-trader
+* Steal: \+1 gold stolen and \-1 regard to affected neighbors
 * Expand: \-1 cost on successful Expands, \+1 gold on failed Expands
 
 ## Idols and Victory Points

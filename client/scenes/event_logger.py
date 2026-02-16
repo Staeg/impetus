@@ -49,19 +49,24 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
         prefix = "Spoils: " if event.get("is_spoils") else ""
         event_log.append(f"{prefix}{fname} stole {event.get('gold_gained', 0)} gold")
 
-    elif etype == "bond":
-        fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-        prefix = "Spoils: " if event.get("is_spoils") else ""
-        event_log.append(f"{prefix}{fname} improved relations")
-
     elif etype == "trade":
         fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
         prefix = "Spoils: " if event.get("is_spoils") else ""
-        event_log.append(f"{prefix}{fname} traded for {event.get('gold_gained', 0)} gold")
+        co_traders = event.get("co_traders", [])
+        regard_part = ""
+        if co_traders:
+            regard_gain = event.get("regard_gain", 0)
+            regard_part = f", +{regard_gain} regard"
+        event_log.append(f"{prefix}{fname} traded for {event.get('gold_gained', 0)} gold{regard_part}")
 
     elif etype == "trade_spoils_bonus":
         fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])
-        event_log.append(f"{fname} gained {event.get('gold_gained', 1)} gold from Spoils Trade")
+        co_traders = event.get("co_traders", [])
+        regard_part = ""
+        if co_traders:
+            regard_gain = event.get("regard_gain", 0)
+            regard_part = f", +{regard_gain} regard"
+        event_log.append(f"{fname} gained {event.get('gold_gained', 1)} gold{regard_part} from Spoils Trade")
 
     elif etype == "expand":
         fname = FACTION_DISPLAY_NAMES.get(event["faction"], event["faction"])

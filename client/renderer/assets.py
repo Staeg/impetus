@@ -8,7 +8,7 @@ import pygame
 agenda_images: dict[str, pygame.Surface] = {}        # 48x48 for map animations
 agenda_card_images: dict[str, pygame.Surface] = {}    # 70x70 for card faces
 
-AGENDA_NAMES = ["steal", "bond", "trade", "expand", "change"]
+AGENDA_NAMES = ["steal", "trade", "expand", "change"]
 
 _loaded = False
 
@@ -55,7 +55,7 @@ def load_assets():
     # Create change_{modifier} composites: change icon + smaller modifier icon to the right
     if "change" in agenda_images:
         change_base = agenda_images["change"]
-        for mod_name in ["trade", "bond", "steal", "expand"]:
+        for mod_name in ["trade", "steal", "expand"]:
             if mod_name in agenda_images:
                 small_size = 24
                 gap = 4

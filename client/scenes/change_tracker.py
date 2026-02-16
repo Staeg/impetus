@@ -86,6 +86,21 @@ class FactionChangeTracker:
                     field="gold", delta=gold,
                     label="Trade", log_index=log_index,
                 ))
+            regard_gain = event.get("regard_gain", 0)
+            co_traders = event.get("co_traders", [])
+            for nb in co_traders:
+                if regard_gain:
+                    self._add(faction_id, ChangeEntry(
+                        field="regard", delta=regard_gain,
+                        label="Trade", log_index=log_index,
+                        target=nb,
+                    ))
+                    self._add(nb, ChangeEntry(
+                        field="regard", delta=regard_gain,
+                        label=f"Trade ({FACTION_DISPLAY_NAMES.get(faction_id, faction_id)})",
+                        log_index=log_index,
+                        target=faction_id,
+                    ))
 
         elif etype == "trade_spoils_bonus":
             gold = event.get("gold_gained", 0)
@@ -94,21 +109,18 @@ class FactionChangeTracker:
                     field="gold", delta=gold,
                     label="Spoils Trade", log_index=log_index,
                 ))
-
-        elif etype == "bond":
-            gain = event.get("regard_gain", 0)
-            neighbors = event.get("neighbors", [])
-            for nb in neighbors:
-                nb_name = FACTION_DISPLAY_NAMES.get(nb, nb)
-                if gain:
+            regard_gain = event.get("regard_gain", 0)
+            co_traders = event.get("co_traders", [])
+            for nb in co_traders:
+                if regard_gain:
                     self._add(faction_id, ChangeEntry(
-                        field="regard", delta=gain,
-                        label="Bond", log_index=log_index,
+                        field="regard", delta=regard_gain,
+                        label="Spoils Trade", log_index=log_index,
                         target=nb,
                     ))
                     self._add(nb, ChangeEntry(
-                        field="regard", delta=gain,
-                        label=f"Bond ({FACTION_DISPLAY_NAMES.get(faction_id, faction_id)})",
+                        field="regard", delta=regard_gain,
+                        label=f"Spoils Trade ({FACTION_DISPLAY_NAMES.get(faction_id, faction_id)})",
                         log_index=log_index,
                         target=faction_id,
                     ))

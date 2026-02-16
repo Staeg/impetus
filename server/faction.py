@@ -18,14 +18,12 @@ class Faction:
         self.gold: int = STARTING_GOLD
         self.agenda_deck: list[AgendaCard] = [
             AgendaCard(AgendaType.STEAL),
-            AgendaCard(AgendaType.BOND),
             AgendaCard(AgendaType.TRADE),
             AgendaCard(AgendaType.EXPAND),
             AgendaCard(AgendaType.CHANGE),
         ]
         self.change_modifiers: dict[str, int] = {
             ChangeModifierTarget.TRADE.value: 0,
-            ChangeModifierTarget.BOND.value: 0,
             ChangeModifierTarget.STEAL.value: 0,
             ChangeModifierTarget.EXPAND.value: 0,
         }

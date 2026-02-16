@@ -70,16 +70,6 @@ class TestSteal:
         assert factions["mountain"].get_regard("mesa") <= -2
 
 
-class TestBond:
-    def test_bond_increases_regard(self):
-        factions = make_factions()
-        hm = HexMap()
-        events = []
-        wars = []
-        resolve_agendas(factions, hm, {"mountain": AgendaType.BOND}, wars, events)
-        assert factions["mountain"].get_regard("mesa") > 0
-
-
 class TestTrade:
     def test_trade_gives_gold(self):
         factions = make_factions()
@@ -145,7 +135,6 @@ class TestResolutionOrder:
     def test_order_is_trade_first(self):
         assert AGENDA_RESOLUTION_ORDER == [
             AgendaType.TRADE,
-            AgendaType.BOND,
             AgendaType.STEAL,
             AgendaType.EXPAND,
             AgendaType.CHANGE,
@@ -189,18 +178,61 @@ class TestEventFields:
         assert isinstance(ev["neighbors"], list)
         assert len(ev["neighbors"]) > 0
 
-    def test_bond_event_has_neighbors(self):
+class TestTradeRegard:
+    def test_co_traders_gain_regard(self):
         factions = make_factions()
         hm = HexMap()
         events = []
         wars = []
-        resolve_agendas(factions, hm, {"mountain": AgendaType.BOND}, wars, events)
-        bond_events = [e for e in events if e["type"] == "bond"]
-        assert len(bond_events) == 1
-        ev = bond_events[0]
-        assert "neighbors" in ev
-        assert isinstance(ev["neighbors"], list)
-        assert len(ev["neighbors"]) > 0
+        resolve_agendas(factions, hm, {
+            "mountain": AgendaType.TRADE,
+            "mesa": AgendaType.TRADE,
+        }, wars, events)
+        # Both process: mountain gives +1 to mesa and mesa gives +1 to mountain
+        # Total: +2 each way
+        assert factions["mountain"].get_regard("mesa") == 2
+        assert factions["mesa"].get_regard("mountain") == 2
+
+    def test_trade_modifier_affects_regard(self):
+        factions = make_factions()
+        hm = HexMap()
+        # Give mountain a trade modifier
+        factions["mountain"].change_modifiers["trade"] = 1
+        events = []
+        wars = []
+        resolve_agendas(factions, hm, {
+            "mountain": AgendaType.TRADE,
+            "mesa": AgendaType.TRADE,
+        }, wars, events)
+        # Mountain processing: regard_gain = 1+1 = 2, bilateral → both get +2
+        # Mesa processing: regard_gain = 1+0 = 1, bilateral → both get +1
+        # Total: mountain→mesa = +3, mesa→mountain = +3
+        assert factions["mountain"].get_regard("mesa") == 3
+        assert factions["mesa"].get_regard("mountain") == 3
+
+    def test_solo_trade_no_regard(self):
+        factions = make_factions()
+        hm = HexMap()
+        events = []
+        wars = []
+        resolve_agendas(factions, hm, {"mountain": AgendaType.TRADE}, wars, events)
+        # No co-traders, no regard changes
+        assert factions["mountain"].get_regard("mesa") == 0
+
+    def test_trade_event_has_co_traders(self):
+        factions = make_factions()
+        hm = HexMap()
+        events = []
+        wars = []
+        resolve_agendas(factions, hm, {
+            "mountain": AgendaType.TRADE,
+            "mesa": AgendaType.TRADE,
+        }, wars, events)
+        trade_events = [e for e in events if e["type"] == "trade"]
+        assert len(trade_events) == 2
+        for ev in trade_events:
+            assert "co_traders" in ev
+            assert "regard_gain" in ev
 
 
 class TestSpoilsChoices:
