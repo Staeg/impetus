@@ -347,7 +347,6 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
                         spoils_conquests[winner] = loser_hex
 
                 spoils_choices[winner] = spoils_type
-                factions[winner].add_spoils_card(spoils_type)
                 events.append({
                     "type": "spoils_drawn",
                     "faction": winner,
@@ -356,13 +355,13 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
                 continue
 
             cards = [c.agenda_type for c in drawn]
-            spoils_pending[faction.guiding_spirit] = {
+            spoils_pending.setdefault(faction.guiding_spirit, []).append({
                 "cards": cards,
                 "drawn_cards": drawn,
                 "winner": winner,
                 "loser": loser,
                 "battleground": result.get("battleground"),
-            }
+            })
             events.append({
                 "type": "spoils_choice",
                 "spirit": faction.guiding_spirit,
@@ -397,7 +396,6 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
                 spoils_conquests[winner] = loser_hex
 
         spoils_choices[winner] = spoils_type
-        factions[winner].add_spoils_card(spoils_type)
         events.append({
             "type": "spoils_drawn",
             "faction": winner,
@@ -421,7 +419,7 @@ def resolve_spoils_choice(factions, hex_map, wars, events, spirit_id,
                           card_index, spoils_pending, spirits,
                           normal_trade_factions: list[str] = None):
     """Resolve a spirit's spoils card choice after player input."""
-    pending = spoils_pending[spirit_id]
+    pending = spoils_pending[spirit_id][0]
     cards = pending["cards"]
     drawn_cards = pending.get("drawn_cards", [])
     chosen = cards[card_index]
@@ -446,7 +444,6 @@ def resolve_spoils_choice(factions, hex_map, wars, events, spirit_id,
                 spoils_conquests[winner] = coord
                 break
 
-    factions[winner].add_spoils_card(chosen)
     events.append({
         "type": "spoils_drawn",
         "faction": winner,
@@ -468,4 +465,6 @@ def resolve_spoils_choice(factions, hex_map, wars, events, spirit_id,
         # Cancel wars whose battleground was conquered by spoils expand
         for conquered_hex in spoils_conquests.values():
             _cancel_wars_on_hex(wars, conquered_hex, events, factions)
-        del spoils_pending[spirit_id]
+        spoils_pending[spirit_id].pop(0)
+        if not spoils_pending[spirit_id]:
+            del spoils_pending[spirit_id]

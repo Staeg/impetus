@@ -66,7 +66,7 @@ Several phases trigger sub-phases where the server waits for a specific player c
 - **Trade/Bond**: All gold gains and regard changes are calculated from pre-resolution state
 
 ### War spoils
-Wars can generate spoils choices. When a guided faction wins a war, the guiding spirit draws `1 + influence` spoils cards and chooses one to add permanently to the faction's deck. If the chosen card is Change, a follow-up modifier choice is triggered. Spoils agendas resolve in the standard agenda order (Trade → Bond → Steal → Expand → Change) in a separate sub-pass after war resolution.
+Wars can generate spoils choices. When a faction wins a war, a spoils card is drawn from the faction's deck and resolved. If the winning faction is guided by a spirit, the spirit draws `1 + influence` cards and chooses one. The drawn card is resolved and returned to the deck during cleanup (no permanent deck growth). If the chosen card is Change, a follow-up modifier choice is triggered. Spoils agendas resolve in the standard agenda order (Trade → Bond → Steal → Expand → Change) in a separate sub-pass after war resolution.
 
 ### Card choice flow
 Several game moments follow the same pattern: the server sends a list of cards to a specific player, the client renders a card picker UI, the player clicks a card, and the client sends back the chosen index. This pattern is used for:

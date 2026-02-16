@@ -35,7 +35,7 @@ class GameState:
         # Track trade factions for spoils
         self.normal_trade_factions: list[str] = []
         # Spoils of war choice pending (spirit_id -> pending data)
-        self.spoils_pending: dict[str, dict] = {}
+        self.spoils_pending: dict[str, list[dict]] = {}
 
     def setup_game(self, player_info: list[dict]) -> list[dict]:
         """Initialize the game with the given players. Returns bootstrap events.
@@ -730,7 +730,7 @@ class GameState:
         """Submit a spoils of war card choice. Returns (error, events)."""
         if spirit_id not in self.spoils_pending:
             return "No spoils pending", []
-        cards = self.spoils_pending[spirit_id]["cards"]
+        cards = self.spoils_pending[spirit_id][0]["cards"]
         if card_index < 0 or card_index >= len(cards):
             return f"Invalid card index: {card_index}", []
         events = []
@@ -749,7 +749,7 @@ class GameState:
         """Submit a spoils change modifier choice (second stage of spoils Change)."""
         if spirit_id not in self.spoils_pending:
             return "No spoils pending", []
-        pending = self.spoils_pending[spirit_id]
+        pending = self.spoils_pending[spirit_id][0]
         if pending.get("stage") != "change_choice":
             return "Not in change choice stage", []
         change_cards = pending.get("change_cards", [])
@@ -767,7 +767,9 @@ class GameState:
             "modifier": chosen.value,
         })
 
-        del self.spoils_pending[spirit_id]
+        self.spoils_pending[spirit_id].pop(0)
+        if not self.spoils_pending[spirit_id]:
+            del self.spoils_pending[spirit_id]
         if not self.spoils_pending:
             self.phase = Phase.SCORING
         return None, events
