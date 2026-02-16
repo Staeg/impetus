@@ -58,18 +58,12 @@ def draw_multiline_tooltip(surface: "pygame.Surface", font: "pygame.font.Font",
     tip_w = content_w + 16
     tip_h = len(lines) * line_h + 12
 
-    tip_x = anchor_x - tip_w // 2
-    # Clamp to screen bounds
-    screen_w = surface.get_width()
-    if tip_x < 4:
-        tip_x = 4
-    if tip_x + tip_w > screen_w - 4:
-        tip_x = screen_w - 4 - tip_w
-
-    if below:
-        tip_y = anchor_y + 4
-    else:
-        tip_y = anchor_y - tip_h - 4
+    from client.renderer.popup_manager import _compute_best_position
+    tip_x, tip_y = _compute_best_position(
+        anchor_x, anchor_y, tip_w, tip_h,
+        surface.get_width(), surface.get_height(),
+        prefer_below=below,
+    )
 
     tip_rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
     pygame.draw.rect(surface, (40, 40, 50), tip_rect, border_radius=4)
@@ -168,6 +162,7 @@ class UIRenderer:
         self.panel_worship_spirit_id: str | None = None
         self.panel_war_rect: pygame.Rect | None = None
         self.panel_faction_id: str | None = None
+        self.faction_panel_rect: pygame.Rect | None = None
         # Spirit panel rects
         self.spirit_panel_rect: pygame.Rect | None = None
         self.spirit_panel_guidance_rect: pygame.Rect | None = None
@@ -470,6 +465,7 @@ class UIRenderer:
                 panel_h += 4 + 18 + len(war_opponents) * 18
         panel_h += 8  # bottom padding
         panel_rect = pygame.Rect(x, y, width, panel_h)
+        self.faction_panel_rect = panel_rect
         pygame.draw.rect(surface, (30, 30, 40), panel_rect, border_radius=4)
         pygame.draw.rect(surface, color, panel_rect, 2, border_radius=4)
 

@@ -2,6 +2,70 @@
 
 import pygame
 
+# --- Tooltip placement scoring ---
+_WEIGHT_NON_TEXT = 1
+_WEIGHT_TEXT = 4
+
+# Module-level registry: list of (rect, weight) tuples.
+# Populated each frame by game_scene._register_ui_rects_for_tooltips().
+_ui_rects: list[tuple[pygame.Rect, int]] = []
+
+
+def set_ui_rects(rects: list[tuple[pygame.Rect, int]]):
+    """Replace the UI rect registry (called once per frame)."""
+    global _ui_rects
+    _ui_rects = rects
+
+
+def _compute_best_position(anchor_x: int, anchor_y: int,
+                            tip_w: int, tip_h: int,
+                            screen_w: int, screen_h: int,
+                            prefer_below: bool = False) -> tuple[int, int]:
+    """Pick the best tooltip position from 6 candidates scored by UI overlap."""
+    margin = 4
+    x_center = anchor_x - tip_w // 2
+    x_left = anchor_x - tip_w + 20
+    x_right = anchor_x - 20
+    y_above = anchor_y - tip_h - margin
+    y_below = anchor_y + margin
+
+    def clamp(x, y):
+        x = max(margin, min(x, screen_w - margin - tip_w))
+        y = max(margin, min(y, screen_h - margin - tip_h))
+        return (x, y)
+
+    # Generate and deduplicate candidates
+    raw = []
+    for yv in (y_above, y_below):
+        for xv in (x_center, x_left, x_right):
+            raw.append(clamp(xv, yv))
+    seen = set()
+    candidates = []
+    for pos in raw:
+        if pos not in seen:
+            seen.add(pos)
+            candidates.append(pos)
+
+    if not _ui_rects or len(candidates) == 1:
+        # No UI rects registered or only one option — use prefer_below logic
+        if prefer_below:
+            return clamp(x_center, y_below)
+        return clamp(x_center, y_above)
+
+    def score(pos):
+        tip_rect = pygame.Rect(pos[0], pos[1], tip_w, tip_h)
+        total = 0
+        for ui_rect, weight in _ui_rects:
+            overlap = tip_rect.clip(ui_rect)
+            total += overlap.w * overlap.h * weight
+        # Tiebreaker: prefer the side indicated by prefer_below
+        is_below = pos[1] > anchor_y
+        if is_below != prefer_below:
+            total += 0.5  # tiny nudge
+        return total
+
+    return min(candidates, key=score)
+
 
 class HoverRegion:
     """A keyword in a popup that can show/pin a sub-tooltip."""
@@ -68,17 +132,11 @@ def _draw_plain_tooltip(surface: pygame.Surface, font: pygame.font.Font,
     tip_w = content_w + 16
     tip_h = len(lines) * line_h + 12
 
-    tip_x = anchor_x - tip_w // 2
-    screen_w = surface.get_width()
-    if tip_x < 4:
-        tip_x = 4
-    if tip_x + tip_w > screen_w - 4:
-        tip_x = screen_w - 4 - tip_w
-
-    if below:
-        tip_y = anchor_y + 4
-    else:
-        tip_y = anchor_y - tip_h - 4
+    tip_x, tip_y = _compute_best_position(
+        anchor_x, anchor_y, tip_w, tip_h,
+        surface.get_width(), surface.get_height(),
+        prefer_below=below,
+    )
 
     tip_rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
     pygame.draw.rect(surface, (40, 40, 50), tip_rect, border_radius=4)
@@ -166,17 +224,11 @@ def draw_multiline_tooltip_with_regions(surface: pygame.Surface, font: pygame.fo
     tip_w = content_w + 16
     tip_h = len(lines) * line_h + 12
 
-    tip_x = anchor_x - tip_w // 2
-    screen_w = surface.get_width()
-    if tip_x < 4:
-        tip_x = 4
-    if tip_x + tip_w > screen_w - 4:
-        tip_x = screen_w - 4 - tip_w
-
-    if below:
-        tip_y = anchor_y + 4
-    else:
-        tip_y = anchor_y - tip_h - 4
+    tip_x, tip_y = _compute_best_position(
+        anchor_x, anchor_y, tip_w, tip_h,
+        surface.get_width(), surface.get_height(),
+        prefer_below=below,
+    )
 
     tip_rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
     pygame.draw.rect(surface, (40, 40, 50), tip_rect, border_radius=4)
@@ -213,7 +265,8 @@ class PopupManager:
     def pin_tooltip(self, text: str, hover_regions: list[HoverRegion],
                     anchor_x: int, anchor_y: int,
                     font: pygame.font.Font, max_width: int,
-                    surface_w: int, below: bool = False):
+                    surface_w: int, below: bool = False,
+                    surface_h: int = 800):
         """Word-wrap text, compute popup rect and keyword rects, push to stack."""
         lines = _wrap_text(text, font, max_width)
         if not lines:
@@ -224,16 +277,11 @@ class PopupManager:
         tip_w = content_w + 16
         tip_h = len(lines) * line_h + 12
 
-        tip_x = anchor_x - tip_w // 2
-        if tip_x < 4:
-            tip_x = 4
-        if tip_x + tip_w > surface_w - 4:
-            tip_x = surface_w - 4 - tip_w
-
-        if below:
-            tip_y = anchor_y + 4
-        else:
-            tip_y = anchor_y - tip_h - 4
+        tip_x, tip_y = _compute_best_position(
+            anchor_x, anchor_y, tip_w, tip_h,
+            surface_w, surface_h,
+            prefer_below=below,
+        )
 
         rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
 

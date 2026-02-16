@@ -13,7 +13,10 @@ from client.renderer.assets import load_assets, agenda_card_images
 from client.input_handler import InputHandler
 from client.scenes.animation_orchestrator import AnimationOrchestrator
 from client.scenes.change_tracker import FactionChangeTracker
-from client.renderer.popup_manager import PopupManager, HoverRegion, draw_multiline_tooltip_with_regions
+from client.renderer.popup_manager import (
+    PopupManager, HoverRegion, draw_multiline_tooltip_with_regions,
+    set_ui_rects, _WEIGHT_TEXT, _WEIGHT_NON_TEXT,
+)
 
 # Approximate hex map screen bounds (default camera) for centering UI
 _HEX_MAP_HALF_W = int(HEX_SIZE * 1.5 * (MAP_SIDE_LENGTH - 1)) + HEX_SIZE
@@ -1072,14 +1075,7 @@ class GameScene:
 
         # Idol hover tooltip
         if self.hovered_idol:
-            idol = self.hovered_idol
-            idol_type = idol.type
-            owner_id = idol.owner_spirit
-            owner_name = (self.spirits.get(owner_id, {}).get("name", owner_id[:6])
-                          if owner_id else "Unknown")
-            vp_text = self._IDOL_VP_TEXT.get(idol_type, "")
-            tooltip_text = (f"{idol_type.value.title()} Idol\n"
-                            f"Placed by: {owner_name}\n{vp_text}")
+            tooltip_text = self._build_idol_tooltip_text(self.hovered_idol)
             mx, my = mouse_pos
             self.popup_manager.pin_tooltip(
                 tooltip_text, _GUIDANCE_HOVER_REGIONS,
@@ -1223,6 +1219,51 @@ class GameScene:
         if self._display_hex_ownership is not None and not self.orchestrator.has_animations_playing():
             self._clear_display_state()
 
+    def _register_ui_rects_for_tooltips(self):
+        """Populate the popup_manager rect registry for tooltip placement scoring."""
+        rects: list[tuple[pygame.Rect, int]] = []
+
+        # TEXT rects (high penalty) — areas with important readable info
+        # HUD bar
+        rects.append((pygame.Rect(0, 0, SCREEN_WIDTH, 40), _WEIGHT_TEXT))
+        # Faction overview strip
+        rects.append((pygame.Rect(0, 42, SCREEN_WIDTH, 55), _WEIGHT_TEXT))
+        # Event log
+        rects.append((pygame.Rect(SCREEN_WIDTH - 300, SCREEN_HEIGHT - 200, 290, 190), _WEIGHT_TEXT))
+        # Faction panel
+        fp = self.ui_renderer.faction_panel_rect
+        if fp:
+            rects.append((fp, _WEIGHT_TEXT))
+        # Spirit panel
+        sp = self.ui_renderer.spirit_panel_rect
+        if sp:
+            rects.append((sp, _WEIGHT_TEXT))
+        # Pinned popup rects
+        for popup in self.popup_manager._stack:
+            rects.append((popup.rect, _WEIGHT_TEXT))
+
+        # NON_TEXT rects (low penalty) — buttons and cards
+        for btn in self.action_buttons + self.faction_buttons + self.idol_buttons:
+            rects.append((btn.rect, _WEIGHT_NON_TEXT))
+        if self.submit_button:
+            rects.append((self.submit_button.rect, _WEIGHT_NON_TEXT))
+        # Card rects (if cards are showing)
+        if self.agenda_hand:
+            for cr in self._calc_card_rects(
+                    len(self.agenda_hand), y=SCREEN_HEIGHT - 210, centered=True):
+                rects.append((cr, _WEIGHT_NON_TEXT))
+        if self.change_cards:
+            for cr in self._calc_card_rects(len(self.change_cards)):
+                rects.append((cr, _WEIGHT_NON_TEXT))
+        if self.spoils_cards:
+            for cr in self._calc_card_rects(len(self.spoils_cards)):
+                rects.append((cr, _WEIGHT_NON_TEXT))
+        if self.spoils_change_cards:
+            for cr in self._calc_card_rects(len(self.spoils_change_cards)):
+                rects.append((cr, _WEIGHT_NON_TEXT))
+
+        set_ui_rects(rects)
+
     def render(self, screen: pygame.Surface):
         screen.fill((10, 10, 18))
 
@@ -1326,6 +1367,7 @@ class GameScene:
                 my_spirit_id=self.spirit_panel_spirit_id,
             )
             # Clear faction panel rects
+            self.ui_renderer.faction_panel_rect = None
             self.ui_renderer.panel_guided_rect = None
             self.ui_renderer.panel_worship_rect = None
             self.ui_renderer.panel_war_rect = None
@@ -1349,6 +1391,7 @@ class GameScene:
                     wars=render_wars,
                 )
             else:
+                self.ui_renderer.faction_panel_rect = None
                 self.ui_renderer.panel_guided_rect = None
                 self.ui_renderer.panel_worship_rect = None
                 self.ui_renderer.panel_war_rect = None
@@ -1383,6 +1426,9 @@ class GameScene:
             self._render_spoils_ui(screen)
         elif self.phase == "spoils_change_choice":
             self._render_spoils_change_ui(screen)
+
+        # Register UI rects for tooltip placement scoring
+        self._register_ui_rects_for_tooltips()
 
         # Hover tooltips (suppressed when pinned popups are open)
         if not self.popup_manager.has_popups():
@@ -1471,19 +1517,73 @@ class GameScene:
         # Pinned popups (drawn on top of everything)
         self.popup_manager.render(screen, self.small_font)
 
-    _IDOL_VP_TEXT = {
-        IdolType.BATTLE: f"{BATTLE_IDOL_VP} VP for each war won\nby the Worshipping Faction",
-        IdolType.AFFLUENCE: f"{AFFLUENCE_IDOL_VP} VP for each gold gained\nby the Worshipping Faction",
-        IdolType.SPREAD: f"{SPREAD_IDOL_VP} VP for each territory gained\nby the Worshipping Faction",
-    }
-
-    def _render_idol_tooltip(self, screen):
-        idol = self.hovered_idol
+    def _build_idol_tooltip_text(self, idol):
         idol_type = idol.type
         owner_id = idol.owner_spirit
-        owner_name = self.spirits.get(owner_id, {}).get("name", owner_id[:6]) if owner_id else "Unknown"
-        vp_text = self._IDOL_VP_TEXT.get(idol_type, "")
-        tooltip_text = f"{idol_type.value.title()} Idol\nPlaced by: {owner_name}\n{vp_text}"
+        owner_name = (self.spirits.get(owner_id, {}).get("name", owner_id[:6])
+                      if owner_id else "Unknown")
+        type_name = idol_type.value.title()
+
+        # Determine territory ownership
+        q, r = idol.position.q, idol.position.r
+        faction_id = self.hex_ownership.get((q, r))
+        faction_name = FACTION_DISPLAY_NAMES.get(faction_id, faction_id) if faction_id else None
+
+        if faction_id:
+            # Idol is in a faction's territory
+            worship_id = None
+            fdata = self.factions.get(faction_id)
+            if isinstance(fdata, dict):
+                worship_id = fdata.get("worship_spirit")
+            worship_name = (self.spirits.get(worship_id, {}).get("name", worship_id[:6])
+                            if worship_id else None)
+            header = (f"{type_name} Idol placed by {owner_name}, "
+                      f"currently in the custody of {faction_name}")
+            if idol_type == IdolType.BATTLE:
+                if worship_name:
+                    vp_line = (f"When {faction_name} wins a War, the Spirit they "
+                               f"Worship - {worship_name} - gains {BATTLE_IDOL_VP} VP "
+                               f"at the end of the turn.")
+                else:
+                    vp_line = (f"When {faction_name} wins a War and Worships a Spirit, "
+                               f"that Spirit gains {BATTLE_IDOL_VP} VP at the end of the turn.")
+            elif idol_type == IdolType.AFFLUENCE:
+                if worship_name:
+                    vp_line = (f"When {faction_name} gains gold, the Spirit they "
+                               f"Worship - {worship_name} - gains {AFFLUENCE_IDOL_VP} VP "
+                               f"at the end of the turn.")
+                else:
+                    vp_line = (f"When {faction_name} gains gold and Worships a Spirit, "
+                               f"that Spirit gains {AFFLUENCE_IDOL_VP} VP at the end of the turn.")
+            else:  # SPREAD
+                if worship_name:
+                    vp_line = (f"When {faction_name} gains a Territory, the Spirit they "
+                               f"Worship - {worship_name} - gains {SPREAD_IDOL_VP} VP "
+                               f"at the end of the turn.")
+                else:
+                    vp_line = (f"When {faction_name} gains a Territory and Worships a Spirit, "
+                               f"that Spirit gains {SPREAD_IDOL_VP} VP at the end of the turn.")
+        else:
+            # Idol is on neutral ground
+            header = (f"{type_name} Idol placed by {owner_name}, "
+                      f"currently on neutral grounds")
+            if idol_type == IdolType.BATTLE:
+                vp_line = (f"After a Faction claims the Territory this Idol is on, "
+                           f"it will grant the Spirit they Worship {BATTLE_IDOL_VP} VP "
+                           f"for each War the Faction wins.")
+            elif idol_type == IdolType.AFFLUENCE:
+                vp_line = (f"After a Faction claims the Territory this Idol is on, "
+                           f"it will grant the Spirit they Worship {AFFLUENCE_IDOL_VP} VP "
+                           f"for each gold the Faction gains.")
+            else:  # SPREAD
+                vp_line = (f"After a Faction claims the Territory this Idol is on, "
+                           f"it will grant the Spirit they Worship {SPREAD_IDOL_VP} VP "
+                           f"for each Territory the Faction gains.")
+
+        return f"{header}\n{vp_line}"
+
+    def _render_idol_tooltip(self, screen):
+        tooltip_text = self._build_idol_tooltip_text(self.hovered_idol)
         mx, my = pygame.mouse.get_pos()
         draw_multiline_tooltip_with_regions(
             screen, self.small_font, tooltip_text, _GUIDANCE_HOVER_REGIONS,
