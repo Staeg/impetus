@@ -108,17 +108,16 @@ class AnimationOrchestrator:
                     delay=delay, duration=3.0, drift_pixels=40,
                     direction=1, screen_space=True,
                 ))
-
-        elif etype == "bond":
-            regard_gain = event.get("regard_gain", 1)
-            neighbors = event.get("neighbors", [])
-            for nfid in neighbors:
-                rx, ry = self._get_faction_strip_pos(nfid)
-                self.animation.add_effect_animation(TextAnimation(
-                    f"+{regard_gain}", rx, ry, (100, 200, 255),
-                    delay=delay, duration=3.0, drift_pixels=40,
-                    direction=1, screen_space=True,
-                ))
+            regard_gain = event.get("regard_gain", 0)
+            co_traders = event.get("co_traders", [])
+            if regard_gain > 0:
+                for nfid in co_traders:
+                    rx, ry = self._get_faction_strip_pos(nfid)
+                    self.animation.add_effect_animation(TextAnimation(
+                        f"+{regard_gain}", rx, ry, (100, 200, 255),
+                        delay=delay, duration=3.0, drift_pixels=40,
+                        direction=1, screen_space=True,
+                    ))
 
         elif etype == "steal":
             gold = event.get("gold_gained", 0)
@@ -185,9 +184,9 @@ class AnimationOrchestrator:
                        hex_ownership: dict, small_font):
         """Create animations for a batch of agenda events."""
         _ANIM_ORDER = {
-            "trade": 0, "bond": 1, "steal": 2,
-            "expand": 3, "expand_failed": 3, "expand_spoils": 3,
-            "change": 4,
+            "trade": 0, "steal": 1,
+            "expand": 2, "expand_failed": 2, "expand_spoils": 2,
+            "change": 3,
         }
         regular_events = [e for e in agenda_events if not e.get("is_spoils")]
         spoils_events = [e for e in agenda_events if e.get("is_spoils")]
@@ -219,7 +218,7 @@ class AnimationOrchestrator:
             elif etype == "expand_failed":
                 img_key = "expand_failed"
             else:
-                img_key = {"steal": "steal", "bond": "bond", "trade": "trade",
+                img_key = {"steal": "steal", "trade": "trade",
                            "expand": "expand", "expand_spoils": "expand"}[etype]
             img = agenda_images.get(img_key)
             faction_id = event.get("faction")
@@ -262,7 +261,7 @@ class AnimationOrchestrator:
             elif etype == "expand_failed":
                 img_key = "expand_failed"
             else:
-                img_key = {"steal": "steal", "bond": "bond", "trade": "trade",
+                img_key = {"steal": "steal", "trade": "trade",
                            "expand": "expand", "expand_spoils": "expand"}[etype]
             img = agenda_images.get(img_key)
             faction_id = event.get("faction")

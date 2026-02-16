@@ -99,7 +99,7 @@ LOBBY → SETUP → VAGRANT → AGENDA → WAR → SCORING → CLEANUP → (repe
 ```
 
 - **Vagrant**: Unguided spirits choose a faction to guide and/or place an idol.
-- **Agenda**: Guiding spirits draw agenda cards and choose one. Agendas resolve in order: Trade, Bond, Steal, Expand, Change.
+- **Agenda**: Guiding spirits draw agenda cards and choose one. Agendas resolve in order: Trade, Steal, Expand, Change.
 - **War**: Wars that erupted last turn are resolved (dice + faction power). Winners draw spoils cards.
 - **Scoring**: VP awarded based on idol placement and faction worship.
 - **Cleanup**: Decks reshuffled, turn counter advanced.

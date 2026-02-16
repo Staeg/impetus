@@ -29,8 +29,6 @@ def resolve_agendas(factions: dict, hex_map, agenda_choices: dict[str, AgendaTyp
 
         if agenda_type == AgendaType.STEAL:
             _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils)
-        elif agenda_type == AgendaType.BOND:
-            _resolve_bond(factions, hex_map, playing_factions, events, is_spoils)
         elif agenda_type == AgendaType.TRADE:
             _resolve_trade(factions, playing_factions, events, is_spoils,
                           normal_trade_factions or [])
@@ -139,36 +137,17 @@ def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils)
                     })
 
 
-def _resolve_bond(factions, hex_map, playing_factions, events, is_spoils=False):
-    """Bond: +1 regard with all neighbors."""
-    for fid in playing_factions:
-        faction = factions[fid]
-        bond_bonus = faction.change_modifiers.get(ChangeModifierTarget.BOND.value, 0)
-        regard_gain = 1 + bond_bonus
-        neighbors = hex_map.get_live_neighbor_ids(fid, factions)
-
-        for other_fid in neighbors:
-            faction.modify_regard(other_fid, regard_gain)
-            factions[other_fid].modify_regard(fid, regard_gain)
-
-        events.append({
-            "type": "bond",
-            "faction": fid,
-            "regard_gain": regard_gain,
-            "neighbors": neighbors,
-            "is_spoils": is_spoils,
-        })
-
-
 def _resolve_trade(factions, playing_factions, events, is_spoils,
                    normal_trade_factions: list[str] = None):
     """Trade: +1 gold, +1 gold for every other faction playing Trade this turn.
+    Also +1 regard with each other faction playing Trade this turn (bilateral).
 
     For spoils trade, normal_trade_factions counts as additional "others trading"
-    for the spoils trader's bonus, and each normal trader gets +1 gold.
+    for the spoils trader's bonus, and each normal trader gets +1 gold and regard.
     """
     normal_trade_factions = normal_trade_factions or []
 
+    # Determine all co-traders for each faction (for regard)
     for fid in playing_factions:
         faction = factions[fid]
         trade_bonus = faction.change_modifiers.get(ChangeModifierTarget.TRADE.value, 0)
@@ -179,22 +158,43 @@ def _resolve_trade(factions, playing_factions, events, is_spoils,
             others_trading += len(normal_trade_factions)
         total = base + others_trading + trade_bonus * others_trading
         faction.add_gold(total)
+
+        # Regard: +1 + trade_bonus with each co-trader (bilateral)
+        regard_gain = 1 + trade_bonus
+        co_traders = [other for other in playing_factions if other != fid]
+        if is_spoils:
+            co_traders = co_traders + normal_trade_factions
+        for other_fid in co_traders:
+            faction.modify_regard(other_fid, regard_gain)
+            factions[other_fid].modify_regard(fid, regard_gain)
+
         events.append({
             "type": "trade",
             "faction": fid,
             "gold_gained": total,
             "is_spoils": is_spoils,
+            "regard_gain": regard_gain if co_traders else 0,
+            "co_traders": co_traders,
         })
 
-    # Spoils trade gives +1 gold (+ Trade modifier) to every faction that traded normally
+    # Spoils trade gives +1 gold (+ Trade modifier) and regard to every faction that traded normally
     if is_spoils and normal_trade_factions:
         for fid in normal_trade_factions:
-            bonus = 1 + factions[fid].change_modifiers.get(ChangeModifierTarget.TRADE.value, 0)
+            trade_bonus = factions[fid].change_modifiers.get(ChangeModifierTarget.TRADE.value, 0)
+            bonus = 1 + trade_bonus
             factions[fid].add_gold(bonus)
+            # Regard with each spoils trader
+            regard_gain = 1 + trade_bonus
+            spoils_traders = list(playing_factions)
+            for spoils_fid in spoils_traders:
+                factions[fid].modify_regard(spoils_fid, regard_gain)
+                factions[spoils_fid].modify_regard(fid, regard_gain)
             events.append({
                 "type": "trade_spoils_bonus",
                 "faction": fid,
                 "gold_gained": bonus,
+                "regard_gain": regard_gain if spoils_traders else 0,
+                "co_traders": spoils_traders,
             })
 
 

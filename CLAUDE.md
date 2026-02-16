@@ -53,7 +53,7 @@ Several phases trigger sub-phases where the server waits for a specific player c
 ### Core game concepts
 - **6 factions** (Mountain, Mesa, Sand, Plains, River, Jungle) on a hex grid (axial coords, side-length 5)
 - **Spirits** (players) indirectly control factions via guidance and influence
-- **Agenda resolution order** is always: Trade → Bond → Steal → Expand → Change (same-type resolves simultaneously)
+- **Agenda resolution order** is always: Trade → Steal → Expand → Change (same-type resolves simultaneously)
 - **Wars** have a two-turn lifecycle: erupt → ripen → resolve (resolve ripe first, then ripen new)
 - **Worship** (`worship_spirit` on factions): spirits compete for faction Worship via idol counts; a spirit cannot guide a faction that Worships them
 - **Scoring**: VP from idols in faction territories where the spirit has Worship (Battle/Affluence/Spread idol types)
@@ -63,10 +63,10 @@ Several phases trigger sub-phases where the server waits for a specific player c
 "Simultaneous" means all factions playing the same agenda type resolve in one step, using the game state from before any of them applied:
 - **Steal**: If A and B both Steal and are neighbors, neither takes gold from the other (both had gold reduced "at the same time"), but regard still drops
 - **Expand**: If two factions expand into the same neutral hex, neither gets it (contested). If a faction expands into a hex adjacent to multiple factions, all neighbor regard changes apply
-- **Trade/Bond**: All gold gains and regard changes are calculated from pre-resolution state
+- **Trade**: All gold gains and regard changes are calculated from pre-resolution state
 
 ### War spoils
-Wars can generate spoils choices. When a faction wins a war, a spoils card is drawn from the faction's deck and resolved. If the winning faction is guided by a spirit, the spirit draws `1 + influence` cards and chooses one. The drawn card is resolved and returned to the deck during cleanup (no permanent deck growth). If the chosen card is Change, a follow-up modifier choice is triggered. Spoils agendas resolve in the standard agenda order (Trade → Bond → Steal → Expand → Change) in a separate sub-pass after war resolution.
+Wars can generate spoils choices. When a faction wins a war, a spoils card is drawn from the faction's deck and resolved. If the winning faction is guided by a spirit, the spirit draws `1 + influence` cards and chooses one. The drawn card is resolved and returned to the deck during cleanup (no permanent deck growth). If the chosen card is Change, a follow-up modifier choice is triggered. Spoils agendas resolve in the standard agenda order (Trade → Steal → Expand → Change) in a separate sub-pass after war resolution.
 
 ### Card choice flow
 Several game moments follow the same pattern: the server sends a list of cards to a specific player, the client renders a card picker UI, the player clicks a card, and the client sends back the chosen index. This pattern is used for:

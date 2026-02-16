@@ -44,7 +44,7 @@ _INFLUENCE_TOOLTIP = (
 
 _AGENDA_DECK_TOOLTIP = (
     "All possible Agendas a Faction can draw and play. The base "
-    "deck contains 1 of each type: Trade, Bond, Steal, Expand, "
+    "deck contains 1 of each type: Trade, Steal, Expand, "
     "and Change. Extra cards can be added via the Change agenda "
     "or when a Spirit is ejected from Guidance. Spirits with "
     "more Influence draw more options from it."
@@ -65,8 +65,8 @@ _WAR_RESOLVES_TOOLTIP = (
     "The victorious Faction gains 1 gold and plays a random Agenda card as "
     "Spoils of War. Expand drawn as Spoils will conquer the enemy side of "
     "the Battleground instead of its usual effect. Other Agendas have their "
-    "normal effect, including Trade working with other Trade cards played "
-    "this turn.\n\n"
+    "normal effect, including Trade granting gold and Regard with other "
+    "Trade cards played this turn.\n\n"
     "If the winning Faction is Guided, the Spirit gets to draw additional "
     "Agendas as Spoils equal to its current Influence before choosing one to "
     "resolve.\n\n"
@@ -76,16 +76,14 @@ _WAR_RESOLVES_TOOLTIP = (
 
 _GOLD_TOOLTIP = "Resource used to pay for Expand Agendas. Cannot go below 0."
 
-_TRADE_AGENDA_TOOLTIP = "Trade\n+1 gold, +1 gold for every other Faction playing Trade this turn."
-_BOND_AGENDA_TOOLTIP = "Bond\n+1 Regard with all neighbors."
+_TRADE_AGENDA_TOOLTIP = "Trade\n+1 gold, +1 gold for every other Faction playing Trade this turn.\n+1 Regard with each other Faction playing Trade this turn."
 _STEAL_AGENDA_TOOLTIP = "Steal\n-1 Regard with and -1 gold to all neighbors. +1 gold for each gold lost. War erupts at -2 Regard."
 _EXPAND_AGENDA_TOOLTIP = "Expand\nSpend gold equal to territories to claim a neutral hex. If unavailable or lacking gold, +1 gold instead. Idol hexes prioritized."
 
 _MODIFIER_TOOLTIP = (
     "Permanently improves a specific Agenda when used by the Faction implementing the modifier. "
     "These bonuses stack. Possible modifiers:\n"
-    "Trade: +1 gold for each other Trade Agenda\n"
-    "Bond: +1 Regard\n"
+    "Trade: +1 gold and +1 Regard per co-trader\n"
     "Steal: +1 gold stolen and -1 regard to affected neighbors\n"
     "Expand: -1 cost on successful Expands, +1 gold on failed Expands"
 )
@@ -102,7 +100,6 @@ _GUIDANCE_HOVER_REGIONS = [
     ]),
     HoverRegion("modifier", _MODIFIER_TOOLTIP, sub_regions=[
         HoverRegion("Trade", _TRADE_AGENDA_TOOLTIP, sub_regions=[]),
-        HoverRegion("Bond", _BOND_AGENDA_TOOLTIP, sub_regions=[]),
         HoverRegion("Steal", _STEAL_AGENDA_TOOLTIP, sub_regions=[]),
         HoverRegion("Expand", _EXPAND_AGENDA_TOOLTIP, sub_regions=[]),
     ]),
@@ -544,9 +541,9 @@ class GameScene:
             # Snapshot display state before updating so animations render old state
             events = payload.get("events", [])
             _ANIM_ORDER = {
-                "trade": 0, "bond": 1, "steal": 2,
-                "expand": 3, "expand_failed": 3, "expand_spoils": 3,
-                "change": 4,
+                "trade": 0, "steal": 1,
+                "expand": 2, "expand_failed": 2, "expand_spoils": 2,
+                "change": 3,
             }
             agenda_events = [e for e in events if e.get("type", "") in _ANIM_ORDER
                            and not e.get("is_guided_modifier")]

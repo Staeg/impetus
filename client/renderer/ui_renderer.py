@@ -76,7 +76,6 @@ def build_agenda_tooltip(agenda_type: str, modifiers: dict,
                          is_spoils: bool = False) -> str:
     """Build full rules-text tooltip for an agenda type with modifiers applied."""
     steal_mod = modifiers.get("steal", 0)
-    bond_mod = modifiers.get("bond", 0)
     trade_mod = modifiers.get("trade", 0)
     expand_mod = modifiers.get("expand", 0)
 
@@ -84,8 +83,7 @@ def build_agenda_tooltip(agenda_type: str, modifiers: dict,
         return "Spoils Expand\nConquer the hex on the loser's side of the Battleground (free)."
 
     tooltips = {
-        "trade": f"Trade\n+1 gold, +{1 + trade_mod} gold for every other Faction playing Trade this turn.",
-        "bond": f"Bond\n+{1 + bond_mod} Regard with all neighbors.",
+        "trade": f"Trade\n+1 gold, +{1 + trade_mod} gold for every other Faction playing Trade this turn.\n+{1 + trade_mod} Regard with each other Faction playing Trade this turn.",
         "steal": f"Steal\n-{1 + steal_mod} Regard with and -{1 + steal_mod} gold to all neighbors. +1 gold for each gold lost. War erupts at -2 Regard.",
         "expand": f"Expand\nSpend gold equal to territories{' -' + str(expand_mod) if expand_mod else ''} to claim a neutral hex. If unavailable or lacking gold, +{1 + expand_mod} gold instead. Idol hexes prioritized.",
         "change": "Change\nDraw a modifier card. If guided, draw extra cards equal to Influence and choose 1.",
@@ -96,8 +94,7 @@ def build_agenda_tooltip(agenda_type: str, modifiers: dict,
 def build_modifier_tooltip(modifier_type: str) -> str:
     """Build full rules-text tooltip for a Change modifier card."""
     tooltips = {
-        "trade": "Trade modifier\nPermanently increases gold gained per extra trader by 1.",
-        "bond": "Bond modifier\nPermanently increases Regard gained with neighbors by 1.",
+        "trade": "Trade modifier\nPermanently increases gold and Regard gained per co-trader by 1.",
         "steal": "Steal modifier\nPermanently increases gold stolen and Regard penalty by 1 per neighbor.",
         "expand": "Expand modifier\nPermanently decreases expand cost by 1 gold and increases fail bonus by 1 gold.",
     }
@@ -257,7 +254,6 @@ class UIRenderer:
 
         agenda_colors = {
             "steal": (255, 80, 80),
-            "bond": (100, 200, 255),
             "trade": (255, 220, 60),
             "expand": (80, 220, 80),
             "change": (200, 140, 255),
@@ -801,7 +797,6 @@ class UIRenderer:
                                 is_spoils: bool = False) -> list[str]:
         """Build detailed description lines for an agenda card based on modifiers."""
         steal_mod = modifiers.get("steal", 0)
-        bond_mod = modifiers.get("bond", 0)
         trade_mod = modifiers.get("trade", 0)
         expand_mod = modifiers.get("expand", 0)
 
@@ -819,13 +814,10 @@ class UIRenderer:
                 "+gold stolen",
                 "War at -2 regard",
             ],
-            "bond": [
-                f"+{1 + bond_mod} regard",
-                "with neighbors",
-            ],
             "trade": [
                 "+1g base",
                 f"+{1 + trade_mod}g per trader",
+                f"+{1 + trade_mod} regard/trader",
             ],
             "expand": [
                 f"Cost: terr-{expand_mod}g",
@@ -843,12 +835,8 @@ class UIRenderer:
         """Build description lines for a Change modifier card."""
         descs = {
             "trade": [
-                "+1g per extra",
-                "trader",
-            ],
-            "bond": [
-                "+1 Regard",
-                "with neighbors",
+                "+1g & +1 Regard",
+                "per co-trader",
             ],
             "steal": [
                 "+1g stolen &",

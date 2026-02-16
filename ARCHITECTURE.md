@@ -120,7 +120,7 @@ Phase details:
 | Phase | Player Input Required | Resolution |
 |---|---|---|
 | VAGRANT_PHASE | Vagrant spirits choose: guide a faction AND/OR place an idol (must do both if both available). Cannot guide a faction that Worships them. One idol per vagrant stint. | Simultaneous reveal. Contested guidance fails. Idols placed. Influence set to 3 on success. Worship checked. |
-| AGENDA_PHASE | Guiding spirits choose 1 agenda from drawn hand | Simultaneous reveal. Non-guided factions draw randomly. Resolve in order: Trade → Bond → Steal → Expand → Change. Eject 0-influence spirits (they choose agenda to add). Worship checked. |
+| AGENDA_PHASE | Guiding spirits choose 1 agenda from drawn hand | Simultaneous reveal. Non-guided factions draw randomly. Resolve in order: Trade → Steal → Expand → Change. Eject 0-influence spirits (they choose agenda to add). Worship checked. |
 | WAR_PHASE | None (dice rolls are server-side), unless guided spirits need to choose spoils cards | Resolve ripe wars first: roll + power. Losers lose gold, winners gain gold + spoils agenda (guided spirits draw 1+influence spoils cards and choose). Then ripen new wars (select battlegrounds). Spoils resolved in agenda order. Check for faction eliminations. |
 | SCORING | None | Calculate VP per spirit based on idols in factions where they have Worship. Round down. Check for 10 VP winner. |
 | CLEANUP | None | Shuffle agenda cards back into faction decks. Advance turn counter. |
@@ -133,7 +133,7 @@ Each faction tracks:
 - `name` and `color` (Mountain/red, Mesa/orange, Sand/yellow, Plains/green, River/blue, Jungle/purple)
 - `gold: int` (starts at 0, minimum 0 - gold cannot go negative)
 - `territories: set[HexCoord]` (starts with 1 hex)
-- `agenda_deck: list[AgendaCard]` (starts with 1 of each: Steal, Bond, Trade, Expand, Change)
+- `agenda_deck: list[AgendaCard]` (starts with 1 of each: Steal, Trade, Expand, Change)
 - `change_modifiers: dict[AgendaType, int]` (accumulated Change upgrades per agenda type)
 - `regard: dict[FactionId, int]` (bilateral regard with other factions, starts at 0)
 - `guiding_spirit: Optional[SpiritId]`
@@ -159,9 +159,11 @@ Each spirit (player) tracks:
 
 Agenda resolution is the heart of the game. Each agenda type is resolved as a discrete step, but all factions playing the same agenda resolve **simultaneously** within that step.
 
-Resolution order: Trade → Bond → Steal → Expand → Change.
+Resolution order: Trade → Steal → Expand → Change.
 
 Simultaneous resolution matters most for Steal: if A and B are neighbors and both Steal, neither takes gold from the other (both had their gold reduced "at the same time"), but regard drops by -2 between them.
+
+Trade also grants bilateral regard between co-traders: each trading faction gains `1 + trade_modifier` regard with every other trading faction.
 
 The Change modifier system is cumulative. A faction's Change modifiers permanently boost subsequent plays of that agenda type.
 

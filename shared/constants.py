@@ -76,7 +76,6 @@ class Phase(str, Enum):
 
 class AgendaType(str, Enum):
     STEAL = "steal"
-    BOND = "bond"
     TRADE = "trade"
     EXPAND = "expand"
     CHANGE = "change"
@@ -85,7 +84,6 @@ class AgendaType(str, Enum):
 # Resolution order for agendas
 AGENDA_RESOLUTION_ORDER = [
     AgendaType.TRADE,
-    AgendaType.BOND,
     AgendaType.STEAL,
     AgendaType.EXPAND,
     AgendaType.CHANGE,
@@ -100,15 +98,13 @@ class IdolType(str, Enum):
 
 class ChangeModifierTarget(str, Enum):
     TRADE = "trade"
-    BOND = "bond"
     STEAL = "steal"
     EXPAND = "expand"
 
 
-# The change modifier deck: one card for each of the other 4 agenda types
+# The change modifier deck: one card for each of the other 3 agenda types
 CHANGE_DECK = [
     ChangeModifierTarget.TRADE,
-    ChangeModifierTarget.BOND,
     ChangeModifierTarget.STEAL,
     ChangeModifierTarget.EXPAND,
 ]
