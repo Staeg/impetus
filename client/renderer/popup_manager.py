@@ -333,6 +333,13 @@ class PopupManager:
             return
         mx, my = mouse_pos
         popup = self._stack[-1]
+        # Refresh hover state from click position so right-click behavior
+        # does not depend on a prior mouse-move event.
+        popup.hovered_keyword = None
+        for kw, rects in popup.keyword_rects.items():
+            if any(r.collidepoint(mx, my) for r in rects):
+                popup.hovered_keyword = kw
+                break
 
         # Check if clicking on a hovered keyword -> pin sub-popup
         if popup.hovered_keyword:
