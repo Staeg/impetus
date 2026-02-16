@@ -327,6 +327,34 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
             drawn = random.sample(faction.agenda_deck, min(draw_count, len(faction.agenda_deck)))
             for c in drawn:
                 faction.agenda_deck.remove(c)
+
+            # If only one card is available, there is no meaningful choice.
+            if len(drawn) == 1:
+                card = drawn[0]
+                faction.played_agenda_this_turn.append(card)
+                spoils_type = card.agenda_type
+                result["spoils"] = spoils_type.value
+
+                if spoils_type == AgendaType.EXPAND and result.get("battleground"):
+                    bg = result["battleground"]
+                    loser_hex = None
+                    for h in bg:
+                        coord = (h["q"], h["r"])
+                        if hex_map.ownership.get(coord) == loser:
+                            loser_hex = coord
+                            break
+                    if loser_hex:
+                        spoils_conquests[winner] = loser_hex
+
+                spoils_choices[winner] = spoils_type
+                factions[winner].add_spoils_card(spoils_type)
+                events.append({
+                    "type": "spoils_drawn",
+                    "faction": winner,
+                    "agenda": spoils_type.value,
+                })
+                continue
+
             cards = [c.agenda_type for c in drawn]
             spoils_pending[faction.guiding_spirit] = {
                 "cards": cards,

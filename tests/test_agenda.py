@@ -5,9 +5,11 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from shared.constants import AgendaType, AGENDA_RESOLUTION_ORDER
+from shared.models import AgendaCard
 from server.faction import Faction
 from server.hex_map import HexMap
-from server.agenda import resolve_agendas
+from server.spirit import Spirit
+from server.agenda import resolve_agendas, resolve_spoils
 
 
 def make_factions():
@@ -179,3 +181,37 @@ class TestEventFields:
         assert "neighbors" in ev
         assert isinstance(ev["neighbors"], list)
         assert len(ev["neighbors"]) > 0
+
+
+class TestSpoilsChoices:
+    def test_guided_zero_influence_single_draw_has_no_spoils_choice(self):
+        factions = make_factions()
+        hm = HexMap()
+        wars = []
+        events = []
+
+        spirit = Spirit("spirit_0", "Player 0")
+        spirit.guide_faction("mountain")
+        spirit.influence = 0
+        factions["mountain"].guiding_spirit = spirit.spirit_id
+
+        # Force a single possible spoils card.
+        factions["mountain"].agenda_deck = [AgendaCard(AgendaType.TRADE)]
+
+        war_results = [{
+            "winner": "mountain",
+            "loser": "mesa",
+            "battleground": None,
+        }]
+
+        pending = resolve_spoils(
+            factions, hm, war_results, wars, events,
+            normal_trade_factions=[], spirits={spirit.spirit_id: spirit},
+        )
+
+        assert pending == {}
+        assert not any(e["type"] == "spoils_choice" for e in events)
+        assert any(
+            e["type"] == "spoils_drawn" and e["faction"] == "mountain"
+            for e in events
+        )

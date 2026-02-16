@@ -575,10 +575,14 @@ class GameScene:
             # Build ejection buttons
             y = SCREEN_HEIGHT - 200
             self.action_buttons = []
+            modifiers = self._get_faction_modifiers(self.ejection_faction)
             for i, at in enumerate(AgendaType):
+                tooltip = build_agenda_tooltip(at.value, modifiers)
                 btn = Button(
                     pygame.Rect(20 + i * 110, y, 100, 36),
-                    at.value.title(), (80, 60, 130)
+                    at.value.title(), (80, 60, 130),
+                    tooltip=tooltip,
+                    tooltip_always=True,
                 )
                 self.action_buttons.append(btn)
             self.submit_button = Button(
@@ -1532,6 +1536,10 @@ class GameScene:
             else:
                 btn.color = (80, 60, 130)
             btn.draw(screen, self.font)
+
+        if not self.popup_manager.has_popups():
+            for btn in self.action_buttons:
+                btn.draw_tooltip(screen, self.small_font)
 
         # Selection feedback
         if self.selected_ejection_type:
