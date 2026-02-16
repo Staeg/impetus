@@ -38,7 +38,7 @@ class GameState:
         self.spoils_pending: dict[str, dict] = {}
 
     def setup_game(self, player_info: list[dict]) -> list[dict]:
-        """Initialize the game with the given players. Returns setup events.
+        """Initialize the game with the given players. Returns bootstrap events.
 
         player_info: list of {spirit_id, name}
         """
@@ -58,44 +58,58 @@ class GameState:
             spirit = Spirit(info["spirit_id"], info["name"])
             self.spirits[spirit.spirit_id] = spirit
 
-        # --- Setup: each faction draws and resolves a random Change modifier ---
-        events.append({"type": "setup_start"})
-        for fid, faction in self.factions.items():
-            card = random.choice(CHANGE_DECK)
-            faction.add_change_modifier(card.value)
-            events.append({
-                "type": "change",
-                "faction": fid,
-                "modifier": card.value,
-                "is_setup": True,
-            })
+        def _run_automated_turn(turn_number: int, agenda_choices: dict[str, AgendaType],
+                                agenda_event_type: str):
+            """Resolve a full non-player turn and cleanup state."""
+            events.append({"type": "turn_start", "turn": turn_number})
 
-        # --- Setup turn: all factions resolve a random agenda (no player input) ---
-        agenda_choices = {}
+            for fid, at in agenda_choices.items():
+                events.append({
+                    "type": agenda_event_type,
+                    "faction": fid,
+                    "agenda": at.value,
+                })
+
+            self.normal_trade_factions = [
+                fid for fid, at in agenda_choices.items()
+                if at == AgendaType.TRADE
+            ]
+            resolve_agendas(self.factions, self.hex_map, agenda_choices, self.wars, events)
+
+            for faction in self.factions.values():
+                faction.cleanup_deck()
+                faction.reset_turn_tracking()
+
+            # Automated opening turns cannot create player-driven pending choices.
+            self.pending_actions.clear()
+            self.drawn_hands.clear()
+            self.change_pending.clear()
+            self.ejection_pending.clear()
+            self.spoils_pending.clear()
+
+        # Turn 1: all factions play Change.
+        _run_automated_turn(
+            turn_number=1,
+            agenda_choices={fid: AgendaType.CHANGE for fid in self.factions},
+            agenda_event_type="agenda_chosen",
+        )
+
+        # Turn 2: normal unguided turn (all factions play random agendas).
+        turn_two_choices: dict[str, AgendaType] = {}
         for fid, faction in self.factions.items():
+            if faction.eliminated:
+                continue
             card = faction.draw_random_agenda()
             faction.played_agenda_this_turn.append(card)
-            agenda_choices[fid] = card.agenda_type
-            events.append({
-                "type": "agenda_random",
-                "faction": fid,
-                "agenda": card.agenda_type.value,
-            })
+            turn_two_choices[fid] = card.agenda_type
+        _run_automated_turn(
+            turn_number=2,
+            agenda_choices=turn_two_choices,
+            agenda_event_type="agenda_random",
+        )
 
-        self.normal_trade_factions = [
-            fid for fid, at in agenda_choices.items()
-            if at == AgendaType.TRADE
-        ]
-
-        resolve_agendas(self.factions, self.hex_map, agenda_choices,
-                        self.wars, events)
-
-        # Cleanup the setup turn
-        for faction in self.factions.values():
-            faction.cleanup_deck()
-            faction.reset_turn_tracking()
-
-        self.turn = 1
+        # Players begin taking actions on Turn 3.
+        self.turn = 3
         self.phase = Phase.VAGRANT_PHASE
         return events
 
