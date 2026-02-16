@@ -47,11 +47,62 @@ _AGENDA_DECK_TOOLTIP = (
     "more Influence draw more options from it."
 )
 
+_WAR_TOOLTIP = (
+    "If two Factions have -2 Regard or less after one of them plays Steal, "
+    "a War is declared. At the end of the turn where it is declared, a War "
+    "becomes ripe and two neighboring hexes, one belonging to each Faction, "
+    "are chosen as the Battleground. At the end of the next turn, the ripe "
+    "War resolves."
+)
+
+_WAR_RESOLVES_TOOLTIP = (
+    "When a ripe War resolves, both Factions roll a 6-sided die and add the "
+    "number of their Territories to the roll. The Faction with the higher "
+    "total wins.\n\n"
+    "The victorious Faction gains 1 gold and plays a random Agenda card as "
+    "Spoils of War. Expand drawn as Spoils will conquer the enemy side of "
+    "the Battleground instead of its usual effect. Other Agendas have their "
+    "normal effect, including Trade working with other Trade cards played "
+    "this turn.\n\n"
+    "If the winning Faction is Guided, the Spirit gets to draw additional "
+    "Agendas as Spoils equal to its current Influence before choosing one to "
+    "resolve.\n\n"
+    "The losing Faction loses 1 gold. In the case of a tie, both Factions "
+    "lose 1 gold."
+)
+
+_GOLD_TOOLTIP = "Resource used to pay for Expand Agendas. Cannot go below 0."
+
+_TRADE_AGENDA_TOOLTIP = "Trade\n+1 gold, +1 gold for every other Faction playing Trade this turn."
+_BOND_AGENDA_TOOLTIP = "Bond\n+1 Regard with all neighbors."
+_STEAL_AGENDA_TOOLTIP = "Steal\n-1 Regard with and -1 gold to all neighbors. +1 gold for each gold lost. War erupts at -2 Regard."
+_EXPAND_AGENDA_TOOLTIP = "Expand\nSpend gold equal to territories to claim a neutral hex. If unavailable or lacking gold, +1 gold instead. Idol hexes prioritized."
+
+_MODIFIER_TOOLTIP = (
+    "Permanently improves a specific Agenda when used by the Faction implementing the modifier. "
+    "These bonuses stack. Possible modifiers:\n"
+    "Trade: +1 gold for each other Trade Agenda\n"
+    "Bond: +1 Regard\n"
+    "Steal: +1 gold stolen and -1 regard to affected neighbors\n"
+    "Expand: -1 cost on successful Expands, +1 gold on failed Expands"
+)
+
 _GUIDANCE_HOVER_REGIONS = [
     HoverRegion("Agenda deck", _AGENDA_DECK_TOOLTIP, sub_regions=[
         HoverRegion("Influence", _INFLUENCE_TOOLTIP, sub_regions=[]),
     ]),
     HoverRegion("Influence", _INFLUENCE_TOOLTIP, sub_regions=[]),
+    HoverRegion("Gold", _GOLD_TOOLTIP, sub_regions=[]),
+    HoverRegion("gold", _GOLD_TOOLTIP, sub_regions=[]),
+    HoverRegion("War", _WAR_TOOLTIP, sub_regions=[
+        HoverRegion("resolves", _WAR_RESOLVES_TOOLTIP, sub_regions=[]),
+    ]),
+    HoverRegion("modifier", _MODIFIER_TOOLTIP, sub_regions=[
+        HoverRegion("Trade", _TRADE_AGENDA_TOOLTIP, sub_regions=[]),
+        HoverRegion("Bond", _BOND_AGENDA_TOOLTIP, sub_regions=[]),
+        HoverRegion("Steal", _STEAL_AGENDA_TOOLTIP, sub_regions=[]),
+        HoverRegion("Expand", _EXPAND_AGENDA_TOOLTIP, sub_regions=[]),
+    ]),
 ]
 
 
@@ -454,7 +505,7 @@ class GameScene:
         if msg_type == MessageType.GAME_START:
             self._update_state_from_snapshot(payload)
             self.change_tracker.snapshot_and_reset(self.factions, self.spirits)
-            self.event_log.append(f"Game started! Turn {self.turn}")
+            self.event_log.append("Game started.")
 
         elif msg_type == MessageType.PHASE_START:
             phase = payload.get("phase", "")

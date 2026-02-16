@@ -27,7 +27,7 @@ class TestGameStateSetup:
 
     def test_initial_turn(self):
         gs = make_game()
-        assert gs.turn == 1
+        assert gs.turn == 3
 
     def test_factions_created(self):
         gs = make_game()
@@ -48,7 +48,7 @@ class TestGameStateSetup:
             for other_fid in gs.factions:
                 if other_fid != faction.faction_id:
                     # Regard is initialized for all pairs (may be non-zero
-                    # due to setup turn resolving Bond/Steal)
+                    # due to opening automated turns resolving Bond/Steal)
                     assert other_fid in faction.regard
 
 
