@@ -3,7 +3,9 @@
 import pygame
 from shared.constants import MessageType, SCREEN_WIDTH, SCREEN_HEIGHT
 from client.renderer.ui_renderer import Button, draw_dotted_underline
-from client.renderer.popup_manager import HoverRegion, draw_multiline_tooltip_with_regions
+from client.renderer.popup_manager import (
+    PopupManager, HoverRegion, draw_multiline_tooltip_with_regions
+)
 
 
 class LobbyScene:
@@ -12,6 +14,9 @@ class LobbyScene:
         "To remove all frozen windows, simply right-click somewhere that isn't "
         "one of the popup windows."
     )
+    _LOBBY_HOVER_REGIONS = [
+        HoverRegion("freeze", _LOBBY_FREEZE_TOOLTIP, sub_regions=[]),
+    ]
 
     def __init__(self, app):
         self.app = app
@@ -29,13 +34,31 @@ class LobbyScene:
         self.my_spirit_id = ""
         self.error_message = ""
         self._tip_phrase_rect = pygame.Rect(0, 0, 0, 0)
+        self.popup_manager = PopupManager()
 
     def handle_event(self, event):
         if event.type == pygame.MOUSEMOTION:
             self.ready_button.update(event.pos)
+            if self.popup_manager.has_popups():
+                self.popup_manager.update_hover(event.pos)
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.ready_button.clicked(event.pos):
                 self.app.network.send(MessageType.READY)
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+            if self.popup_manager.has_popups():
+                self.popup_manager.handle_right_click(
+                    event.pos, self.small_font, SCREEN_WIDTH)
+            elif self._tip_phrase_rect.collidepoint(event.pos):
+                self.popup_manager.pin_tooltip(
+                    self._LOBBY_TIP_TOOLTIP,
+                    self._LOBBY_HOVER_REGIONS,
+                    anchor_x=self._tip_phrase_rect.centerx,
+                    anchor_y=self._tip_phrase_rect.bottom,
+                    font=self.small_font,
+                    max_width=420,
+                    surface_w=SCREEN_WIDTH,
+                    below=True,
+                )
 
     def handle_network(self, msg_type, payload):
         print(f"[lobby] handle_network: {msg_type.value} keys={list(payload.keys())}")
@@ -64,61 +87,6 @@ class LobbyScene:
 
     def update(self, dt):
         pass
-
-    def _wrap_text(self, text: str, font: pygame.font.Font, max_width: int) -> list[str]:
-        lines = []
-        for paragraph in text.split("\n"):
-            if not paragraph.strip():
-                lines.append("")
-                continue
-            words = paragraph.split()
-            if not words:
-                lines.append("")
-                continue
-            current = words[0]
-            for word in words[1:]:
-                candidate = f"{current} {word}"
-                if font.size(candidate)[0] <= max_width:
-                    current = candidate
-                else:
-                    lines.append(current)
-                    current = word
-            lines.append(current)
-        return lines
-
-    def _tooltip_layout(self, text: str, font: pygame.font.Font,
-                        anchor_x: int, anchor_y: int,
-                        max_width: int = 350, below: bool = True):
-        lines = self._wrap_text(text, font, max_width)
-        line_h = font.get_linesize()
-        rendered_widths = [font.size(line)[0] for line in lines] or [0]
-        content_w = max(rendered_widths)
-        tip_w = content_w + 16
-        tip_h = len(lines) * line_h + 12
-        tip_x = anchor_x - tip_w // 2
-        if tip_x < 4:
-            tip_x = 4
-        if tip_x + tip_w > SCREEN_WIDTH - 4:
-            tip_x = SCREEN_WIDTH - 4 - tip_w
-        tip_y = anchor_y + 4 if below else anchor_y - tip_h - 4
-        return lines, pygame.Rect(tip_x, tip_y, tip_w, tip_h), line_h
-
-    def _keyword_rects(self, lines: list[str], tip_rect: pygame.Rect,
-                       line_h: int, keyword: str, font: pygame.font.Font) -> list[pygame.Rect]:
-        rects = []
-        for line_idx, line in enumerate(lines):
-            start = 0
-            while True:
-                pos = line.find(keyword, start)
-                if pos < 0:
-                    break
-                prefix_w = font.size(line[:pos])[0]
-                kw_w = font.size(keyword)[0]
-                kw_x = tip_rect.x + 8 + prefix_w
-                kw_y = tip_rect.y + 6 + line_idx * line_h
-                rects.append(pygame.Rect(kw_x, kw_y, kw_w, line_h))
-                start = pos + len(keyword)
-        return rects
 
     def render(self, screen: pygame.Surface):
         screen.fill((15, 15, 25))
@@ -184,30 +152,15 @@ class LobbyScene:
         screen.blit(s_surf, (self._tip_phrase_rect.right, tip_y))
 
         mouse_pos = pygame.mouse.get_pos()
-        if self._tip_phrase_rect.collidepoint(mouse_pos):
-            freeze_regions = [HoverRegion("freeze", self._LOBBY_FREEZE_TOOLTIP, sub_regions=[])]
+        if not self.popup_manager.has_popups() and self._tip_phrase_rect.collidepoint(mouse_pos):
             draw_multiline_tooltip_with_regions(
-                screen, self.small_font, self._LOBBY_TIP_TOOLTIP, freeze_regions,
+                screen, self.small_font, self._LOBBY_TIP_TOOLTIP,
+                self._LOBBY_HOVER_REGIONS,
                 anchor_x=self._tip_phrase_rect.centerx,
                 anchor_y=self._tip_phrase_rect.bottom,
                 max_width=420, below=True,
             )
-
-            lines, tip_rect, line_h = self._tooltip_layout(
-                self._LOBBY_TIP_TOOLTIP, self.small_font,
-                anchor_x=self._tip_phrase_rect.centerx,
-                anchor_y=self._tip_phrase_rect.bottom,
-                max_width=420, below=True,
-            )
-            freeze_rects = self._keyword_rects(lines, tip_rect, line_h, "freeze", self.small_font)
-            hovered_freeze_rect = next((r for r in freeze_rects if r.collidepoint(mouse_pos)), None)
-            if hovered_freeze_rect:
-                draw_multiline_tooltip_with_regions(
-                    screen, self.small_font, self._LOBBY_FREEZE_TOOLTIP, [],
-                    anchor_x=hovered_freeze_rect.centerx,
-                    anchor_y=hovered_freeze_rect.bottom,
-                    max_width=460, below=True,
-                )
+        self.popup_manager.render(screen, self.small_font)
 
         hint = self.small_font.render("All players must be ready to start", True, (100, 100, 120))
         screen.blit(hint, (SCREEN_WIDTH // 2 - hint.get_width() // 2, SCREEN_HEIGHT - 50))
