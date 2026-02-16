@@ -141,6 +141,9 @@ class GameScene:
         self.hovered_spirit_panel_guidance: bool = False
         self.hovered_spirit_panel_influence: bool = False
         self.hovered_spirit_panel_worship: str | None = None  # faction_id or None
+        # Ejection title keyword hover state
+        self.ejection_keyword_rects: dict[str, list[pygame.Rect]] = {}
+        self.hovered_ejection_keyword: str | None = None
 
         # Change tracking for faction panel
         self.change_tracker = FactionChangeTracker()
@@ -256,6 +259,8 @@ class GameScene:
             self._update_panel_hover(event.pos)
             # Spirit panel hover detection
             self._update_spirit_panel_hover(event.pos)
+            # Ejection title keyword hover detection
+            self._update_ejection_title_hover(event.pos)
             # Popup keyword hover
             self.popup_manager.update_hover(event.pos)
 
@@ -442,6 +447,8 @@ class GameScene:
         self.guidance_title_hovered = False
         self.idol_title_rect = None
         self.idol_title_hovered = False
+        self.ejection_keyword_rects = {}
+        self.hovered_ejection_keyword = None
 
     def handle_network(self, msg_type, payload):
         if msg_type == MessageType.GAME_START:
@@ -829,8 +836,37 @@ class GameScene:
                 self.hovered_spirit_panel_worship = fid
                 return
 
+    def _update_ejection_title_hover(self, mouse_pos):
+        """Check if mouse is hovering over keyword spans in ejection title text."""
+        self.hovered_ejection_keyword = None
+        if self.phase != "ejection_choice":
+            return
+        mx, my = mouse_pos
+        for keyword, rects in self.ejection_keyword_rects.items():
+            for rect in rects:
+                if rect.collidepoint(mx, my):
+                    self.hovered_ejection_keyword = keyword
+                    return
+
     def _try_pin_hovered_tooltip(self, mouse_pos):
         """Check all hover states and pin the matching tooltip as a popup."""
+        if self.hovered_ejection_keyword:
+            keyword = self.hovered_ejection_keyword
+            tooltip = _INFLUENCE_TOOLTIP if keyword == "Influence" else _AGENDA_DECK_TOOLTIP
+            anchor_rect = None
+            for rect in self.ejection_keyword_rects.get(keyword, []):
+                if rect.collidepoint(mouse_pos[0], mouse_pos[1]):
+                    anchor_rect = rect
+                    break
+            if anchor_rect:
+                self.popup_manager.pin_tooltip(
+                    tooltip, _GUIDANCE_HOVER_REGIONS,
+                    anchor_x=anchor_rect.centerx, anchor_y=anchor_rect.bottom,
+                    font=self.small_font, max_width=350,
+                    surface_w=SCREEN_WIDTH, below=True,
+                )
+                return
+
         # Faction panel guided tooltip
         if self.hovered_panel_guided:
             spirit_id = self.ui_renderer.panel_guided_spirit_id
@@ -1526,8 +1562,26 @@ class GameScene:
 
     def _render_ejection_ui(self, screen):
         faction_name = FACTION_DISPLAY_NAMES.get(self.ejection_faction, self.ejection_faction)
-        title = self.font.render(f"As the last remnants of your presence leave the {faction_name} faction, you nudge their future. Choose an Agenda card to add to {faction_name}'s deck:", True, (200, 200, 220))
-        screen.blit(title, (20, SCREEN_HEIGHT // 2 - 80))
+        title_text = (
+            f"As the last remnants of your Influence leave the {faction_name} faction, "
+            f"you nudge their future. Choose an Agenda card to add to {faction_name}'s Agenda deck:"
+        )
+        keywords = ["Influence", "Agenda deck"]
+        text_x = 20
+        max_text_width = max(220, _HEX_MAP_LEFT_X - 30)
+        lines = self._wrap_lines(title_text, self.font, max_text_width)
+        line_h = self.font.get_linesize()
+        title_h = len(lines) * line_h
+        buttons_top = min((btn.rect.top for btn in self.action_buttons), default=SCREEN_HEIGHT - 200)
+        text_y = max(96, buttons_top - title_h - 10)
+        self.ejection_keyword_rects = self._render_rich_lines(
+            screen, self.font, lines, text_x, text_y,
+            keywords=keywords,
+            hovered_keyword=self.hovered_ejection_keyword,
+            normal_color=(200, 200, 220),
+            keyword_color=(100, 220, 210),
+            hovered_keyword_color=(140, 255, 245),
+        )
 
         # Highlight selected button
         for btn in self.action_buttons:
@@ -1540,6 +1594,20 @@ class GameScene:
         if not self.popup_manager.has_popups():
             for btn in self.action_buttons:
                 btn.draw_tooltip(screen, self.small_font)
+            if self.hovered_ejection_keyword:
+                tooltip = _INFLUENCE_TOOLTIP if self.hovered_ejection_keyword == "Influence" else _AGENDA_DECK_TOOLTIP
+                rects = self.ejection_keyword_rects.get(self.hovered_ejection_keyword, [])
+                if rects:
+                    mx, my = pygame.mouse.get_pos()
+                    anchor = rects[0]
+                    for rect in rects:
+                        if rect.collidepoint(mx, my):
+                            anchor = rect
+                            break
+                    draw_multiline_tooltip_with_regions(
+                        screen, self.small_font, tooltip, _GUIDANCE_HOVER_REGIONS,
+                        anchor_x=anchor.centerx, anchor_y=anchor.bottom, below=True,
+                    )
 
         # Selection feedback
         if self.selected_ejection_type:
@@ -1551,6 +1619,97 @@ class GameScene:
         if self.submit_button:
             self.submit_button.enabled = self.selected_ejection_type is not None
             self.submit_button.draw(screen, self.font)
+
+    def _wrap_lines(self, text: str, font: pygame.font.Font, max_width: int) -> list[str]:
+        """Simple word-wrap utility for inline UI text blocks."""
+        lines = []
+        for paragraph in text.split("\n"):
+            if not paragraph.strip():
+                lines.append("")
+                continue
+            words = paragraph.split()
+            current = words[0]
+            for word in words[1:]:
+                candidate = f"{current} {word}"
+                if font.size(candidate)[0] <= max_width:
+                    current = candidate
+                else:
+                    lines.append(current)
+                    current = word
+            lines.append(current)
+        return lines
+
+    def _render_rich_lines(self, surface: pygame.Surface, font: pygame.font.Font,
+                           lines: list[str], x: int, y: int,
+                           keywords: list[str], hovered_keyword: str | None,
+                           normal_color: tuple[int, int, int],
+                           keyword_color: tuple[int, int, int],
+                           hovered_keyword_color: tuple[int, int, int]) -> dict[str, list[pygame.Rect]]:
+        """Render wrapped lines with keyword underline styling and return keyword rects."""
+        keyword_rects: dict[str, list[pygame.Rect]] = {k: [] for k in keywords}
+        line_h = font.get_linesize()
+
+        for line_idx, line in enumerate(lines):
+            cy = y + line_idx * line_h
+            if not keywords:
+                surface.blit(font.render(line, True, normal_color), (x, cy))
+                continue
+
+            occurrences = []
+            for kw in keywords:
+                start = 0
+                while True:
+                    pos = line.find(kw, start)
+                    if pos < 0:
+                        break
+                    occurrences.append((pos, pos + len(kw), kw))
+                    start = pos + len(kw)
+
+            if not occurrences:
+                surface.blit(font.render(line, True, normal_color), (x, cy))
+                continue
+
+            occurrences.sort(key=lambda o: o[0])
+            filtered = []
+            last_end = 0
+            for seg_start, seg_end, kw in occurrences:
+                if seg_start >= last_end:
+                    filtered.append((seg_start, seg_end, kw))
+                    last_end = seg_end
+
+            cursor_x = x
+            pos = 0
+            for seg_start, seg_end, kw in filtered:
+                if seg_start > pos:
+                    normal_text = line[pos:seg_start]
+                    surf = font.render(normal_text, True, normal_color)
+                    surface.blit(surf, (cursor_x, cy))
+                    cursor_x += surf.get_width()
+
+                kw_text = line[seg_start:seg_end]
+                color = hovered_keyword_color if kw == hovered_keyword else keyword_color
+                surf = font.render(kw_text, True, color)
+                surface.blit(surf, (cursor_x, cy))
+                kw_rect = pygame.Rect(cursor_x, cy, surf.get_width(), line_h)
+                keyword_rects[kw].append(kw_rect)
+
+                underline_y = cy + line_h - 2
+                ux = cursor_x
+                ux_end = cursor_x + surf.get_width()
+                while ux < ux_end:
+                    dot_end = min(ux + 2, ux_end)
+                    pygame.draw.line(surface, color, (ux, underline_y), (dot_end, underline_y), 1)
+                    ux += 5
+
+                cursor_x += surf.get_width()
+                pos = seg_end
+
+            if pos < len(line):
+                tail = line[pos:]
+                surf = font.render(tail, True, normal_color)
+                surface.blit(surf, (cursor_x, cy))
+
+        return keyword_rects
 
     def _render_spoils_ui(self, screen):
         if not self.spoils_cards:
