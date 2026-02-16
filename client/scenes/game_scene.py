@@ -13,7 +13,7 @@ from client.renderer.assets import load_assets, agenda_card_images
 from client.input_handler import InputHandler
 from client.scenes.animation_orchestrator import AnimationOrchestrator
 from client.scenes.change_tracker import FactionChangeTracker
-from client.renderer.popup_manager import PopupManager, HoverRegion
+from client.renderer.popup_manager import PopupManager, HoverRegion, draw_multiline_tooltip_with_regions
 
 # Approximate hex map screen bounds (default camera) for centering UI
 _HEX_MAP_HALF_W = int(HEX_SIZE * 1.5 * (MAP_SIDE_LENGTH - 1)) + HEX_SIZE
@@ -41,7 +41,7 @@ _INFLUENCE_TOOLTIP = (
 
 _AGENDA_DECK_TOOLTIP = (
     "All possible Agendas a Faction can draw and play. The base "
-    "deck contains 2 of each type: Trade, Bond, Steal, Expand, "
+    "deck contains 1 of each type: Trade, Bond, Steal, Expand, "
     "and Change. Extra cards can be added via the Change agenda "
     "or when a Spirit is ejected from Guidance. Spirits with "
     "more Influence draw more options from it."
@@ -51,6 +51,7 @@ _GUIDANCE_HOVER_REGIONS = [
     HoverRegion("Agenda deck", _AGENDA_DECK_TOOLTIP, sub_regions=[
         HoverRegion("Influence", _INFLUENCE_TOOLTIP, sub_regions=[]),
     ]),
+    HoverRegion("Influence", _INFLUENCE_TOOLTIP, sub_regions=[]),
 ]
 
 
@@ -831,9 +832,8 @@ class GameScene:
             spirit_id = self.ui_renderer.panel_guided_spirit_id
             tooltip = self._build_guidance_panel_tooltip(spirit_id)
             r = self.ui_renderer.panel_guided_rect
-            hover_regions = _GUIDANCE_HOVER_REGIONS if spirit_id else []
             self.popup_manager.pin_tooltip(
-                tooltip, hover_regions,
+                tooltip, _GUIDANCE_HOVER_REGIONS,
                 anchor_x=r.centerx, anchor_y=r.bottom,
                 font=self.small_font, max_width=350,
                 surface_w=SCREEN_WIDTH, below=True,
@@ -846,7 +846,7 @@ class GameScene:
                 self.ui_renderer.panel_faction_id)
             r = self.ui_renderer.panel_worship_rect
             self.popup_manager.pin_tooltip(
-                tooltip, [],
+                tooltip, _GUIDANCE_HOVER_REGIONS,
                 anchor_x=r.centerx, anchor_y=r.bottom,
                 font=self.small_font, max_width=350,
                 surface_w=SCREEN_WIDTH, below=True,
@@ -858,13 +858,11 @@ class GameScene:
             spirit = self.spirits.get(self.spirit_panel_spirit_id, {})
             if spirit.get("guided_faction"):
                 tooltip = self._build_guidance_panel_tooltip(self.spirit_panel_spirit_id)
-                hover_regions = _GUIDANCE_HOVER_REGIONS
             else:
                 tooltip = self._GUIDANCE_GENERIC_TOOLTIP
-                hover_regions = []
             r = self.ui_renderer.spirit_panel_guidance_rect
             self.popup_manager.pin_tooltip(
-                tooltip, hover_regions,
+                tooltip, _GUIDANCE_HOVER_REGIONS,
                 anchor_x=r.centerx, anchor_y=r.bottom,
                 font=self.small_font, max_width=350,
                 surface_w=SCREEN_WIDTH, below=True,
@@ -875,7 +873,7 @@ class GameScene:
         if self.hovered_spirit_panel_influence:
             r = self.ui_renderer.spirit_panel_influence_rect
             self.popup_manager.pin_tooltip(
-                _INFLUENCE_TOOLTIP, [],
+                _INFLUENCE_TOOLTIP, _GUIDANCE_HOVER_REGIONS,
                 anchor_x=r.centerx, anchor_y=r.bottom,
                 font=self.small_font, max_width=350,
                 surface_w=SCREEN_WIDTH, below=True,
@@ -888,7 +886,7 @@ class GameScene:
                 self.hovered_spirit_panel_worship, self.spirit_panel_spirit_id)
             r = self.ui_renderer.spirit_panel_worship_rects[self.hovered_spirit_panel_worship]
             self.popup_manager.pin_tooltip(
-                tooltip, [],
+                tooltip, _GUIDANCE_HOVER_REGIONS,
                 anchor_x=r.centerx, anchor_y=r.bottom,
                 font=self.small_font, max_width=350,
                 surface_w=SCREEN_WIDTH, below=True,
@@ -909,7 +907,7 @@ class GameScene:
         # Idol title tooltip
         if self.idol_title_hovered and self.idol_title_rect:
             self.popup_manager.pin_tooltip(
-                self._IDOL_TITLE_TOOLTIP, [],
+                self._IDOL_TITLE_TOOLTIP, _GUIDANCE_HOVER_REGIONS,
                 anchor_x=self.idol_title_rect.centerx,
                 anchor_y=self.idol_title_rect.bottom,
                 font=self.small_font, max_width=350,
@@ -920,7 +918,7 @@ class GameScene:
         # Agenda card tooltip
         if self.hovered_card_tooltip and self.hovered_card_rect:
             self.popup_manager.pin_tooltip(
-                self.hovered_card_tooltip, [],
+                self.hovered_card_tooltip, _GUIDANCE_HOVER_REGIONS,
                 anchor_x=self.hovered_card_rect.centerx,
                 anchor_y=self.hovered_card_rect.top,
                 font=self.small_font, max_width=350,
@@ -936,7 +934,7 @@ class GameScene:
             if agenda_str:
                 tooltip = build_agenda_tooltip(agenda_str, fmod)
                 self.popup_manager.pin_tooltip(
-                    tooltip, [],
+                    tooltip, _GUIDANCE_HOVER_REGIONS,
                     anchor_x=self.hovered_agenda_label_rect.centerx,
                     anchor_y=self.hovered_agenda_label_rect.bottom,
                     font=self.small_font, max_width=350,
@@ -947,7 +945,7 @@ class GameScene:
         # Animation tooltip
         if self.hovered_anim_tooltip and self.hovered_anim_rect:
             self.popup_manager.pin_tooltip(
-                self.hovered_anim_tooltip, [],
+                self.hovered_anim_tooltip, _GUIDANCE_HOVER_REGIONS,
                 anchor_x=self.hovered_anim_rect.centerx,
                 anchor_y=self.hovered_anim_rect.bottom,
                 font=self.small_font, max_width=350,
@@ -967,7 +965,7 @@ class GameScene:
                             f"Placed by: {owner_name}\n{vp_text}")
             mx, my = mouse_pos
             self.popup_manager.pin_tooltip(
-                tooltip_text, [],
+                tooltip_text, _GUIDANCE_HOVER_REGIONS,
                 anchor_x=mx, anchor_y=my,
                 font=self.small_font, max_width=350,
                 surface_w=SCREEN_WIDTH,
@@ -1271,8 +1269,8 @@ class GameScene:
         if not self.popup_manager.has_popups():
             # Agenda hover tooltips
             if self.hovered_card_tooltip and self.hovered_card_rect:
-                draw_multiline_tooltip(
-                    screen, self.small_font, self.hovered_card_tooltip,
+                draw_multiline_tooltip_with_regions(
+                    screen, self.small_font, self.hovered_card_tooltip, _GUIDANCE_HOVER_REGIONS,
                     anchor_x=self.hovered_card_rect.centerx,
                     anchor_y=self.hovered_card_rect.top,
                 )
@@ -1281,15 +1279,15 @@ class GameScene:
                 agenda_str = self.faction_agendas_this_turn.get(self.hovered_agenda_label_fid, "")
                 if agenda_str:
                     tooltip = build_agenda_tooltip(agenda_str, fmod)
-                    draw_multiline_tooltip(
-                        screen, self.small_font, tooltip,
+                    draw_multiline_tooltip_with_regions(
+                        screen, self.small_font, tooltip, _GUIDANCE_HOVER_REGIONS,
                         anchor_x=self.hovered_agenda_label_rect.centerx,
                         anchor_y=self.hovered_agenda_label_rect.bottom,
                         below=True,
                     )
             elif self.hovered_anim_tooltip and self.hovered_anim_rect:
-                draw_multiline_tooltip(
-                    screen, self.small_font, self.hovered_anim_tooltip,
+                draw_multiline_tooltip_with_regions(
+                    screen, self.small_font, self.hovered_anim_tooltip, _GUIDANCE_HOVER_REGIONS,
                     anchor_x=self.hovered_anim_rect.centerx,
                     anchor_y=self.hovered_anim_rect.bottom,
                     below=True,
@@ -1304,16 +1302,16 @@ class GameScene:
                 tooltip = self._build_guidance_panel_tooltip(
                     self.ui_renderer.panel_guided_spirit_id)
                 r = self.ui_renderer.panel_guided_rect
-                draw_multiline_tooltip(
-                    screen, self.small_font, tooltip,
+                draw_multiline_tooltip_with_regions(
+                    screen, self.small_font, tooltip, _GUIDANCE_HOVER_REGIONS,
                     anchor_x=r.centerx, anchor_y=r.bottom, below=True,
                 )
             elif self.hovered_panel_worship and self.ui_renderer.panel_faction_id:
                 tooltip = self._build_worship_panel_tooltip(
                     self.ui_renderer.panel_faction_id)
                 r = self.ui_renderer.panel_worship_rect
-                draw_multiline_tooltip(
-                    screen, self.small_font, tooltip,
+                draw_multiline_tooltip_with_regions(
+                    screen, self.small_font, tooltip, _GUIDANCE_HOVER_REGIONS,
                     anchor_x=r.centerx, anchor_y=r.bottom, below=True,
                 )
 
@@ -1325,13 +1323,13 @@ class GameScene:
                 else:
                     tooltip = self._GUIDANCE_GENERIC_TOOLTIP
                 r = self.ui_renderer.spirit_panel_guidance_rect
-                draw_multiline_tooltip(
-                    screen, self.small_font, tooltip,
+                draw_multiline_tooltip_with_regions(
+                    screen, self.small_font, tooltip, _GUIDANCE_HOVER_REGIONS,
                     anchor_x=r.centerx, anchor_y=r.bottom, below=True,
                 )
             elif self.hovered_spirit_panel_influence:
-                draw_multiline_tooltip(
-                    screen, self.small_font, _INFLUENCE_TOOLTIP,
+                draw_multiline_tooltip_with_regions(
+                    screen, self.small_font, _INFLUENCE_TOOLTIP, _GUIDANCE_HOVER_REGIONS,
                     anchor_x=self.ui_renderer.spirit_panel_influence_rect.centerx,
                     anchor_y=self.ui_renderer.spirit_panel_influence_rect.bottom,
                     below=True,
@@ -1340,8 +1338,8 @@ class GameScene:
                 tooltip = self._build_spirit_worship_tooltip(
                     self.hovered_spirit_panel_worship, self.spirit_panel_spirit_id)
                 r = self.ui_renderer.spirit_panel_worship_rects[self.hovered_spirit_panel_worship]
-                draw_multiline_tooltip(
-                    screen, self.small_font, tooltip,
+                draw_multiline_tooltip_with_regions(
+                    screen, self.small_font, tooltip, _GUIDANCE_HOVER_REGIONS,
                     anchor_x=r.centerx, anchor_y=r.bottom, below=True,
                 )
 
@@ -1362,8 +1360,8 @@ class GameScene:
         vp_text = self._IDOL_VP_TEXT.get(idol_type, "")
         tooltip_text = f"{idol_type.value.title()} Idol\nPlaced by: {owner_name}\n{vp_text}"
         mx, my = pygame.mouse.get_pos()
-        draw_multiline_tooltip(
-            screen, self.small_font, tooltip_text,
+        draw_multiline_tooltip_with_regions(
+            screen, self.small_font, tooltip_text, _GUIDANCE_HOVER_REGIONS,
             anchor_x=mx,
             anchor_y=my,
         )
@@ -1439,15 +1437,15 @@ class GameScene:
 
             # Title tooltips (drawn below title)
             if self.guidance_title_hovered and self.guidance_title_rect:
-                draw_multiline_tooltip(
-                    screen, self.small_font, self._GUIDANCE_TITLE_TOOLTIP,
+                draw_multiline_tooltip_with_regions(
+                    screen, self.small_font, self._GUIDANCE_TITLE_TOOLTIP, _GUIDANCE_HOVER_REGIONS,
                     anchor_x=self.guidance_title_rect.centerx,
                     anchor_y=self.guidance_title_rect.bottom,
                     below=True,
                 )
             if self.idol_title_hovered and self.idol_title_rect:
-                draw_multiline_tooltip(
-                    screen, self.small_font, self._IDOL_TITLE_TOOLTIP,
+                draw_multiline_tooltip_with_regions(
+                    screen, self.small_font, self._IDOL_TITLE_TOOLTIP, _GUIDANCE_HOVER_REGIONS,
                     anchor_x=self.idol_title_rect.centerx,
                     anchor_y=self.idol_title_rect.bottom,
                     below=True,
