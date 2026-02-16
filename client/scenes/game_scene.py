@@ -898,7 +898,7 @@ class GameScene:
         # Guidance title tooltip
         if self.guidance_title_hovered and self.guidance_title_rect:
             self.popup_manager.pin_tooltip(
-                self._GUIDANCE_TITLE_TOOLTIP, [],
+                self._GUIDANCE_TITLE_TOOLTIP, _GUIDANCE_HOVER_REGIONS,
                 anchor_x=self.guidance_title_rect.centerx,
                 anchor_y=self.guidance_title_rect.bottom,
                 font=self.small_font, max_width=350,

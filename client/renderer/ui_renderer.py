@@ -404,6 +404,14 @@ class UIRenderer:
 
         return chip_w
 
+    def _sum_numeric_deltas(self, changes) -> int:
+        """Sum numeric deltas from change entries, ignoring non-numeric entries."""
+        total = 0
+        for ch in changes:
+            if isinstance(ch.delta, (int, float)):
+                total += int(ch.delta)
+        return total
+
     def draw_faction_panel(self, surface: pygame.Surface, faction_data: dict,
                            x: int, y: int, width: int = 220, spirits: dict = None,
                            preview_guidance: dict = None,
@@ -487,21 +495,21 @@ class UIRenderer:
         # --- Gold ---
         gold_changes = _field_changes("gold")
         if gold_changes:
-            old_gold = change_tracker.get_old_value(panel_faction_id, "gold")
+            gold_delta_total = self._sum_numeric_deltas(gold_changes)
+            old_gold = gold - gold_delta_total
             label_surf = self.small_font.render("Gold: ", True, (180, 180, 200))
             surface.blit(label_surf, (x + 10, dy))
             cx = x + 10 + label_surf.get_width()
             cx += self._render_strikethrough(
                 surface, self.small_font, str(old_gold), (180, 180, 200), (cx, dy))
             cx += 4
-            new_surf = self.small_font.render(str(gold), True, (180, 220, 255))
-            surface.blit(new_surf, (cx, dy))
-            cx += new_surf.get_width() + 4
             for ch in gold_changes:
                 cx += self._render_delta_chip(
                     surface, self.small_font, ch.delta, ch.label, ch.log_index,
                     (cx, dy), highlight_log_idx, change_rects)
                 cx += 3
+            new_surf = self.small_font.render(str(gold), True, (180, 220, 255))
+            surface.blit(new_surf, (cx, dy))
         else:
             text = self.small_font.render(f"Gold: {gold}", True, (180, 180, 200))
             surface.blit(text, (x + 10, dy))
@@ -510,21 +518,22 @@ class UIRenderer:
         # --- Territories ---
         terr_changes = _field_changes("territories")
         if terr_changes:
-            old_terr = change_tracker.get_old_value(panel_faction_id, "territories")
+            terr_now = len(territories)
+            terr_delta_total = self._sum_numeric_deltas(terr_changes)
+            old_terr = terr_now - terr_delta_total
             label_surf = self.small_font.render("Territories: ", True, (180, 180, 200))
             surface.blit(label_surf, (x + 10, dy))
             cx = x + 10 + label_surf.get_width()
             cx += self._render_strikethrough(
                 surface, self.small_font, str(old_terr), (180, 180, 200), (cx, dy))
             cx += 4
-            new_surf = self.small_font.render(str(len(territories)), True, (180, 220, 255))
-            surface.blit(new_surf, (cx, dy))
-            cx += new_surf.get_width() + 4
             for ch in terr_changes:
                 cx += self._render_delta_chip(
                     surface, self.small_font, ch.delta, ch.label, ch.log_index,
                     (cx, dy), highlight_log_idx, change_rects)
                 cx += 3
+            new_surf = self.small_font.render(str(terr_now), True, (180, 220, 255))
+            surface.blit(new_surf, (cx, dy))
         else:
             text = self.small_font.render(f"Territories: {len(territories)}", True, (180, 180, 200))
             surface.blit(text, (x + 10, dy))
@@ -598,7 +607,8 @@ class UIRenderer:
                 regard_changes = _field_changes("regard", target=other_fid)
                 other_name = FACTION_DISPLAY_NAMES.get(other_fid, other_fid)
                 if regard_changes:
-                    old_regard = change_tracker.get_old_regard(panel_faction_id, other_fid)
+                    regard_delta_total = self._sum_numeric_deltas(regard_changes)
+                    old_regard = val - regard_delta_total
                     r_old_color = (100, 255, 100) if old_regard > 0 else (255, 100, 100) if old_regard < 0 else (180, 180, 200)
                     r_new_color = (100, 255, 100) if val > 0 else (255, 100, 100) if val < 0 else (180, 180, 200)
                     label_surf = self.small_font.render(f"  {other_name}: ", True, (180, 180, 200))
@@ -607,14 +617,13 @@ class UIRenderer:
                     cx += self._render_strikethrough(
                         surface, self.small_font, f"{old_regard:+d}", r_old_color, (cx, dy))
                     cx += 4
-                    new_surf = self.small_font.render(f"{val:+d}", True, r_new_color)
-                    surface.blit(new_surf, (cx, dy))
-                    cx += new_surf.get_width() + 4
                     for ch in regard_changes:
                         cx += self._render_delta_chip(
                             surface, self.small_font, ch.delta, ch.label, ch.log_index,
                             (cx, dy), highlight_log_idx, change_rects)
                         cx += 3
+                    new_surf = self.small_font.render(f"{val:+d}", True, r_new_color)
+                    surface.blit(new_surf, (cx, dy))
                 else:
                     r_color = (100, 255, 100) if val > 0 else (255, 100, 100) if val < 0 else (180, 180, 200)
                     text = self.small_font.render(f"  {other_name}: {val:+d}", True, r_color)
