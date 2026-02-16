@@ -261,7 +261,12 @@ class GameServer:
                     spirit_id, payload.get("agenda_type", ""))
                 if error:
                     await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
-                elif not room.game_state.has_pending_sub_choices():
+                elif room.game_state.has_pending_sub_choices():
+                    waiting_for = list(room.game_state.ejection_pending.keys())
+                    await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                        "players_remaining": waiting_for,
+                    }))
+                else:
                     events = room.game_state.finalize_sub_choices()
                     await self._broadcast_phase_result(room, events)
                     await self._auto_resolve_phases(room)

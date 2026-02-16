@@ -175,6 +175,7 @@ class GameScene:
 
         # Idol hover tooltip
         self.hovered_idol = None  # idol object or None
+        self.idol_tooltip_spirit_rects: list[tuple[str, pygame.Rect]] = []
 
         # Agenda hover tooltip state
         self.hovered_card_tooltip: str | None = None
@@ -386,6 +387,15 @@ class GameScene:
                             # scroll_offset=0 shows last entries; we want log_idx visible
                             offset = total - log_idx - visible_count
                             self.event_log_scroll_offset = max(0, min(offset, total - visible_count))
+                    return
+
+            # Idol tooltip: click spirit names to toggle that spirit's panel
+            for sid, name_rect in self.idol_tooltip_spirit_rects:
+                if name_rect.collidepoint(event.pos):
+                    if self.spirit_panel_spirit_id == sid:
+                        self.spirit_panel_spirit_id = None
+                    else:
+                        self.spirit_panel_spirit_id = sid
                     return
 
             # Spirit panel: click on any name in VP HUD toggles that spirit's panel
@@ -769,6 +779,7 @@ class GameScene:
         """Check if mouse is hovering over a placed idol on the hex map."""
         if not self.all_idols:
             self.hovered_idol = None
+            self.idol_tooltip_spirit_rects = []
             return
         # Build render idols the same way as render()
         render_idols = []
@@ -784,6 +795,7 @@ class GameScene:
                 })())
         if not render_idols:
             self.hovered_idol = None
+            self.idol_tooltip_spirit_rects = []
             return
         spirit_index_map = {
             sid: i for i, sid in enumerate(sorted(self.spirits.keys()))
@@ -793,6 +805,8 @@ class GameScene:
             self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT,
             spirit_index_map,
         )
+        if self.hovered_idol is None:
+            self.idol_tooltip_spirit_rects = []
 
     def _get_faction_modifiers(self, faction_id: str) -> dict:
         """Get the change_modifiers for a given faction."""
@@ -1075,7 +1089,7 @@ class GameScene:
 
         # Idol hover tooltip
         if self.hovered_idol:
-            tooltip_text = self._build_idol_tooltip_text(self.hovered_idol)
+            tooltip_text, _ = self._build_idol_tooltip_text(self.hovered_idol)
             mx, my = mouse_pos
             self.popup_manager.pin_tooltip(
                 tooltip_text, _GUIDANCE_HOVER_REGIONS,
@@ -1430,6 +1444,9 @@ class GameScene:
         # Register UI rects for tooltip placement scoring
         self._register_ui_rects_for_tooltips()
 
+        # Rebuilt only while idol hover tooltip is actively rendered.
+        self.idol_tooltip_spirit_rects = []
+
         # Hover tooltips (suppressed when pinned popups are open)
         if not self.popup_manager.has_popups():
             # Agenda hover tooltips
@@ -1522,6 +1539,9 @@ class GameScene:
         owner_id = idol.owner_spirit
         owner_name = (self.spirits.get(owner_id, {}).get("name", owner_id[:6])
                       if owner_id else "Unknown")
+        clickable_spirits: dict[str, str] = {}
+        if owner_id:
+            clickable_spirits[owner_id] = owner_name
         type_name = idol_type.value.title()
 
         # Determine territory ownership
@@ -1537,6 +1557,8 @@ class GameScene:
                 worship_id = fdata.get("worship_spirit")
             worship_name = (self.spirits.get(worship_id, {}).get("name", worship_id[:6])
                             if worship_id else None)
+            if worship_id and worship_name:
+                clickable_spirits[worship_id] = worship_name
             header = (f"{type_name} Idol placed by {owner_name}, "
                       f"currently in the custody of {faction_name}")
             if idol_type == IdolType.BATTLE:
@@ -1580,16 +1602,42 @@ class GameScene:
                            f"it will grant the Spirit they Worship {SPREAD_IDOL_VP} VP "
                            f"for each Territory the Faction gains.")
 
-        return f"{header}\n{vp_line}"
+        return f"{header}\n{vp_line}", clickable_spirits
 
     def _render_idol_tooltip(self, screen):
-        tooltip_text = self._build_idol_tooltip_text(self.hovered_idol)
+        tooltip_text, clickable_spirits = self._build_idol_tooltip_text(self.hovered_idol)
         mx, my = pygame.mouse.get_pos()
-        draw_multiline_tooltip_with_regions(
-            screen, self.small_font, tooltip_text, _GUIDANCE_HOVER_REGIONS,
-            anchor_x=mx,
-            anchor_y=my,
+        max_width = 350
+        lines = self._wrap_lines(tooltip_text, self.small_font, max_width)
+        line_h = self.small_font.get_linesize()
+        rendered_widths = [self.small_font.size(line)[0] for line in lines]
+        content_w = max(rendered_widths) if rendered_widths else 0
+        tip_w = content_w + 16
+        tip_h = len(lines) * line_h + 12
+        tip_x = mx - tip_w // 2
+        if tip_x < 4:
+            tip_x = 4
+        if tip_x + tip_w > SCREEN_WIDTH - 4:
+            tip_x = SCREEN_WIDTH - 4 - tip_w
+        tip_y = my - tip_h - 4
+        tip_rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
+        pygame.draw.rect(screen, (40, 40, 50), tip_rect, border_radius=4)
+        pygame.draw.rect(screen, (150, 150, 100), tip_rect, 1, border_radius=4)
+
+        keyword_names = list(dict.fromkeys(clickable_spirits.values()))
+        name_rects = self._render_rich_lines(
+            screen, self.small_font, lines, tip_x + 8, tip_y + 6,
+            keywords=keyword_names,
+            hovered_keyword=None,
+            normal_color=(255, 220, 150),
+            keyword_color=(140, 220, 255),
+            hovered_keyword_color=(140, 220, 255),
         )
+
+        self.idol_tooltip_spirit_rects = []
+        for sid, name in clickable_spirits.items():
+            for rect in name_rects.get(name, []):
+                self.idol_tooltip_spirit_rects.append((sid, rect))
 
     _GUIDANCE_TITLE_TOOLTIP = (
         "Select a Faction to Guide. If you are not the only Spirit "
