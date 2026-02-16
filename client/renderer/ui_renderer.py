@@ -447,9 +447,9 @@ class UIRenderer:
                 if ripe is None and isinstance(w, dict):
                     ripe = w.get('is_ripe', False)
                 if fa == fid:
-                    war_opponents.append((FACTION_DISPLAY_NAMES.get(fb, fb), ripe))
+                    war_opponents.append((FACTION_DISPLAY_NAMES.get(fb, fb), ripe, fb))
                 elif fb == fid:
-                    war_opponents.append((FACTION_DISPLAY_NAMES.get(fa, fa), ripe))
+                    war_opponents.append((FACTION_DISPLAY_NAMES.get(fa, fa), ripe, fa))
 
         # Calculate dynamic panel height based on content
         panel_h = 8 + 24  # top padding + name header
@@ -670,9 +670,9 @@ class UIRenderer:
             text = self.small_font.render("At war with:", True, (150, 150, 170))
             surface.blit(text, (x + 10, dy))
             dy += 18
-            for opp_name, is_ripe in war_opponents:
+            for opp_name, is_ripe, opp_fid in war_opponents:
                 suffix = " (ripe)" if is_ripe else " (new)"
-                war_color = (255, 120, 120) if is_ripe else (255, 180, 100)
+                war_color = tuple(FACTION_COLORS.get(opp_fid, (150, 150, 150)))
                 text = self.small_font.render(f"  {opp_name}{suffix}", True, war_color)
                 surface.blit(text, (x + 10, dy))
                 dy += 18
