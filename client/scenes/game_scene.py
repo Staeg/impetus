@@ -185,6 +185,7 @@ class GameScene:
         # Faction panel / VP hover tooltip state
         self.hovered_panel_guided: bool = False
         self.hovered_panel_worship: bool = False
+        self.hovered_panel_war: bool = False
         self.hovered_vp_spirit_id: str | None = None
 
         # Spirit panel state (which spirit's panel to show, or None)
@@ -566,16 +567,28 @@ class GameScene:
                             ))
             # Queue agenda events for animation
             if agenda_events:
-                # Split setup events into a separate batch so they play
-                # before resolution events (and don't visually overlap).
-                setup_events = [e for e in agenda_events if e.get("is_setup")]
-                if setup_events:
-                    resolution_events = [e for e in agenda_events if not e.get("is_setup")]
-                    self.orchestrator.queue.append(setup_events)
-                    if resolution_events:
-                        for e in resolution_events:
-                            e["_setup_turn"] = True
-                        self.orchestrator.queue.append(resolution_events)
+                # Standard batching architecture:
+                # - Split by turn_start markers when present (bootstrap/opening events).
+                # - Otherwise treat this PHASE_RESULT as one batch (normal flow).
+                turn_batched_events: list[list[dict]] = []
+                current_turn_batch: list[dict] = []
+                saw_turn_markers = False
+                for event in events:
+                    etype = event.get("type", "")
+                    if etype == "turn_start":
+                        saw_turn_markers = True
+                        if current_turn_batch:
+                            turn_batched_events.append(current_turn_batch)
+                            current_turn_batch = []
+                        continue
+                    if etype in _ANIM_ORDER and not event.get("is_guided_modifier"):
+                        current_turn_batch.append(event)
+                if current_turn_batch:
+                    turn_batched_events.append(current_turn_batch)
+
+                if saw_turn_markers:
+                    for batch in turn_batched_events:
+                        self.orchestrator.queue.append(batch)
                 else:
                     self.orchestrator.queue.append(agenda_events)
                 self.orchestrator.try_process_next_batch(
@@ -853,12 +866,14 @@ class GameScene:
                 return
 
     def _update_panel_hover(self, mouse_pos):
-        """Check if mouse is hovering over Guided by / Worshipping in faction panel."""
+        """Check if mouse is hovering over hoverable faction panel labels."""
         mx, my = mouse_pos
         r = self.ui_renderer.panel_guided_rect
         self.hovered_panel_guided = r is not None and r.collidepoint(mx, my)
         r = self.ui_renderer.panel_worship_rect
         self.hovered_panel_worship = r is not None and r.collidepoint(mx, my)
+        r = self.ui_renderer.panel_war_rect
+        self.hovered_panel_war = r is not None and r.collidepoint(mx, my)
 
     def _update_vp_hover(self, mouse_pos):
         """Check if mouse is hovering over a player name in the VP HUD."""
@@ -938,6 +953,17 @@ class GameScene:
             r = self.ui_renderer.panel_worship_rect
             self.popup_manager.pin_tooltip(
                 tooltip, _GUIDANCE_HOVER_REGIONS,
+                anchor_x=r.centerx, anchor_y=r.bottom,
+                font=self.small_font, max_width=350,
+                surface_w=SCREEN_WIDTH, below=True,
+            )
+            return
+
+        # Faction panel war tooltip
+        if self.hovered_panel_war:
+            r = self.ui_renderer.panel_war_rect
+            self.popup_manager.pin_tooltip(
+                _WAR_TOOLTIP, _GUIDANCE_HOVER_REGIONS,
                 anchor_x=r.centerx, anchor_y=r.bottom,
                 font=self.small_font, max_width=350,
                 surface_w=SCREEN_WIDTH, below=True,
@@ -1302,6 +1328,7 @@ class GameScene:
             # Clear faction panel rects
             self.ui_renderer.panel_guided_rect = None
             self.ui_renderer.panel_worship_rect = None
+            self.ui_renderer.panel_war_rect = None
         else:
             # Faction panel
             pf = self.panel_faction
@@ -1324,6 +1351,7 @@ class GameScene:
             else:
                 self.ui_renderer.panel_guided_rect = None
                 self.ui_renderer.panel_worship_rect = None
+                self.ui_renderer.panel_war_rect = None
             # Clear spirit panel rects
             self.ui_renderer.spirit_panel_rect = None
             self.ui_renderer.spirit_panel_guidance_rect = None
@@ -1403,6 +1431,12 @@ class GameScene:
                 r = self.ui_renderer.panel_worship_rect
                 draw_multiline_tooltip_with_regions(
                     screen, self.small_font, tooltip, _GUIDANCE_HOVER_REGIONS,
+                    anchor_x=r.centerx, anchor_y=r.bottom, below=True,
+                )
+            elif self.hovered_panel_war and self.ui_renderer.panel_war_rect:
+                r = self.ui_renderer.panel_war_rect
+                draw_multiline_tooltip_with_regions(
+                    screen, self.small_font, _WAR_TOOLTIP, _GUIDANCE_HOVER_REGIONS,
                     anchor_x=r.centerx, anchor_y=r.bottom, below=True,
                 )
 

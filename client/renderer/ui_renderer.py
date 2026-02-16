@@ -166,6 +166,7 @@ class UIRenderer:
         self.panel_guided_spirit_id: str | None = None
         self.panel_worship_rect: pygame.Rect | None = None
         self.panel_worship_spirit_id: str | None = None
+        self.panel_war_rect: pygame.Rect | None = None
         self.panel_faction_id: str | None = None
         # Spirit panel rects
         self.spirit_panel_rect: pygame.Rect | None = None
@@ -667,8 +668,10 @@ class UIRenderer:
         # Wars
         if war_opponents:
             dy += 4
-            text = self.small_font.render("At war with:", True, (150, 150, 170))
+            text = self.small_font.render("At War with:", True, (150, 150, 170))
             surface.blit(text, (x + 10, dy))
+            self.panel_war_rect = pygame.Rect(x + 10, dy, text.get_width(), 16)
+            draw_dotted_underline(surface, x + 10, dy + 14, text.get_width())
             dy += 18
             for opp_name, is_ripe, opp_fid in war_opponents:
                 suffix = " (ripe)" if is_ripe else " (new)"
@@ -676,6 +679,8 @@ class UIRenderer:
                 text = self.small_font.render(f"  {opp_name}{suffix}", True, war_color)
                 surface.blit(text, (x + 10, dy))
                 dy += 18
+        else:
+            self.panel_war_rect = None
 
     def draw_spirit_panel(self, surface: "pygame.Surface", spirit_data: dict,
                           factions: dict, all_idols: list, hex_ownership: dict,
