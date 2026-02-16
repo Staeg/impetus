@@ -192,15 +192,25 @@ class AnimationOrchestrator:
         regular_events = [e for e in agenda_events if not e.get("is_spoils")]
         spoils_events = [e for e in agenda_events if e.get("is_spoils")]
 
+        # Allocate per-faction rows deterministically across the full batch
+        # so regular + spoils cards stack without overlap.
+        next_row_by_faction: dict[str, int] = {}
+
+        def _claim_row(faction_id: str, base_row: int = 0) -> int:
+            if faction_id not in next_row_by_faction:
+                existing = sum(
+                    1
+                    for a in self.animation.get_persistent_agenda_animations()
+                    if not a.done and a.faction_id == faction_id
+                )
+                next_row_by_faction[faction_id] = max(base_row, existing)
+            row = next_row_by_faction[faction_id]
+            next_row_by_faction[faction_id] += 1
+            return row
+
         # --- Regular events ---
-        regular_events.sort(key=lambda e: (
-            0 if e.get("is_setup") else 1,
-            _ANIM_ORDER.get(e["type"], 99),
-        ))
+        regular_events.sort(key=lambda e: _ANIM_ORDER.get(e["type"], 99))
         agenda_anim_index = 0
-        auto_fade_count = sum(1 for e in regular_events
-                              if e.get("is_setup") or e.get("_setup_turn"))
-        auto_fade_idx = 0
         for event in regular_events:
             etype = event["type"]
             if etype == "change":
@@ -219,20 +229,15 @@ class AnimationOrchestrator:
                 print(f"[anim] No faction_id in {etype} event")
             else:
                 delay = agenda_anim_index * 1.0
-                auto_fadeout = None
-                if event.get("is_setup") or event.get("_setup_turn"):
-                    remaining = auto_fade_count - auto_fade_idx - 1
-                    auto_fadeout = remaining * 1.0 + 2.0
-                    auto_fade_idx += 1
                 img_w = img.get_width()
-                target_x, target_y = self._get_agenda_label_pos(faction_id, img_w)
-                start_x, start_y = self._get_agenda_slide_start(faction_id, img_w)
+                row = _claim_row(faction_id, base_row=0)
+                target_x, target_y = self._get_agenda_label_pos(faction_id, img_w, row)
+                start_x, start_y = self._get_agenda_slide_start(faction_id, img_w, row)
                 anim = AgendaSlideAnimation(
                     img, faction_id,
                     target_x, target_y,
                     start_x, start_y,
                     delay=delay,
-                    auto_fadeout_after=auto_fadeout,
                     agenda_type=etype,
                 )
                 # Tag expand animations with hex reveal info
@@ -248,7 +253,6 @@ class AnimationOrchestrator:
 
         # --- Spoils events (stack below regular agenda icons) ---
         spoils_events.sort(key=lambda e: _ANIM_ORDER.get(e["type"], 99))
-        spoils_batch_counts: dict[str, int] = {}
         spoils_anim_index = 0
         for event in spoils_events:
             etype = event["type"]
@@ -268,10 +272,7 @@ class AnimationOrchestrator:
                 print(f"[anim] No faction_id in {etype} event")
             else:
                 delay = spoils_anim_index * 1.0
-                existing_spoils = self.animation.get_spoils_count_for_faction(faction_id)
-                batch_local = spoils_batch_counts.get(faction_id, 0)
-                row = 1 + existing_spoils + batch_local
-                spoils_batch_counts[faction_id] = batch_local + 1
+                row = _claim_row(faction_id, base_row=1)
                 img_w = img.get_width()
                 target_x, target_y = self._get_agenda_label_pos(faction_id, img_w, row)
                 start_x, start_y = self._get_agenda_slide_start(faction_id, img_w, row)
