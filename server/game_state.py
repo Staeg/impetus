@@ -60,7 +60,7 @@ class GameState:
 
         def _run_automated_turn(turn_number: int, agenda_choices: dict[str, AgendaType],
                                 agenda_event_type: str):
-            """Resolve a full non-player turn and cleanup state."""
+            """Resolve a full non-player turn (agenda, war, scoring) and cleanup state."""
             events.append({"type": "turn_start", "turn": turn_number})
 
             for fid, at in agenda_choices.items():
@@ -75,6 +75,8 @@ class GameState:
                 if at == AgendaType.TRADE
             ]
             resolve_agendas(self.factions, self.hex_map, agenda_choices, self.wars, events)
+            events.extend(self._resolve_war_phase())
+            events.extend(self._resolve_scoring())
 
             for faction in self.factions.values():
                 faction.cleanup_deck()

@@ -356,8 +356,10 @@ class PopupManager:
                                 if r.collidepoint(mx, my):
                                     anchor = r
                                     break
-                            _draw_plain_tooltip(
-                                surface, font, region.tooltip_text,
+                            # Use keyword-aware rendering for transient sub-tooltips
+                            # so nested hover affordances are visible before pinning.
+                            draw_multiline_tooltip_with_regions(
+                                surface, font, region.tooltip_text, region.sub_regions,
                                 anchor_x=anchor.centerx,
                                 anchor_y=anchor.bottom,
                                 max_width=popup.max_width,

@@ -4,7 +4,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from shared.constants import Phase, AgendaType, IdolType
+from shared.constants import Phase, AgendaType, IdolType, ChangeModifierTarget
 from server.game_state import GameState
 
 
@@ -50,6 +50,37 @@ class TestGameStateSetup:
                     # Regard is initialized for all pairs (may be non-zero
                     # due to opening automated turns resolving Bond/Steal)
                     assert other_fid in faction.regard
+
+    def test_turn2_declared_wars_are_ripe_by_turn3(self, monkeypatch):
+        # Force Turn 1 mountain modifier to Steal (+1 penalty), then force
+        # mountain's Turn 2 random agenda to Steal so wars are declared.
+        change_calls = {"n": 0}
+        agenda_calls = {"n": 0}
+
+        def fake_choice(seq):
+            # Agenda deck draw (list[AgendaCard])
+            if seq and hasattr(seq[0], "agenda_type"):
+                agenda_calls["n"] += 1
+                # First agenda draw belongs to mountain in setup_game order.
+                if agenda_calls["n"] == 1:
+                    for card in seq:
+                        if card.agenda_type == AgendaType.STEAL:
+                            return card
+                return seq[0]
+
+            # Change deck draw (list[ChangeModifierTarget])
+            change_calls["n"] += 1
+            # First change draw belongs to mountain in setup_game order.
+            if change_calls["n"] == 1:
+                return ChangeModifierTarget.STEAL
+            return seq[0]
+
+        monkeypatch.setattr("random.choice", fake_choice)
+
+        gs = make_game()
+        assert gs.turn == 3
+        assert len(gs.wars) > 0
+        assert all(w.is_ripe for w in gs.wars)
 
 
 class TestVagrantPhase:
