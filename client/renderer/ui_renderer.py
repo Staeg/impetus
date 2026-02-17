@@ -835,8 +835,9 @@ class UIRenderer:
                 f"Fail: +{1 + expand_mod}g",
             ],
             "change": [
-                "Draw modifier",
-                "card",
+                "Draw modifier card",
+                "which upgrades",
+                "other Agendas",
             ],
         }
         return descs.get(agenda_type, ["???"])

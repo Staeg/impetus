@@ -135,6 +135,22 @@ class FactionChangeTracker:
                     label="Steal", log_index=log_index,
                 ))
             for nb in neighbors:
+                if penalty:
+                    # Derive visible victim gold loss without going below zero,
+                    # using this tracker's current old+delta view.
+                    old_gold = self.get_old_value(nb, "gold") or 0
+                    tracked_delta = sum(
+                        c.delta or 0
+                        for c in self.get_field_changes(nb, "gold")
+                    )
+                    current_tracked_gold = max(0, old_gold + tracked_delta)
+                    victim_loss = min(current_tracked_gold, penalty)
+                    if victim_loss > 0:
+                        self._add(nb, ChangeEntry(
+                            field="gold", delta=-victim_loss,
+                            label=f"Steal ({FACTION_DISPLAY_NAMES.get(faction_id, faction_id)})",
+                            log_index=log_index,
+                        ))
                 # Neighbor loses gold (we don't know exact per-neighbor amounts from the event)
                 # Regard is bilateral; negate penalty (positive magnitude from server)
                 if penalty:
