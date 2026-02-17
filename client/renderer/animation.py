@@ -253,6 +253,13 @@ class AgendaSlideAnimation:
         self.hex_reveal: tuple[int, int] | None = None
         self.hex_reveal_faction: str | None = None
         self._hex_revealed: bool = False
+        # Gold reveal: display gold updates when this anim becomes active
+        self.gold_delta: int = 0
+        self.gold_delta_faction: str | None = None
+        self._gold_applied: bool = False
+        # War reveal: display war updates when this anim becomes active
+        self.war_reveals: list[dict] | None = None
+        self._wars_revealed: bool = False
 
     def update(self, dt: float):
         self.elapsed += dt

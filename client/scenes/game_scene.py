@@ -105,6 +105,10 @@ _GUIDANCE_HOVER_REGIONS = [
     ]),
 ]
 
+_WAR_HOVER_REGIONS = [
+    HoverRegion("resolves", _WAR_RESOLVES_TOOLTIP, sub_regions=[]),
+]
+
 
 class GameScene:
     def __init__(self, app):
@@ -135,6 +139,7 @@ class GameScene:
 
         # Faction overview tracking
         self.faction_agendas_this_turn: dict[str, str] = {}
+        self._pending_agenda_log_info: dict[str, dict] = {}
 
         # Phase-specific state
         self.phase_options: dict = {}
@@ -343,29 +348,28 @@ class GameScene:
 
             # Check agenda card clicks
             if self.agenda_hand:
-                for i, rect in enumerate(self._calc_card_rects(
-                        len(self.agenda_hand), y=SCREEN_HEIGHT - 210, centered=True)):
+                for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.agenda_hand))):
                     if rect.collidepoint(event.pos):
                         self.selected_agenda_index = i
                         return
 
             # Check change card clicks
             if self.change_cards:
-                for i, rect in enumerate(self._calc_card_rects(len(self.change_cards))):
+                for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.change_cards))):
                     if rect.collidepoint(event.pos):
                         self._submit_card_choice(i, MessageType.SUBMIT_CHANGE_CHOICE, "change_cards")
                         return
 
             # Check spoils card clicks
             if self.spoils_cards:
-                for i, rect in enumerate(self._calc_card_rects(len(self.spoils_cards))):
+                for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.spoils_cards))):
                     if rect.collidepoint(event.pos):
                         self._submit_card_choice(i, MessageType.SUBMIT_SPOILS_CHOICE, "spoils_cards")
                         return
 
             # Check spoils change card clicks
             if self.spoils_change_cards:
-                for i, rect in enumerate(self._calc_card_rects(len(self.spoils_change_cards))):
+                for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.spoils_change_cards))):
                     if rect.collidepoint(event.pos):
                         self._submit_card_choice(i, MessageType.SUBMIT_SPOILS_CHANGE_CHOICE, "spoils_change_cards")
                         return
@@ -558,9 +562,8 @@ class GameScene:
                 self.phase = active_sub_phase
             elif active_sub_phase == "spoils_change_choice" and self.spoils_change_cards:
                 self.phase = active_sub_phase
-            # Log all events in original order
-            for event in events:
-                self._log_event(event)
+            # Log events (consolidate agenda play + resolution into one line)
+            self._log_events_batch(events)
             # VP gain animations
             for event in events:
                 if event.get("type") == "vp_scored":
@@ -591,7 +594,7 @@ class GameScene:
                             turn_batched_events.append(current_turn_batch)
                             current_turn_batch = []
                         continue
-                    if etype in _ANIM_ORDER and not event.get("is_guided_modifier"):
+                    if (etype in _ANIM_ORDER or etype == "war_erupted") and not event.get("is_guided_modifier"):
                         current_turn_batch.append(event)
                 if current_turn_batch:
                     turn_batched_events.append(current_turn_batch)
@@ -600,7 +603,8 @@ class GameScene:
                     for batch in turn_batched_events:
                         self.orchestrator.queue.append(batch)
                 else:
-                    self.orchestrator.queue.append(agenda_events)
+                    war_events = [e for e in events if e.get("type") == "war_erupted"]
+                    self.orchestrator.queue.append(agenda_events + war_events)
                 self.orchestrator.try_process_next_batch(
                     self.hex_ownership, self.small_font)
             # Clear previews after processing phase results
@@ -772,6 +776,14 @@ class GameScene:
         return [pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h)
                 for i in range(count)]
 
+    def _calc_left_choice_card_rects(self, count: int, y: int = 136) -> list[pygame.Rect]:
+        """Card rects centered within the left black panel, clamped from x=20."""
+        card_w, spacing = 110, 10
+        total_w = count * (card_w + spacing) - spacing
+        start_x = (_HEX_MAP_LEFT_X - total_w) // 2
+        start_x = max(20, start_x)
+        return self._calc_card_rects(count, start_x=start_x, y=y, centered=False)
+
     def _update_idol_hover(self, mouse_pos):
         """Check if mouse is hovering over a placed idol on the hex map."""
         if not self.all_idols:
@@ -827,8 +839,7 @@ class GameScene:
         modifiers = self._get_current_faction_modifiers()
 
         if self.agenda_hand:
-            for i, rect in enumerate(self._calc_card_rects(
-                    len(self.agenda_hand), y=SCREEN_HEIGHT - 210, centered=True)):
+            for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.agenda_hand))):
                 if rect.collidepoint(mx, my):
                     atype = self.agenda_hand[i].get("agenda_type", "")
                     self.hovered_card_tooltip = build_agenda_tooltip(atype, modifiers)
@@ -836,14 +847,14 @@ class GameScene:
                     return
 
         if self.change_cards:
-            for i, rect in enumerate(self._calc_card_rects(len(self.change_cards))):
+            for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.change_cards))):
                 if rect.collidepoint(mx, my):
                     self.hovered_card_tooltip = build_modifier_tooltip(self.change_cards[i])
                     self.hovered_card_rect = rect
                     return
 
         if self.spoils_cards:
-            for i, rect in enumerate(self._calc_card_rects(len(self.spoils_cards))):
+            for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.spoils_cards))):
                 if rect.collidepoint(mx, my):
                     atype = self.spoils_cards[i]
                     self.hovered_card_tooltip = build_agenda_tooltip(atype, modifiers, is_spoils=True)
@@ -851,7 +862,7 @@ class GameScene:
                     return
 
         if self.spoils_change_cards:
-            for i, rect in enumerate(self._calc_card_rects(len(self.spoils_change_cards))):
+            for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.spoils_change_cards))):
                 if rect.collidepoint(mx, my):
                     self.hovered_card_tooltip = build_modifier_tooltip(self.spoils_change_cards[i])
                     self.hovered_card_rect = rect
@@ -977,7 +988,7 @@ class GameScene:
         if self.hovered_panel_war:
             r = self.ui_renderer.panel_war_rect
             self.popup_manager.pin_tooltip(
-                _WAR_TOOLTIP, _GUIDANCE_HOVER_REGIONS,
+                _WAR_TOOLTIP, _WAR_HOVER_REGIONS,
                 anchor_x=r.centerx, anchor_y=r.bottom,
                 font=self.small_font, max_width=350,
                 surface_w=SCREEN_WIDTH, below=True,
@@ -1213,17 +1224,120 @@ class GameScene:
             self.change_tracker.snapshot_and_reset(self.factions, self.spirits)
             self.highlighted_log_index = None
             self.faction_agendas_this_turn.clear()
+            self._pending_agenda_log_info.clear()
             if not self.orchestrator.queue and self.animation.is_all_done():
                 self.animation.start_agenda_fadeout()
         elif etype == "guide_contested":
             if self.app.my_spirit_id in event.get("spirits", []):
                 self.preview_guidance = None
 
+    @staticmethod
+    def _format_faction_list(factions: list[str]) -> str:
+        if not factions:
+            return ""
+        names = [FACTION_DISPLAY_NAMES.get(fid, fid) for fid in factions]
+        if len(names) == 1:
+            return names[0]
+        if len(names) == 2:
+            return f"{names[0]} and {names[1]}"
+        return f"{', '.join(names[:-1])}, and {names[-1]}"
+
+    def _build_consolidated_agenda_line(self, play_info: dict, resolution_event: dict) -> str:
+        faction_id = play_info["faction"]
+        fname = FACTION_DISPLAY_NAMES.get(faction_id, faction_id)
+        agenda = play_info["agenda"].title()
+        verb = "randomly plays" if play_info["source"] == "random" else "plays"
+        guided_part = ""
+        spirit_id = play_info.get("spirit")
+        if spirit_id:
+            spirit_name = self.spirits.get(spirit_id, {}).get("name", spirit_id[:6])
+            guided_part = f" guided by {spirit_name}"
+
+        etype = resolution_event.get("type", "")
+        if etype == "trade":
+            gold = resolution_event.get("gold_gained", 0)
+            co_traders = resolution_event.get("co_traders", [])
+            if co_traders:
+                regard = resolution_event.get("regard_gain", 0)
+                others = self._format_faction_list(co_traders)
+                return f"{fname} {verb} {agenda}{guided_part} for {gold} gold and +{regard} regard with {others}."
+            return f"{fname} {verb} {agenda}{guided_part} for {gold} gold."
+
+        if etype == "steal":
+            gold = resolution_event.get("gold_gained", 0)
+            penalty = resolution_event.get("regard_penalty", 1)
+            neighbors = resolution_event.get("neighbors", [])
+            if neighbors:
+                others = self._format_faction_list(neighbors)
+                return f"{fname} {verb} {agenda}{guided_part} for {gold} gold and -{penalty} regard with {others}."
+            return f"{fname} {verb} {agenda}{guided_part} for {gold} gold."
+
+        if etype == "expand":
+            cost = resolution_event.get("cost", 0)
+            return f"{fname} {verb} {agenda}{guided_part} and expands territory for {cost} gold."
+
+        if etype == "expand_failed":
+            gained = resolution_event.get("gold_gained", 0)
+            return f"{fname} {verb} {agenda}{guided_part} but couldn't expand and gained {gained} gold."
+
+        if etype == "change":
+            mod = resolution_event.get("modifier", "?")
+            return f"{fname} {verb} {agenda}{guided_part} and upgrades {mod}."
+
+        return f"{fname} {verb} {agenda}{guided_part}."
+
+    def _log_events_batch(self, events: list[dict]):
+        resolution_to_agenda = {
+            "trade": "trade",
+            "steal": "steal",
+            "expand": "expand",
+            "expand_failed": "expand",
+            "change": "change",
+        }
+
+        for event in events:
+            etype = event.get("type", "")
+
+            if etype in ("agenda_chosen", "agenda_random"):
+                faction_id = event.get("faction", "")
+                agenda = event.get("agenda", "")
+                if faction_id and agenda:
+                    self._pending_agenda_log_info[faction_id] = {
+                        "faction": faction_id,
+                        "agenda": agenda,
+                        "source": "random" if etype == "agenda_random" else "chosen",
+                        "spirit": event.get("spirit"),
+                    }
+                    self.faction_agendas_this_turn[faction_id] = agenda
+                continue
+
+            # Guided change choice echo event is an intermediate step; keep it out of log.
+            if etype == "change" and event.get("is_guided_modifier"):
+                continue
+
+            faction_id = event.get("faction", "")
+            pending = self._pending_agenda_log_info.get(faction_id)
+            expected_agenda = resolution_to_agenda.get(etype)
+            if pending and expected_agenda and pending.get("agenda") == expected_agenda:
+                line = self._build_consolidated_agenda_line(pending, event)
+                self.event_log.append(line)
+                log_index = len(self.event_log) - 1
+                self.change_tracker.process_event(
+                    event, log_index, self.factions, self.spirits)
+                del self._pending_agenda_log_info[faction_id]
+                continue
+
+            self._log_event(event)
+
     def update(self, dt):
         self.animation.update(dt)
-        # Incrementally reveal hexes as expand animations become active
+        # Incrementally reveal hexes, gold, and wars as animations become active
         if self._display_hex_ownership is not None:
             self.orchestrator.apply_hex_reveals(self._display_hex_ownership)
+        if self._display_factions is not None:
+            self.orchestrator.apply_gold_deltas(self._display_factions)
+        if self._display_wars is not None:
+            self.orchestrator.apply_war_reveals(self._display_wars)
         self.orchestrator.try_process_next_batch(self.hex_ownership, self.small_font)
         self.orchestrator.try_show_deferred_phase_ui(self)
         # Clear display state when all animations are done
@@ -1260,17 +1374,16 @@ class GameScene:
             rects.append((self.submit_button.rect, _WEIGHT_NON_TEXT))
         # Card rects (if cards are showing)
         if self.agenda_hand:
-            for cr in self._calc_card_rects(
-                    len(self.agenda_hand), y=SCREEN_HEIGHT - 210, centered=True):
+            for cr in self._calc_left_choice_card_rects(len(self.agenda_hand)):
                 rects.append((cr, _WEIGHT_NON_TEXT))
         if self.change_cards:
-            for cr in self._calc_card_rects(len(self.change_cards)):
+            for cr in self._calc_left_choice_card_rects(len(self.change_cards)):
                 rects.append((cr, _WEIGHT_NON_TEXT))
         if self.spoils_cards:
-            for cr in self._calc_card_rects(len(self.spoils_cards)):
+            for cr in self._calc_left_choice_card_rects(len(self.spoils_cards)):
                 rects.append((cr, _WEIGHT_NON_TEXT))
         if self.spoils_change_cards:
-            for cr in self._calc_card_rects(len(self.spoils_change_cards)):
+            for cr in self._calc_left_choice_card_rects(len(self.spoils_change_cards)):
                 rects.append((cr, _WEIGHT_NON_TEXT))
 
         set_ui_rects(rects)
@@ -1496,7 +1609,7 @@ class GameScene:
             elif self.hovered_panel_war and self.ui_renderer.panel_war_rect:
                 r = self.ui_renderer.panel_war_rect
                 draw_multiline_tooltip_with_regions(
-                    screen, self.small_font, _WAR_TOOLTIP, _GUIDANCE_HOVER_REGIONS,
+                    screen, self.small_font, _WAR_TOOLTIP, _WAR_HOVER_REGIONS,
                     anchor_x=r.centerx, anchor_y=r.bottom, below=True,
                 )
 
@@ -1757,13 +1870,20 @@ class GameScene:
 
     def _render_agenda_ui(self, screen):
         if self.agenda_hand:
-            total_w = len(self.agenda_hand) * 120 - 10
-            start_x = SCREEN_WIDTH // 2 - total_w // 2
+            my_spirit = self.spirits.get(self.app.my_spirit_id, {})
+            faction_id = my_spirit.get("guided_faction", "")
+            faction_name = FACTION_DISPLAY_NAMES.get(faction_id, faction_id) if faction_id else "your Faction"
+            title = self.font.render(f"Choose an Agenda for {faction_name} to play.", True, (200, 200, 220))
+            title_x = max(20, (_HEX_MAP_LEFT_X - title.get_width()) // 2)
+            screen.blit(title, (title_x, 106))
+
+            card_rects = self._calc_left_choice_card_rects(len(self.agenda_hand))
+            start_x = card_rects[0].x if card_rects else 20
             modifiers = self._get_current_faction_modifiers()
             self.ui_renderer.draw_card_hand(
                 screen, self.agenda_hand,
                 self.selected_agenda_index,
-                start_x, SCREEN_HEIGHT - 210,
+                start_x, 136,
                 modifiers=modifiers,
                 card_images=agenda_card_images,
             )
@@ -1776,14 +1896,16 @@ class GameScene:
         if not self.change_cards:
             return
         title = self.font.render("Choose a Change modifier:", True, (200, 200, 220))
-        screen.blit(title, (20, 100))
+        title_x = max(20, (_HEX_MAP_LEFT_X - title.get_width()) // 2)
+        screen.blit(title, (title_x, 106))
 
         hand = []
         for card_name in self.change_cards:
             desc = self.ui_renderer._build_modifier_description(card_name)
             hand.append({"agenda_type": card_name, "description": desc})
-        start_x = 20
-        start_y = 125
+        card_rects = self._calc_left_choice_card_rects(len(hand))
+        start_x = card_rects[0].x if card_rects else 20
+        start_y = 136
         self.ui_renderer.draw_card_hand(
             screen, hand, -1,
             start_x, start_y,
@@ -1947,12 +2069,14 @@ class GameScene:
         opponent_name = FACTION_DISPLAY_NAMES.get(self.spoils_opponent, self.spoils_opponent)
         title_text = f"Spoils of War vs {opponent_name} - Choose an agenda:" if opponent_name else "Spoils of War - Choose an agenda:"
         title = self.font.render(title_text, True, (255, 200, 100))
-        screen.blit(title, (20, 100))
+        title_x = max(20, (_HEX_MAP_LEFT_X - title.get_width()) // 2)
+        screen.blit(title, (title_x, 106))
 
         modifiers = self._get_current_faction_modifiers()
         hand = [{"agenda_type": card} for card in self.spoils_cards]
-        start_x = 20
-        start_y = 125
+        card_rects = self._calc_left_choice_card_rects(len(hand))
+        start_x = card_rects[0].x if card_rects else 20
+        start_y = 136
         self.ui_renderer.draw_card_hand(
             screen, hand, -1,
             start_x, start_y,
@@ -1967,14 +2091,16 @@ class GameScene:
         opponent_name = FACTION_DISPLAY_NAMES.get(self.spoils_opponent, self.spoils_opponent)
         title_text = f"Spoils of War vs {opponent_name} - Choose a Change modifier:" if opponent_name else "Spoils of War - Choose a Change modifier:"
         title = self.font.render(title_text, True, (255, 200, 100))
-        screen.blit(title, (20, 100))
+        title_x = max(20, (_HEX_MAP_LEFT_X - title.get_width()) // 2)
+        screen.blit(title, (title_x, 106))
 
         hand = []
         for card_name in self.spoils_change_cards:
             desc = self.ui_renderer._build_modifier_description(card_name)
             hand.append({"agenda_type": card_name, "description": desc})
-        start_x = 20
-        start_y = 125
+        card_rects = self._calc_left_choice_card_rects(len(hand))
+        start_x = card_rects[0].x if card_rects else 20
+        start_y = 136
         self.ui_renderer.draw_card_hand(
             screen, hand, -1,
             start_x, start_y,
