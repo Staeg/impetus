@@ -128,6 +128,10 @@ class GameState:
         # Players begin taking actions on Turn 3.
         self.turn = 3
         self.phase = Phase.VAGRANT_PHASE
+        # Append turn 3 marker to the last automated turn so the client
+        # resets its change tracker and logs the turn boundary.
+        if turn_results:
+            turn_results[-1][0].append({"type": "turn_start", "turn": 3})
         return initial_snapshot, turn_results
 
     def get_snapshot(self) -> GameStateSnapshot:
