@@ -20,8 +20,16 @@ def set_ui_rects(rects: list[tuple[pygame.Rect, int]]):
 def _compute_best_position(anchor_x: int, anchor_y: int,
                             tip_w: int, tip_h: int,
                             screen_w: int, screen_h: int,
-                            prefer_below: bool = False) -> tuple[int, int]:
-    """Pick the best tooltip position from 6 candidates scored by UI overlap."""
+                            prefer_below: bool = False,
+                            avoid_rects: list[pygame.Rect] | None = None,
+                            ) -> tuple[int, int]:
+    """Pick the best tooltip position scored by UI overlap.
+
+    When avoid_rects is provided (parent popup rects), non-overlapping
+    positions are always preferred.  Extra candidate positions adjacent
+    to each avoid rect are generated so the tooltip can escape even when
+    all anchor-relative positions overlap.
+    """
     margin = 4
     x_center = anchor_x - tip_w // 2
     x_left = anchor_x - tip_w + 20
@@ -39,6 +47,25 @@ def _compute_best_position(anchor_x: int, anchor_y: int,
     for yv in (y_above, y_below):
         for xv in (x_center, x_left, x_right):
             raw.append(clamp(xv, yv))
+
+    # Extra candidates adjacent to each avoid rect so the tooltip can
+    # find a position that doesn't cover any parent popup.
+    if avoid_rects:
+        for ar in avoid_rects:
+            cx = ar.centerx - tip_w // 2
+            cy = ar.centery - tip_h // 2
+            # Above / below the avoid rect
+            raw.append(clamp(cx, ar.y - tip_h - margin))
+            raw.append(clamp(cx, ar.bottom + margin))
+            # Left / right of the avoid rect
+            raw.append(clamp(ar.x - tip_w - margin, cy))
+            raw.append(clamp(ar.right + margin, cy))
+            # Align left/right edges with the avoid rect
+            raw.append(clamp(ar.x, ar.y - tip_h - margin))
+            raw.append(clamp(ar.right - tip_w, ar.y - tip_h - margin))
+            raw.append(clamp(ar.x, ar.bottom + margin))
+            raw.append(clamp(ar.right - tip_w, ar.bottom + margin))
+
     seen = set()
     candidates = []
     for pos in raw:
@@ -46,25 +73,41 @@ def _compute_best_position(anchor_x: int, anchor_y: int,
             seen.add(pos)
             candidates.append(pos)
 
-    if not _ui_rects or len(candidates) == 1:
-        # No UI rects registered or only one option — use prefer_below logic
+    has_scoring_rects = bool(_ui_rects) or bool(avoid_rects)
+    if not has_scoring_rects or len(candidates) == 1:
         if prefer_below:
             return clamp(x_center, y_below)
         return clamp(x_center, y_above)
 
-    def score(pos):
+    def _avoid_overlap(pos):
+        """Total pixel overlap with avoid_rects."""
+        tip_rect = pygame.Rect(pos[0], pos[1], tip_w, tip_h)
+        total = 0
+        for ar in avoid_rects:
+            o = tip_rect.clip(ar)
+            total += o.w * o.h
+        return total
+
+    def _ui_score(pos):
+        """Weighted overlap with general UI rects + prefer_below tiebreaker."""
         tip_rect = pygame.Rect(pos[0], pos[1], tip_w, tip_h)
         total = 0
         for ui_rect, weight in _ui_rects:
-            overlap = tip_rect.clip(ui_rect)
-            total += overlap.w * overlap.h * weight
-        # Tiebreaker: prefer the side indicated by prefer_below
+            o = tip_rect.clip(ui_rect)
+            total += o.w * o.h * weight
         is_below = pos[1] > anchor_y
         if is_below != prefer_below:
-            total += 0.5  # tiny nudge
+            total += 0.5
         return total
 
-    return min(candidates, key=score)
+    if avoid_rects:
+        # Hard constraint: prefer any position with zero parent overlap.
+        # Within that set, break ties using normal UI-overlap scoring.
+        # If no position has zero overlap, minimize parent overlap first,
+        # then UI overlap.
+        return min(candidates, key=lambda p: (_avoid_overlap(p), _ui_score(p)))
+
+    return min(candidates, key=lambda p: _ui_score(p))
 
 
 class HoverRegion:
@@ -212,7 +255,8 @@ def _render_rich_line_with_keywords(surface, font, line, x, y,
 def draw_multiline_tooltip_with_regions(surface: pygame.Surface, font: pygame.font.Font,
                                         text: str, hover_regions: list[HoverRegion],
                                         anchor_x: int, anchor_y: int,
-                                        max_width: int = 350, below: bool = False):
+                                        max_width: int = 350, below: bool = False,
+                                        avoid_rects: list[pygame.Rect] | None = None):
     """Draw an unpinned tooltip, underlining known nested-hover keywords."""
     lines = _wrap_text(text, font, max_width)
     if not lines:
@@ -228,6 +272,7 @@ def draw_multiline_tooltip_with_regions(surface: pygame.Surface, font: pygame.fo
         anchor_x, anchor_y, tip_w, tip_h,
         surface.get_width(), surface.get_height(),
         prefer_below=below,
+        avoid_rects=avoid_rects,
     )
 
     tip_rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
@@ -277,10 +322,13 @@ class PopupManager:
         tip_w = content_w + 16
         tip_h = len(lines) * line_h + 12
 
+        # Avoid covering parent popups already in the stack
+        parent_rects = [p.rect for p in self._stack]
         tip_x, tip_y = _compute_best_position(
             anchor_x, anchor_y, tip_w, tip_h,
             surface_w, surface_h,
             prefer_below=below,
+            avoid_rects=parent_rects or None,
         )
 
         rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
@@ -362,6 +410,9 @@ class PopupManager:
 
         # Non-keyword right-click closes only the newest popup.
         self._stack.pop()
+        # Refresh hover state on the now-exposed popup so the UI updates
+        # immediately without requiring a mouse-move event.
+        self.update_hover(mouse_pos)
 
     def render(self, surface: pygame.Surface, font: pygame.font.Font):
         """Draw all pinned popups and transient keyword hover tooltip."""
@@ -408,12 +459,14 @@ class PopupManager:
                                     break
                             # Use keyword-aware rendering for transient sub-tooltips
                             # so nested hover affordances are visible before pinning.
+                            stack_rects = [p.rect for p in self._stack]
                             draw_multiline_tooltip_with_regions(
                                 surface, font, region.tooltip_text, region.sub_regions,
                                 anchor_x=anchor.centerx,
                                 anchor_y=anchor.bottom,
                                 max_width=popup.max_width,
                                 below=True,
+                                avoid_rects=stack_rects or None,
                             )
                         break
 
