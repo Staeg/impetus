@@ -109,6 +109,9 @@ _WAR_HOVER_REGIONS = [
     HoverRegion("resolves", _WAR_RESOLVES_TOOLTIP, sub_regions=[]),
 ]
 
+_CHOICE_CARD_Y = 136
+_MULTI_CHOICE_BLOCK_STEP = 220
+
 
 class GameScene:
     def __init__(self, app):
@@ -139,6 +142,8 @@ class GameScene:
 
         # Faction overview tracking
         self.faction_agendas_this_turn: dict[str, str] = {}
+        self.faction_spoils_agendas_this_turn: dict[str, list[str]] = {}
+        self._pending_ribbon_clear_on_next_agenda: bool = False
         self._pending_agenda_log_info: dict[str, dict] = {}
 
         # Phase-specific state
@@ -185,8 +190,10 @@ class GameScene:
         # Agenda hover tooltip state
         self.hovered_card_tooltip: str | None = None
         self.hovered_card_rect: pygame.Rect | None = None
-        self.agenda_label_rects: dict[str, pygame.Rect] = {}
+        self.agenda_label_rects: list[tuple[str, str, bool, pygame.Rect]] = []
         self.hovered_agenda_label_fid: str | None = None
+        self.hovered_agenda_label_type: str | None = None
+        self.hovered_agenda_label_is_spoils: bool = False
         self.hovered_agenda_label_rect: pygame.Rect | None = None
         self.hovered_anim_tooltip: str | None = None
         self.hovered_anim_rect: pygame.Rect | None = None
@@ -365,7 +372,7 @@ class GameScene:
 
             # Check spoils card clicks (multi-war)
             if self.spoils_cards:
-                y_offset = 136
+                y_offset = _CHOICE_CARD_Y
                 for war_idx, cards in enumerate(self.spoils_cards):
                     rects = self._calc_left_choice_card_rects(len(cards), y=y_offset)
                     for i, rect in enumerate(rects):
@@ -379,11 +386,11 @@ class GameScene:
                                 self.spoils_opponents = []
                                 self.spoils_selections = []
                             return
-                    y_offset += 170  # spacing between war rows
+                    y_offset += _MULTI_CHOICE_BLOCK_STEP
 
             # Check spoils change card clicks (multi-choice)
             if self.spoils_change_cards:
-                y_offset = 136
+                y_offset = _CHOICE_CARD_Y
                 for choice_idx, cards in enumerate(self.spoils_change_cards):
                     rects = self._calc_left_choice_card_rects(len(cards), y=y_offset)
                     for i, rect in enumerate(rects):
@@ -396,7 +403,7 @@ class GameScene:
                                 self.spoils_change_opponents = []
                                 self.spoils_change_selections = []
                             return
-                    y_offset += 170
+                    y_offset += _MULTI_CHOICE_BLOCK_STEP
 
             # Check change delta chip clicks (faction panel)
             for rect, log_idx in self.panel_change_rects:
@@ -602,11 +609,9 @@ class GameScene:
                                 delay=0.0, duration=3.0, drift_pixels=40,
                                 direction=1, screen_space=True,
                             ))
-            # Queue agenda events for animation
+            # Trigger agenda events immediately, but preserve turn_start segmentation
+            # for bootstrap payloads so Turn 1 and Turn 2 do not animate concurrently.
             if agenda_events:
-                # Standard batching architecture:
-                # - Split by turn_start markers when present (bootstrap/opening events).
-                # - Otherwise treat this PHASE_RESULT as one batch (normal flow).
                 turn_batched_events: list[list[dict]] = []
                 current_turn_batch: list[dict] = []
                 saw_turn_markers = False
@@ -623,14 +628,15 @@ class GameScene:
                 if current_turn_batch:
                     turn_batched_events.append(current_turn_batch)
 
-                if saw_turn_markers:
-                    for batch in turn_batched_events:
-                        self.orchestrator.queue.append(batch)
-                else:
+                if not saw_turn_markers:
                     war_events = [e for e in events if e.get("type") == "war_erupted"]
-                    self.orchestrator.queue.append(agenda_events + war_events)
-                self.orchestrator.try_process_next_batch(
-                    self.hex_ownership, self.small_font)
+                    anim_events = agenda_events + war_events
+                    self.orchestrator.process_agenda_events(
+                        anim_events, self.hex_ownership, self.small_font)
+                else:
+                    for batch in turn_batched_events:
+                        self.orchestrator.process_agenda_events(
+                            batch, self.hex_ownership, self.small_font)
             # Clear previews after processing phase results
             self.preview_guidance = None
             self.preview_idol = None
@@ -868,6 +874,8 @@ class GameScene:
         self.hovered_card_tooltip = None
         self.hovered_card_rect = None
         self.hovered_agenda_label_fid = None
+        self.hovered_agenda_label_type = None
+        self.hovered_agenda_label_is_spoils = False
         self.hovered_agenda_label_rect = None
         self.hovered_anim_tooltip = None
         self.hovered_anim_rect = None
@@ -893,7 +901,7 @@ class GameScene:
                     return
 
         if self.spoils_cards:
-            y_offset = 136
+            y_offset = _CHOICE_CARD_Y
             for war_idx, cards in enumerate(self.spoils_cards):
                 for i, rect in enumerate(self._calc_left_choice_card_rects(len(cards), y=y_offset)):
                     if rect.collidepoint(mx, my):
@@ -901,21 +909,24 @@ class GameScene:
                         self.hovered_card_tooltip = build_agenda_tooltip(atype, modifiers, is_spoils=True)
                         self.hovered_card_rect = rect
                         return
-                y_offset += 170
+                y_offset += _MULTI_CHOICE_BLOCK_STEP
 
         if self.spoils_change_cards:
-            y_offset = 136
+            y_offset = _CHOICE_CARD_Y
             for choice_idx, cards in enumerate(self.spoils_change_cards):
                 for i, rect in enumerate(self._calc_left_choice_card_rects(len(cards), y=y_offset)):
                     if rect.collidepoint(mx, my):
                         self.hovered_card_tooltip = build_modifier_tooltip(cards[i])
                         self.hovered_card_rect = rect
-                    return
+                        return
+                y_offset += _MULTI_CHOICE_BLOCK_STEP
 
         # Check faction ribbon agenda labels
-        for fid, rect in self.agenda_label_rects.items():
+        for fid, agenda_type, is_spoils, rect in self.agenda_label_rects:
             if rect.collidepoint(mx, my):
                 self.hovered_agenda_label_fid = fid
+                self.hovered_agenda_label_type = agenda_type
+                self.hovered_agenda_label_is_spoils = is_spoils
                 self.hovered_agenda_label_rect = rect
                 return
 
@@ -1115,10 +1126,10 @@ class GameScene:
         # Agenda label tooltip
         if self.hovered_agenda_label_fid and self.hovered_agenda_label_rect:
             fmod = self._get_faction_modifiers(self.hovered_agenda_label_fid)
-            agenda_str = self.faction_agendas_this_turn.get(
-                self.hovered_agenda_label_fid, "")
+            agenda_str = self.hovered_agenda_label_type or ""
             if agenda_str:
-                tooltip = build_agenda_tooltip(agenda_str, fmod)
+                tooltip = build_agenda_tooltip(
+                    agenda_str, fmod, is_spoils=self.hovered_agenda_label_is_spoils)
                 self.popup_manager.pin_tooltip(
                     tooltip, _GUIDANCE_HOVER_REGIONS,
                     anchor_x=self.hovered_agenda_label_rect.centerx,
@@ -1267,10 +1278,7 @@ class GameScene:
         if etype == "turn_start":
             self.change_tracker.snapshot_and_reset(self.factions, self.spirits)
             self.highlighted_log_index = None
-            self.faction_agendas_this_turn.clear()
-            self._pending_agenda_log_info.clear()
-            if not self.orchestrator.queue and self.animation.is_all_done():
-                self.animation.start_agenda_fadeout()
+            self._pending_ribbon_clear_on_next_agenda = True
         elif etype == "guide_contested":
             if self.app.my_spirit_id in event.get("spirits", []):
                 self.preview_guidance = None
@@ -1343,6 +1351,11 @@ class GameScene:
             etype = event.get("type", "")
 
             if etype in ("agenda_chosen", "agenda_random"):
+                if self._pending_ribbon_clear_on_next_agenda:
+                    self.faction_agendas_this_turn.clear()
+                    self.faction_spoils_agendas_this_turn.clear()
+                    self._pending_agenda_log_info.clear()
+                    self._pending_ribbon_clear_on_next_agenda = False
                 faction_id = event.get("faction", "")
                 agenda = event.get("agenda", "")
                 if faction_id and agenda:
@@ -1358,6 +1371,18 @@ class GameScene:
             # Guided change choice echo event is an intermediate step; keep it out of log.
             if etype == "change" and event.get("is_guided_modifier"):
                 continue
+
+            if event.get("is_spoils"):
+                spoils_agenda_type = None
+                if etype in ("trade", "steal", "change"):
+                    spoils_agenda_type = etype
+                elif etype in ("expand", "expand_failed", "expand_spoils"):
+                    spoils_agenda_type = "expand"
+                if spoils_agenda_type:
+                    faction_id = event.get("faction", "")
+                    if faction_id:
+                        self.faction_spoils_agendas_this_turn.setdefault(faction_id, []).append(
+                            spoils_agenda_type)
 
             faction_id = event.get("faction", "")
             pending = self._pending_agenda_log_info.get(faction_id)
@@ -1382,7 +1407,6 @@ class GameScene:
             self.orchestrator.apply_gold_deltas(self._display_factions)
         if self._display_wars is not None:
             self.orchestrator.apply_war_reveals(self._display_wars)
-        self.orchestrator.try_process_next_batch(self.hex_ownership, self.small_font)
         self.orchestrator.try_show_deferred_phase_ui(self)
         # Clear display state when all animations are done
         if self._display_hex_ownership is not None and not self.orchestrator.has_animations_playing():
@@ -1424,17 +1448,17 @@ class GameScene:
             for cr in self._calc_left_choice_card_rects(len(self.change_cards)):
                 rects.append((cr, _WEIGHT_NON_TEXT))
         if self.spoils_cards:
-            y_offset = 136
+            y_offset = _CHOICE_CARD_Y
             for cards in self.spoils_cards:
                 for cr in self._calc_left_choice_card_rects(len(cards), y=y_offset):
                     rects.append((cr, _WEIGHT_NON_TEXT))
-                y_offset += 170
+                y_offset += _MULTI_CHOICE_BLOCK_STEP
         if self.spoils_change_cards:
-            y_offset = 136
+            y_offset = _CHOICE_CARD_Y
             for cards in self.spoils_change_cards:
                 for cr in self._calc_left_choice_card_rects(len(cards), y=y_offset):
                     rects.append((cr, _WEIGHT_NON_TEXT))
-                y_offset += 170
+                y_offset += _MULTI_CHOICE_BLOCK_STEP
 
         set_ui_rects(rects)
 
@@ -1519,6 +1543,7 @@ class GameScene:
         self.agenda_label_rects = self.ui_renderer.draw_faction_overview(
             screen, disp_factions, self.faction_agendas_this_turn,
             wars=render_wars,
+            faction_spoils_agendas=self.faction_spoils_agendas_this_turn,
             spirits=self.spirits,
             preview_guidance=preview_guid_dict,
             animated_agenda_factions=animated_agenda_factions,
@@ -1618,9 +1643,10 @@ class GameScene:
                 )
             elif self.hovered_agenda_label_fid and self.hovered_agenda_label_rect:
                 fmod = self._get_faction_modifiers(self.hovered_agenda_label_fid)
-                agenda_str = self.faction_agendas_this_turn.get(self.hovered_agenda_label_fid, "")
+                agenda_str = self.hovered_agenda_label_type or ""
                 if agenda_str:
-                    tooltip = build_agenda_tooltip(agenda_str, fmod)
+                    tooltip = build_agenda_tooltip(
+                        agenda_str, fmod, is_spoils=self.hovered_agenda_label_is_spoils)
                     draw_multiline_tooltip_with_regions(
                         screen, self.small_font, tooltip, _GUIDANCE_HOVER_REGIONS,
                         anchor_x=self.hovered_agenda_label_rect.centerx,
@@ -2138,7 +2164,7 @@ class GameScene:
                 card_images=agenda_card_images,
                 is_spoils=True,
             )
-            y_offset += 170
+            y_offset += _MULTI_CHOICE_BLOCK_STEP
 
     def _render_spoils_change_ui(self, screen):
         if not self.spoils_change_cards:
@@ -2165,4 +2191,4 @@ class GameScene:
                 start_x, start_y,
                 card_images=agenda_card_images,
             )
-            y_offset += 170
+            y_offset += _MULTI_CHOICE_BLOCK_STEP

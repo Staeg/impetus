@@ -1,4 +1,4 @@
-"""Animation orchestration: batching, creation, and rendering of agenda/effect animations."""
+"""Animation orchestration: creation and rendering of agenda/effect animations."""
 
 import pygame
 from shared.constants import (
@@ -12,15 +12,13 @@ from client.renderer.assets import agenda_images
 
 
 class AnimationOrchestrator:
-    """Manages animation queuing, batch processing, and rendering."""
+    """Manages agenda/effect animation creation and rendering."""
 
     def __init__(self, animation_manager: AnimationManager,
                  hex_renderer, input_handler):
         self.animation = animation_manager
         self.hex_renderer = hex_renderer
         self.input_handler = input_handler
-        self.queue: list[list[dict]] = []
-        self.fading: bool = False
         self.deferred_phase_start: dict | None = None
 
     # --- Position helpers ---
@@ -159,30 +157,29 @@ class AnimationOrchestrator:
                     direction=1, screen_space=True,
                 ))
 
-    # --- Batch processing ---
+    # --- Agenda animation creation ---
 
-    def try_process_next_batch(self, hex_ownership: dict, small_font):
-        """Process the next queued animation batch when current animations are done."""
-        if not self.queue:
-            return
-        if self.fading:
-            if not self.animation.has_active_persistent_agenda_animations():
-                self.fading = False
-                batch = self.queue.pop(0)
-                self._process_batch(batch, hex_ownership, small_font)
-            return
-        if not self.animation.is_all_done():
-            return
-        if self.animation.get_persistent_agenda_animations():
-            self.animation.start_agenda_fadeout()
-            self.fading = True
-            return
-        batch = self.queue.pop(0)
-        self._process_batch(batch, hex_ownership, small_font)
+    def _get_append_delay_from_existing_agendas(self) -> float:
+        """Return delay needed to start after all currently scheduled agenda slides."""
+        max_remaining = 0.0
+        for anim in self.animation.get_persistent_agenda_animations():
+            if anim.done:
+                continue
+            remaining = (anim.delay + AgendaSlideAnimation.SLIDE_DURATION) - anim.elapsed
+            if remaining > max_remaining:
+                max_remaining = remaining
+        return max(0.0, max_remaining)
 
-    def _process_batch(self, agenda_events: list[dict],
-                       hex_ownership: dict, small_font):
-        """Create animations for a batch of agenda events."""
+    def process_agenda_events(self, agenda_events: list[dict],
+                              hex_ownership: dict, small_font,
+                              delay_offset: float = 0.0) -> float:
+        """Create agenda/effect animations for a set of agenda events.
+
+        Returns the duration window consumed (in seconds) so callers can
+        sequence multiple sets without overlap.
+        """
+        base_delay = self._get_append_delay_from_existing_agendas() + max(0.0, delay_offset)
+
         _ANIM_ORDER = {
             "trade": 0, "steal": 1,
             "expand": 2, "expand_failed": 2, "expand_spoils": 2,
@@ -199,7 +196,7 @@ class AnimationOrchestrator:
                           if not e.get("is_spoils") and e.get("type") != "war_erupted"]
         spoils_events = [e for e in agenda_events if e.get("is_spoils")]
 
-        # Allocate per-faction rows deterministically across the full batch
+        # Allocate per-faction rows deterministically across the full event set
         # so regular + spoils cards stack without overlap.
         next_row_by_faction: dict[str, int] = {}
 
@@ -235,7 +232,7 @@ class AnimationOrchestrator:
             elif not faction_id:
                 print(f"[anim] No faction_id in {etype} event")
             else:
-                delay = agenda_anim_index * 1.0
+                delay = base_delay + agenda_anim_index * 1.0
                 img_w = img.get_width()
                 row = _claim_row(faction_id, base_row=0)
                 target_x, target_y = self._get_agenda_label_pos(faction_id, img_w, row)
@@ -245,6 +242,7 @@ class AnimationOrchestrator:
                     target_x, target_y,
                     start_x, start_y,
                     delay=delay,
+                    auto_fadeout_after=0.0,
                     agenda_type=etype,
                 )
                 # Tag expand animations with hex reveal info
@@ -286,7 +284,8 @@ class AnimationOrchestrator:
             elif not faction_id:
                 print(f"[anim] No faction_id in {etype} event")
             else:
-                delay = spoils_anim_index * 1.0
+                # Continue the same timeline used by regular agenda events.
+                delay = base_delay + (agenda_anim_index + spoils_anim_index) * 1.0
                 row = _claim_row(faction_id, base_row=1)
                 img_w = img.get_width()
                 target_x, target_y = self._get_agenda_label_pos(faction_id, img_w, row)
@@ -296,6 +295,7 @@ class AnimationOrchestrator:
                     target_x, target_y,
                     start_x, start_y,
                     delay=delay,
+                    auto_fadeout_after=0.0,
                     is_spoils=True,
                     agenda_type=etype,
                 )
@@ -318,6 +318,10 @@ class AnimationOrchestrator:
         total_anims = agenda_anim_index + spoils_anim_index
         if total_anims > 0:
             print(f"[anim] Created {total_anims} agenda animations ({agenda_anim_index} regular, {spoils_anim_index} spoils)")
+        if total_anims <= 0:
+            return 0.0
+        # Duration consumed by this event set on the local timeline.
+        return (total_anims - 1) * 1.0 + AgendaSlideAnimation.SLIDE_DURATION
 
     # --- Rendering ---
 
@@ -406,8 +410,6 @@ class AnimationOrchestrator:
 
     def has_animations_playing(self) -> bool:
         """Check if any animations are active (queued, in motion, or visible)."""
-        if self.queue or self.fading:
-            return True
         if not self.animation.is_all_done():
             return True
         if self.animation.has_active_persistent_agenda_animations():
@@ -422,12 +424,7 @@ class AnimationOrchestrator:
         """
         if not self.deferred_phase_start:
             return
-        if self.queue or self.fading:
-            return
         if not self.animation.is_all_done():
-            return
-        if self.animation.has_active_persistent_agenda_animations():
-            self.animation.start_agenda_fadeout()
             return
         payload = self.deferred_phase_start
         self.deferred_phase_start = None
