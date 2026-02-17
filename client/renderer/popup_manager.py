@@ -1,5 +1,6 @@
 """Pinnable popup system with nested hover regions."""
 
+import dataclasses
 import pygame
 
 # --- Tooltip placement scoring ---
@@ -119,6 +120,54 @@ class HoverRegion:
         self.keyword = keyword
         self.tooltip_text = tooltip_text
         self.sub_regions = sub_regions or []
+
+
+@dataclasses.dataclass
+class TooltipDescriptor:
+    """Describes a single tooltip to be rendered or pinned."""
+    text: str
+    hover_regions: list[HoverRegion]
+    anchor_x: int
+    anchor_y: int
+    below: bool = False
+
+
+class TooltipRegistry:
+    """Collects active hover tooltips each frame, renders and pins them uniformly."""
+
+    def __init__(self):
+        self._active: TooltipDescriptor | None = None
+
+    def clear(self):
+        self._active = None
+
+    def offer(self, descriptor: TooltipDescriptor):
+        """Register a tooltip if none has been registered yet this frame (first wins)."""
+        if self._active is None:
+            self._active = descriptor
+
+    def render(self, surface, font, popup_manager):
+        """Draw the active transient tooltip (suppressed when popups are open)."""
+        if popup_manager.has_popups() or self._active is None:
+            return
+        d = self._active
+        draw_multiline_tooltip_with_regions(
+            surface, font, d.text, d.hover_regions,
+            anchor_x=d.anchor_x, anchor_y=d.anchor_y, below=d.below,
+        )
+
+    def try_pin(self, popup_manager, font, surface_w):
+        """Pin the active tooltip if one exists."""
+        if self._active is None:
+            return False
+        d = self._active
+        popup_manager.pin_tooltip(
+            d.text, d.hover_regions,
+            anchor_x=d.anchor_x, anchor_y=d.anchor_y,
+            font=font, max_width=350,
+            surface_w=surface_w, below=d.below,
+        )
+        return True
 
 
 class PinnedPopup:
