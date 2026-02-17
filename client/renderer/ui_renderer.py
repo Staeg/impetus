@@ -232,16 +232,19 @@ class UIRenderer:
 
     def draw_faction_overview(self, surface: pygame.Surface, factions: dict,
                               faction_agendas: dict[str, str], wars=None,
+                              faction_spoils_agendas: dict[str, list[str]] = None,
                               spirits: dict = None,
                               preview_guidance: dict = None,
                               animated_agenda_factions: set = None):
         """Draw a compact overview strip showing all factions' gold, agenda, wars, and worship.
 
-        Returns dict mapping faction_id -> pygame.Rect for agenda label rects (for hover tooltips).
+        Returns list of agenda label hover entries:
+        (faction_id, agenda_type, is_spoils, rect).
         """
         spirits = spirits or {}
+        faction_spoils_agendas = faction_spoils_agendas or {}
         animated_agenda_factions = animated_agenda_factions or set()
-        agenda_label_rects: dict[str, pygame.Rect] = {}
+        agenda_label_entries: list[tuple[str, str, bool, pygame.Rect]] = []
         strip_y = 42
         strip_h = 55
         sw = surface.get_width()
@@ -319,15 +322,22 @@ class UIRenderer:
 
             # Agenda name (right-aligned) - skip if animated
             if fid not in animated_agenda_factions:
+                agenda_entries: list[tuple[str, bool]] = []
                 agenda_str = faction_agendas.get(fid, "")
                 if agenda_str:
-                    a_label = agenda_str.title()
-                    a_color = agenda_colors.get(agenda_str, (160, 160, 180))
+                    agenda_entries.append((agenda_str, False))
+                for spoils_agenda in faction_spoils_agendas.get(fid, []):
+                    if spoils_agenda:
+                        agenda_entries.append((spoils_agenda, True))
+
+                for row_idx, (agenda_type, is_spoils) in enumerate(agenda_entries):
+                    a_label = agenda_type.title()
+                    a_color = agenda_colors.get(agenda_type, (160, 160, 180))
                     a_surf = self.small_font.render(a_label, True, a_color)
-                    a_pos = (cx + cell_w - a_surf.get_width() - 6, strip_y + 4)
+                    a_pos = (cx + cell_w - a_surf.get_width() - 6, strip_y + 4 + row_idx * 16)
                     surface.blit(a_surf, a_pos)
-                    agenda_label_rects[fid] = pygame.Rect(
-                        a_pos[0], a_pos[1], a_surf.get_width(), a_surf.get_height())
+                    rect = pygame.Rect(a_pos[0], a_pos[1], a_surf.get_width(), a_surf.get_height())
+                    agenda_label_entries.append((fid, agenda_type, is_spoils, rect))
                     draw_dotted_underline(surface, a_pos[0], a_pos[1] + a_surf.get_height(),
                                           a_surf.get_width())
 
@@ -356,7 +366,7 @@ class UIRenderer:
                         pygame.draw.polygon(surface, (255, 255, 255), points, 1)
                     wx += 14
 
-        return agenda_label_rects
+        return agenda_label_entries
 
     def _render_strikethrough(self, surface, font, text_str, color, pos):
         """Render text with a strikethrough line."""

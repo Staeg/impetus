@@ -150,23 +150,6 @@ class AnimationManager:
                 result.add(a.faction_id)
         return result
 
-    def start_agenda_fadeout(self, spoils_only=False):
-        """Trigger fade-out on active persistent agenda animations.
-
-        Animations that haven't become active yet (still in delay) are
-        cancelled immediately since they were never visible.
-
-        If spoils_only is True, only fade spoils animations.
-        """
-        for anim in self.persistent_agenda_animations:
-            if not anim.done:
-                if spoils_only and not anim.is_spoils:
-                    continue
-                if anim.active:
-                    anim.start_fadeout()
-                else:
-                    anim.done = True
-
     def has_active_persistent_agenda_animations(self) -> bool:
         """Return True if any persistent agenda animations are currently visible."""
         return any(a.active and not a.done for a in self.persistent_agenda_animations)
@@ -180,8 +163,7 @@ class AnimationManager:
         """Return True when no animations are actively in motion.
 
         Settled persistent animations (slide complete, not fading) are
-        NOT considered blocking -- the queue system fades them when the
-        next batch needs to play.
+        not considered blocking.
         """
         if any(not a.done and not a.is_settled
                for a in self.persistent_agenda_animations):
