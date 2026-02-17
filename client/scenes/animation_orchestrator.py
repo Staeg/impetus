@@ -256,6 +256,20 @@ class AnimationOrchestrator:
                 if gold_gained:
                     anim.gold_delta = gold_gained
                     anim.gold_delta_faction = faction_id
+                gold_deltas: list[tuple[str, int]] = []
+                if gold_gained:
+                    gold_deltas.append((faction_id, gold_gained))
+                if etype == "steal":
+                    steal_amount = event.get("regard_penalty", 1)
+                    for nfid in event.get("neighbors", []):
+                        if steal_amount:
+                            gold_deltas.append((nfid, -steal_amount))
+                elif etype == "expand":
+                    cost = event.get("cost", 0)
+                    if cost:
+                        gold_deltas.append((faction_id, -cost))
+                if gold_deltas:
+                    anim.gold_deltas = gold_deltas
                 # Tag war reveals onto steal animations
                 if etype == "steal" and faction_id in war_by_faction:
                     anim.war_reveals = war_by_faction[faction_id]
@@ -310,6 +324,20 @@ class AnimationOrchestrator:
                 if gold_gained:
                     anim.gold_delta = gold_gained
                     anim.gold_delta_faction = faction_id
+                gold_deltas: list[tuple[str, int]] = []
+                if gold_gained:
+                    gold_deltas.append((faction_id, gold_gained))
+                if etype == "steal":
+                    steal_amount = event.get("regard_penalty", 1)
+                    for nfid in event.get("neighbors", []):
+                        if steal_amount:
+                            gold_deltas.append((nfid, -steal_amount))
+                elif etype == "expand":
+                    cost = event.get("cost", 0)
+                    if cost:
+                        gold_deltas.append((faction_id, -cost))
+                if gold_deltas:
+                    anim.gold_deltas = gold_deltas
                 self.animation.add_persistent_agenda_animation(anim)
                 self.create_effect_animations(event, faction_id, delay,
                                               hex_ownership, small_font)
@@ -384,12 +412,22 @@ class AnimationOrchestrator:
     def apply_gold_deltas(self, display_factions: dict):
         """Incrementally update gold display as agenda animations become active."""
         for anim in self.animation.get_persistent_agenda_animations():
-            if anim.active and anim.gold_delta and not anim._gold_applied:
-                fid = anim.gold_delta_faction
-                if fid and fid in display_factions:
-                    fd = display_factions[fid]
-                    fd["gold"] = fd.get("gold", 0) + anim.gold_delta
-                anim._gold_applied = True
+            if anim.active and not anim._gold_applied:
+                applied = False
+                if getattr(anim, "gold_deltas", None):
+                    for fid, delta in anim.gold_deltas:
+                        if fid and fid in display_factions and delta:
+                            fd = display_factions[fid]
+                            fd["gold"] = max(0, fd.get("gold", 0) + delta)
+                            applied = True
+                elif anim.gold_delta:
+                    fid = anim.gold_delta_faction
+                    if fid and fid in display_factions:
+                        fd = display_factions[fid]
+                        fd["gold"] = max(0, fd.get("gold", 0) + anim.gold_delta)
+                        applied = True
+                if applied:
+                    anim._gold_applied = True
 
     def apply_war_reveals(self, display_wars: list):
         """Incrementally reveal wars as steal animations become active."""

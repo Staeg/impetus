@@ -238,6 +238,7 @@ class AgendaSlideAnimation:
         # Gold reveal: display gold updates when this anim becomes active
         self.gold_delta: int = 0
         self.gold_delta_faction: str | None = None
+        self.gold_deltas: list[tuple[str, int]] = []
         self._gold_applied: bool = False
         # War reveal: display war updates when this anim becomes active
         self.war_reveals: list[dict] | None = None
