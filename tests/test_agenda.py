@@ -9,7 +9,7 @@ from shared.models import AgendaCard
 from server.faction import Faction
 from server.hex_map import HexMap
 from server.spirit import Spirit
-from server.agenda import resolve_agendas, resolve_spoils
+from server.agenda import resolve_agendas, resolve_spoils, finalize_all_spoils
 
 
 def make_factions():
@@ -321,7 +321,6 @@ class TestDeckPool:
 class TestContestedSpoilsExpand:
     def test_contested_spoils_expand_neither_gets_hex(self):
         """If two factions target the same hex via spoils expand, neither gets it."""
-        from server.agenda import finalize_all_spoils
         factions = make_factions()
         hm = HexMap()
         wars = []
@@ -356,3 +355,90 @@ class TestContestedSpoilsExpand:
         failed = [e for e in events if e["type"] == "expand_failed"]
         assert len(failed) == 2
         assert all(e.get("contested") for e in failed)
+
+
+class TestMultipleSpoilsPerFaction:
+    def test_double_trade_spoils(self):
+        """Faction wins 2 wars, both spoils are Trade — gold doubles."""
+        factions = make_factions()
+        hm = HexMap()
+        wars = []
+        events = []
+
+        factions["mountain"].gold = 0
+
+        all_spoils = [
+            {"winner": "mountain", "loser": "mesa",
+             "agenda_type": AgendaType.TRADE, "battleground": None},
+            {"winner": "mountain", "loser": "sand",
+             "agenda_type": AgendaType.TRADE, "battleground": None},
+        ]
+
+        finalize_all_spoils(factions, hm, wars, events, all_spoils,
+                           normal_trade_factions=[])
+
+        # Single trade with no co-traders = base 1 gold. Two instances = 2 gold.
+        assert factions["mountain"].gold == 2
+        trade_events = [e for e in events if e["type"] == "trade"]
+        assert len(trade_events) == 1
+        assert trade_events[0]["gold_gained"] == 2
+
+    def test_double_expand_spoils_different_hexes(self):
+        """Faction wins 2 wars, both spoils Expand to different hexes — both claimed."""
+        factions = make_factions()
+        hm = HexMap()
+        wars = []
+        events = []
+
+        # Find two different hexes owned by different losers
+        mesa_hexes = list(hm.get_faction_territories("mesa"))
+        sand_hexes = list(hm.get_faction_territories("sand"))
+        target1 = mesa_hexes[0]
+        target2 = sand_hexes[0]
+
+        bg1 = [{"q": target1[0], "r": target1[1]}]
+        bg2 = [{"q": target2[0], "r": target2[1]}]
+
+        all_spoils = [
+            {"winner": "mountain", "loser": "mesa",
+             "agenda_type": AgendaType.EXPAND, "battleground": bg1},
+            {"winner": "mountain", "loser": "sand",
+             "agenda_type": AgendaType.EXPAND, "battleground": bg2},
+        ]
+
+        finalize_all_spoils(factions, hm, wars, events, all_spoils,
+                           normal_trade_factions=[])
+
+        # Both hexes should now be owned by mountain
+        assert hm.ownership.get(target1) == "mountain"
+        assert hm.ownership.get(target2) == "mountain"
+        expand_events = [e for e in events if e["type"] == "expand_spoils"]
+        assert len(expand_events) == 2
+
+    def test_mixed_agenda_types_both_resolve(self):
+        """Faction wins 2 wars with different spoils types — both resolve (regression: dict overwrite)."""
+        factions = make_factions()
+        hm = HexMap()
+        wars = []
+        events = []
+
+        factions["mountain"].gold = 0
+        factions["mesa"].gold = 5
+
+        all_spoils = [
+            {"winner": "mountain", "loser": "mesa",
+             "agenda_type": AgendaType.TRADE, "battleground": None},
+            {"winner": "mountain", "loser": "sand",
+             "agenda_type": AgendaType.STEAL, "battleground": None},
+        ]
+
+        finalize_all_spoils(factions, hm, wars, events, all_spoils,
+                           normal_trade_factions=[])
+
+        # Both types should have resolved
+        trade_events = [e for e in events if e["type"] == "trade"]
+        steal_events = [e for e in events if e["type"] == "steal"]
+        assert len(trade_events) == 1
+        assert len(steal_events) == 1
+        # Mountain should have gold from both trade and steal
+        assert factions["mountain"].gold > 0
