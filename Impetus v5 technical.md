@@ -25,8 +25,8 @@
     * Worship changes are checked
   * All Factions with \>1 Spirit trying to Guide them remain not Guided, and the Spirits remain Vagrant
 * Agenda Phase
-  * All Spirits currently Guiding a Faction draw 1 \+ \[their Influence\] Agenda cards and choose 1 of them
-  * All choices are revealed and all non-Guided Factions draw a random Agenda card
+  * All Spirits currently Guiding a Faction draw 1 \+ \[their Influence\] Agenda cards from their Faction's pool (sampled with replacement; duplicates possible) and choose 1 of them
+  * All choices are revealed and all non-Guided Factions draw a random Agenda card from their pool
   * All Spirits currently Guiding a Faction lose 1 Influence
   * Agendas are resolved in order (but each step is simultaneous):
     * Trade: \+1 gold, \+1 gold for every other Faction playing Trade this turn. \+1 Regard with each other Faction playing Trade this turn.
@@ -35,12 +35,15 @@
       * If there are any neutral Territories with Idols in them within reach: the Faction chooses at random between those territories.
     * Change: draw a card from the Change modifier deck, then shuffle it back in.  
       * If guided, the Spirit draws additional cards equal to their current Influence and chooses 1 among them.
-  * Any Spirits with 0 Influence currently Guiding a Faction are ejected; they may add a copy of an Agenda card to that Faction's Agenda deck
+  * Any Spirits with 0 Influence currently Guiding a Faction are ejected; they may add a copy of an Agenda card to that Faction's Agenda pool
     * Worship changes are checked
-* War phase  
-  * Any Ripe wars are resolved \- each combatant rolls a 6-sided die and adds their Power  
-  * All losers and participants in a tied War lose 1 gold  
-  * Whoever is victorious gains 1 gold and draws a Spoils of War Agenda card from their Faction's deck. If the winning Faction is guided by a Spirit, the Spirit draws 1 \+ their Influence Spoils cards and chooses 1 among them.
+* War phase
+  * Each Faction's Power is snapshotted from its territory count at the start of the War Phase; all wars use this snapshot
+  * Any Ripe wars are resolved simultaneously \- each combatant rolls a 6-sided die and adds their snapshotted Power
+  * Gold changes from all wars (winner gains, loser/tie losses) are applied simultaneously after all wars are resolved
+  * Whoever is victorious draws a Spoils of War Agenda card from their Faction's pool. If the winning Faction is guided by a Spirit, the Spirit draws 1 \+ their Influence Spoils cards and chooses 1 among them.
+  * All Spoils of War are collected into a batch and resolved simultaneously in standard agenda order (Trade → Steal → Expand → Change)
+    * If two Spoils Expands target the same hex, the hex is contested and neither Faction gets it
   * Any non-Ripe Wars become Ripe and a random Battleground is selected  
 * Scoring
   * For each Faction that has any Spirit's Worship:
@@ -50,10 +53,10 @@
   * All Victory Point counts are then rounded down to the next integer.  
   * If any Spirit has 10 Victory Points, the game ends.  
     * If there is a tie for most Victory Points at this moment, the victory is shared.  
-* Cleanup  
-  * All Agenda cards, including Spoils of War, are shuffled back into their Faction’s Agenda decks.
+* Cleanup
+  * The Agenda pool is static \- cards are sampled with replacement and never consumed, so no reshuffling is needed.
 
 A Faction with 0 territories is eliminated. Its guiding Spirit is ejected, its Worship is cleared, and any active Wars involving it are cancelled. Eliminated Factions skip all phases.
 
 Each step is resolved simultaneously. For example, if two neighboring Factions play Steal, they do not take any gold from each other even if one Faction has 0 gold and the other has 1, but they get \-2 Regard with each other.
-Similarly, if two Wars are resolved at the same time, their Spoils of War follow the normal Agenda resolution order. In the unlikely event that two Factions both win a War against the same Faction and draw Expand to conquer the same hex, the Faction with greater Power succeeds. A further tie is resolved randomly.
+Similarly, if two Wars are resolved at the same time, their Spoils of War are batched and resolved simultaneously in the standard agenda order. If two Factions both win a War against the same Faction and draw Expand to conquer the same hex, the hex is contested and neither Faction gets it.

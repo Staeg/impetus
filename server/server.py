@@ -273,39 +273,30 @@ class GameServer:
 
         elif msg_type == MessageType.SUBMIT_SPOILS_CHOICE:
             if room.game_state:
+                card_indices = payload.get("card_indices", [])
+                # Backwards compat: single card_index → list
+                if not card_indices and "card_index" in payload:
+                    card_indices = [payload["card_index"]]
                 error, events = room.game_state.submit_spoils_choice(
-                    spirit_id, payload.get("card_index", 0))
+                    spirit_id, card_indices)
                 if error:
                     await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
                 else:
                     await self._broadcast_phase_result(room, events)
-                    # Check if this spirit now needs a change modifier choice
+                    # Check if this spirit now needs change modifier choices
                     pending_list = room.game_state.spoils_pending.get(spirit_id)
-                    if pending_list and pending_list[0].get("stage") == "change_choice":
-                        first = pending_list[0]
-                        change_cards = first.get("change_cards", [])
+                    if pending_list and any(p.get("stage") == "change_choice" for p in pending_list):
+                        change_pendings = [p for p in pending_list if p.get("stage") == "change_choice"]
+                        change_options = []
+                        for p in change_pendings:
+                            change_options.append({
+                                "cards": [c.value for c in p.get("change_cards", [])],
+                                "loser": p.get("loser", ""),
+                            })
                         await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
                             "phase": "spoils_change_choice",
                             "turn": room.game_state.turn,
-                            "options": {
-                                "cards": [c.value for c in change_cards],
-                                "loser": first.get("loser", ""),
-                            },
-                        }))
-                        waiting_for = list(room.game_state.spoils_pending.keys())
-                        await room.broadcast(create_message(MessageType.WAITING_FOR, {
-                            "players_remaining": waiting_for,
-                        }))
-                    elif pending_list:
-                        # Spirit has another queued spoils choice — send it
-                        first = pending_list[0]
-                        await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
-                            "phase": "spoils_choice",
-                            "turn": room.game_state.turn,
-                            "options": {
-                                "cards": [c.value for c in first["cards"]],
-                                "loser": first.get("loser", ""),
-                            },
+                            "options": {"choices": change_options},
                         }))
                         waiting_for = list(room.game_state.spoils_pending.keys())
                         await room.broadcast(create_message(MessageType.WAITING_FOR, {
@@ -314,7 +305,6 @@ class GameServer:
                     elif not room.game_state.spoils_pending:
                         await self._auto_resolve_phases(room)
                     else:
-                        # Still waiting for other spirits' spoils choices
                         waiting_for = list(room.game_state.spoils_pending.keys())
                         await room.broadcast(create_message(MessageType.WAITING_FOR, {
                             "players_remaining": waiting_for,
@@ -322,29 +312,16 @@ class GameServer:
 
         elif msg_type == MessageType.SUBMIT_SPOILS_CHANGE_CHOICE:
             if room.game_state:
+                card_indices = payload.get("card_indices", [])
+                if not card_indices and "card_index" in payload:
+                    card_indices = [payload["card_index"]]
                 error, events = room.game_state.submit_spoils_change_choice(
-                    spirit_id, payload.get("card_index", 0))
+                    spirit_id, card_indices)
                 if error:
                     await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
                 else:
                     await self._broadcast_phase_result(room, events)
-                    # After change choice resolved, check for queued spoils
-                    pending_list = room.game_state.spoils_pending.get(spirit_id)
-                    if pending_list:
-                        first = pending_list[0]
-                        await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
-                            "phase": "spoils_choice",
-                            "turn": room.game_state.turn,
-                            "options": {
-                                "cards": [c.value for c in first["cards"]],
-                                "loser": first.get("loser", ""),
-                            },
-                        }))
-                        waiting_for = list(room.game_state.spoils_pending.keys())
-                        await room.broadcast(create_message(MessageType.WAITING_FOR, {
-                            "players_remaining": waiting_for,
-                        }))
-                    elif not room.game_state.spoils_pending:
+                    if not room.game_state.spoils_pending:
                         await self._auto_resolve_phases(room)
                     else:
                         waiting_for = list(room.game_state.spoils_pending.keys())
@@ -451,17 +428,19 @@ class GameServer:
             await self._broadcast_phase_result(room, events)
             if gs.phase == Phase.GAME_OVER:
                 return
-            # If spoils choices are pending, send options and stop
+            # If spoils choices are pending, send ALL options to each spirit
             if gs.spoils_pending:
                 for sid, pending_list in gs.spoils_pending.items():
-                    first = pending_list[0]
+                    choices = []
+                    for p in pending_list:
+                        choices.append({
+                            "cards": [c.value for c in p["cards"]],
+                            "loser": p.get("loser", ""),
+                        })
                     await room.send_to(sid, create_message(MessageType.PHASE_START, {
                         "phase": "spoils_choice",
                         "turn": gs.turn,
-                        "options": {
-                            "cards": [c.value for c in first["cards"]],
-                            "loser": first.get("loser", ""),
-                        },
+                        "options": {"choices": choices},
                     }))
                 waiting_for = list(gs.spoils_pending.keys())
                 await room.broadcast(create_message(MessageType.WAITING_FOR, {

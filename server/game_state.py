@@ -11,7 +11,7 @@ from server.hex_map import HexMap
 from server.faction import Faction
 from server.spirit import Spirit
 from server.war import War
-from server.agenda import resolve_agendas, draw_spoils_agenda, resolve_spoils, resolve_spoils_choice
+from server.agenda import resolve_agendas, resolve_spoils, resolve_spoils_choice, finalize_all_spoils
 from server.scoring import calculate_scoring
 
 
@@ -36,6 +36,8 @@ class GameState:
         self.normal_trade_factions: list[str] = []
         # Spoils of war choice pending (spirit_id -> pending data)
         self.spoils_pending: dict[str, list[dict]] = {}
+        # Auto-resolved spoils waiting for batch finalization
+        self.auto_spoils_choices: list[dict] = []
 
     def setup_game(self, player_info: list[dict]) -> tuple[GameStateSnapshot, list[tuple[list[dict], GameStateSnapshot]]]:
         """Initialize the game with the given players.
@@ -93,6 +95,7 @@ class GameState:
             self.change_pending.clear()
             self.ejection_pending.clear()
             self.spoils_pending.clear()
+            self.auto_spoils_choices.clear()
 
             turn_results.append((events, self.get_snapshot()))
 
@@ -442,11 +445,9 @@ class GameState:
             idx = action["agenda_index"]
             chosen = hand[idx]
             agenda_choices[spirit.guided_faction] = chosen.agenda_type
-            # Only the chosen card stays out until cleanup; return unchosen cards
+            # Track chosen card for scoring/cleanup (pool is static, no return needed)
             faction = self.factions[spirit.guided_faction]
             faction.played_agenda_this_turn.append(chosen)
-            unchosen = [c for c in hand if c is not chosen]
-            faction.agenda_deck.extend(unchosen)
             events.append({
                 "type": "agenda_chosen",
                 "spirit": spirit_id,
@@ -633,16 +634,45 @@ class GameState:
         events = []
         war_results = []
 
-        # Resolve ripe wars
+        # Snapshot territory counts for simultaneous power calculation
+        power_snapshot = {
+            fid: len(self.hex_map.get_faction_territories(fid))
+            for fid in self.factions
+        }
+
+        # Resolve all ripe wars using snapshotted power values
         ripe_wars = [w for w in self.wars if w.is_ripe]
         for war in ripe_wars:
-            result = war.resolve(self.factions, self.hex_map)
+            result = war.resolve(power_snapshot[war.faction_a],
+                                 power_snapshot[war.faction_b])
             war_results.append(result)
             events.append({
                 "type": "war_resolved",
                 **result,
             })
             self.wars.remove(war)
+
+        # Apply gold changes simultaneously
+        gold_deltas: dict[str, int] = {}  # faction_id -> net gold change
+        for result in war_results:
+            winner = result.get("winner")
+            loser = result.get("loser")
+            if winner:
+                gold_deltas[winner] = gold_deltas.get(winner, 0) + 1
+                gold_deltas[loser] = gold_deltas.get(loser, 0) - 1
+                self.factions[winner].wars_won_this_turn += 1
+            else:
+                # Tie: both lose 1
+                fa, fb = result["faction_a"], result["faction_b"]
+                gold_deltas[fa] = gold_deltas.get(fa, 0) - 1
+                gold_deltas[fb] = gold_deltas.get(fb, 0) - 1
+
+        for fid, delta in gold_deltas.items():
+            faction = self.factions[fid]
+            if delta > 0:
+                faction.add_gold(delta)
+            elif delta < 0:
+                faction.gold = max(0, faction.gold + delta)
 
         # Ripen pending wars
         pending_wars = [w for w in self.wars if not w.is_ripe]
@@ -659,19 +689,18 @@ class GameState:
                     ] if war.battleground else None,
                 })
 
-        # Resolve spoils of war
+        # Collect spoils draws (guided pending + non-guided auto)
         if war_results:
-            self.spoils_pending = resolve_spoils(
+            self.spoils_pending, self.auto_spoils_choices = resolve_spoils(
                 self.factions, self.hex_map, war_results, self.wars,
                 events, self.normal_trade_factions, spirits=self.spirits)
         else:
             self.spoils_pending = {}
-
-        # Check for faction eliminations after territory changes
-        self._check_eliminations(events)
+            self.auto_spoils_choices = []
 
         if not self.spoils_pending:
-            self.phase = Phase.SCORING
+            # No guided choices needed — finalize all spoils now
+            self._finalize_spoils(events)
         # Otherwise stay in WAR_PHASE until spoils choices are submitted
         return events
 
@@ -730,59 +759,138 @@ class GameState:
         self.change_pending.clear()
         self.ejection_pending.clear()
         self.spoils_pending.clear()
+        self.auto_spoils_choices.clear()
 
         self.turn += 1
         self.phase = Phase.VAGRANT_PHASE
         events.append({"type": "turn_start", "turn": self.turn})
         return events
 
-    def submit_spoils_choice(self, spirit_id: str, card_index: int) -> tuple[Optional[str], list[dict]]:
-        """Submit a spoils of war card choice. Returns (error, events)."""
+    def submit_spoils_choice(self, spirit_id: str, card_indices: list[int]) -> tuple[Optional[str], list[dict]]:
+        """Submit spoils card choices for all pending wars. Returns (error, events).
+
+        card_indices: list of chosen card index per pending war.
+        """
         if spirit_id not in self.spoils_pending:
             return "No spoils pending", []
-        cards = self.spoils_pending[spirit_id][0]["cards"]
-        if card_index < 0 or card_index >= len(cards):
-            return f"Invalid card index: {card_index}", []
-        events = []
-        resolve_spoils_choice(self.factions, self.hex_map, self.wars, events,
-                              spirit_id, card_index, self.spoils_pending,
-                              self.spirits,
-                              normal_trade_factions=self.normal_trade_factions)
-        # Check for faction eliminations after spoils territory changes
-        self._check_eliminations(events)
-        # If all spoils resolved, advance to scoring
-        if not self.spoils_pending:
-            self.phase = Phase.SCORING
-        return None, events
-
-    def submit_spoils_change_choice(self, spirit_id: str, card_index: int) -> tuple[Optional[str], list[dict]]:
-        """Submit a spoils change modifier choice (second stage of spoils Change)."""
-        if spirit_id not in self.spoils_pending:
-            return "No spoils pending", []
-        pending = self.spoils_pending[spirit_id][0]
-        if pending.get("stage") != "change_choice":
-            return "Not in change choice stage", []
-        change_cards = pending.get("change_cards", [])
-        if card_index < 0 or card_index >= len(change_cards):
-            return f"Invalid card index: {card_index}", []
+        pending_list = self.spoils_pending[spirit_id]
+        if len(card_indices) != len(pending_list):
+            return f"Expected {len(pending_list)} choices, got {len(card_indices)}", []
+        for i, idx in enumerate(card_indices):
+            cards = pending_list[i]["cards"]
+            if idx < 0 or idx >= len(cards):
+                return f"Invalid card index {idx} for war {i}", []
 
         events = []
-        chosen = change_cards[card_index]
-        winner = pending["winner"]
-        faction = self.factions[winner]
-        faction.add_change_modifier(chosen.value)
-        events.append({
-            "type": "change",
-            "faction": winner,
-            "modifier": chosen.value,
-        })
+        change_needed = False
+        # Process all choices, recording them on the pending entries
+        for i in range(len(pending_list) - 1, -1, -1):
+            pending = pending_list[i]
+            chosen = pending["cards"][card_indices[i]]
+            pending["chosen"] = chosen
 
-        self.spoils_pending[spirit_id].pop(0)
-        if not self.spoils_pending[spirit_id]:
+            faction = self.factions[pending["winner"]]
+            from shared.models import AgendaCard
+            faction.played_agenda_this_turn.append(AgendaCard(chosen))
+
+            events.append({
+                "type": "spoils_drawn",
+                "faction": pending["winner"],
+                "agenda": chosen.value,
+            })
+
+            if chosen == AgendaType.CHANGE:
+                spirit = self.spirits[spirit_id]
+                draw_count = 1 + spirit.influence
+                from shared.constants import CHANGE_DECK
+                change_cards = random.sample(CHANGE_DECK, min(draw_count, len(CHANGE_DECK)))
+                pending["stage"] = "change_choice"
+                pending["change_cards"] = change_cards
+                change_needed = True
+
+        if change_needed:
+            # Keep in spoils_pending — still need change choices
+            pass
+        else:
+            # All choices made, collect for batch finalization
+            for pending in pending_list:
+                self.auto_spoils_choices.append({
+                    "winner": pending["winner"],
+                    "loser": pending["loser"],
+                    "agenda_type": pending["chosen"],
+                    "battleground": pending.get("battleground"),
+                })
             del self.spoils_pending[spirit_id]
+
+        # If all guided spirits have submitted, finalize
         if not self.spoils_pending:
-            self.phase = Phase.SCORING
+            self._finalize_spoils(events)
         return None, events
+
+    def submit_spoils_change_choice(self, spirit_id: str, card_indices: list[int]) -> tuple[Optional[str], list[dict]]:
+        """Submit spoils change modifier choices. Returns (error, events).
+
+        card_indices: list of chosen modifier index per pending change choice.
+        """
+        if spirit_id not in self.spoils_pending:
+            return "No spoils pending", []
+        pending_list = self.spoils_pending[spirit_id]
+        change_pendings = [p for p in pending_list if p.get("stage") == "change_choice"]
+        if len(card_indices) != len(change_pendings):
+            return f"Expected {len(change_pendings)} change choices, got {len(card_indices)}", []
+        for i, idx in enumerate(card_indices):
+            change_cards = change_pendings[i].get("change_cards", [])
+            if idx < 0 or idx >= len(change_cards):
+                return f"Invalid change card index {idx} for choice {i}", []
+
+        events = []
+        for i, pending in enumerate(change_pendings):
+            chosen = pending["change_cards"][card_indices[i]]
+            winner = pending["winner"]
+            faction = self.factions[winner]
+            faction.add_change_modifier(chosen.value)
+            pending["chosen"] = AgendaType.CHANGE
+            events.append({
+                "type": "change",
+                "faction": winner,
+                "modifier": chosen.value,
+            })
+
+        # All changes resolved — collect for batch finalization
+        for pending in pending_list:
+            self.auto_spoils_choices.append({
+                "winner": pending["winner"],
+                "loser": pending["loser"],
+                "agenda_type": pending.get("chosen", AgendaType.CHANGE),
+                "battleground": pending.get("battleground"),
+            })
+        del self.spoils_pending[spirit_id]
+
+        if not self.spoils_pending:
+            self._finalize_spoils(events)
+        return None, events
+
+    def _finalize_spoils(self, events: list):
+        """Finalize all spoils simultaneously and advance to scoring.
+
+        Guided Change spoils are excluded (modifier already applied via
+        submit_spoils_change_choice). All other spoils resolve in batch.
+        """
+        if self.auto_spoils_choices:
+            # Filter out guided Change entries (already applied)
+            batch = []
+            for entry in self.auto_spoils_choices:
+                if entry["agenda_type"] == AgendaType.CHANGE:
+                    winner = entry["winner"]
+                    faction = self.factions[winner]
+                    if faction.guiding_spirit and faction.guiding_spirit in self.spirits:
+                        continue  # Already resolved via submit_spoils_change_choice
+                batch.append(entry)
+            finalize_all_spoils(self.factions, self.hex_map, self.wars, events,
+                               batch, self.normal_trade_factions)
+        self.auto_spoils_choices = []
+        self._check_eliminations(events)
+        self.phase = Phase.SCORING
 
     def has_pending_sub_choices(self) -> bool:
         """Check if ejection choices are still pending (change is handled earlier)."""
