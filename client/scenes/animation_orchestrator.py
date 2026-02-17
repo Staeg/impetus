@@ -188,7 +188,15 @@ class AnimationOrchestrator:
             "expand": 2, "expand_failed": 2, "expand_spoils": 2,
             "change": 3,
         }
-        regular_events = [e for e in agenda_events if not e.get("is_spoils")]
+        # Extract war events for tagging onto steal animations
+        war_events = [e for e in agenda_events if e.get("type") == "war_erupted"]
+        war_by_faction: dict[str, list[dict]] = {}
+        for we in war_events:
+            war_by_faction.setdefault(we["faction_a"], []).append(we)
+            war_by_faction.setdefault(we["faction_b"], []).append(we)
+
+        regular_events = [e for e in agenda_events
+                          if not e.get("is_spoils") and e.get("type") != "war_erupted"]
         spoils_events = [e for e in agenda_events if e.get("is_spoils")]
 
         # Allocate per-faction rows deterministically across the full batch
@@ -245,6 +253,14 @@ class AnimationOrchestrator:
                     if target_hex:
                         anim.hex_reveal = (target_hex["q"], target_hex["r"])
                         anim.hex_reveal_faction = faction_id
+                # Tag gold delta for incremental ribbon updates
+                gold_gained = event.get("gold_gained", 0)
+                if gold_gained:
+                    anim.gold_delta = gold_gained
+                    anim.gold_delta_faction = faction_id
+                # Tag war reveals onto steal animations
+                if etype == "steal" and faction_id in war_by_faction:
+                    anim.war_reveals = war_by_faction[faction_id]
                 self.animation.add_persistent_agenda_animation(anim)
                 self.create_effect_animations(event, faction_id, delay,
                                               hex_ownership, small_font)
@@ -289,6 +305,11 @@ class AnimationOrchestrator:
                     if target_hex:
                         anim.hex_reveal = (target_hex["q"], target_hex["r"])
                         anim.hex_reveal_faction = faction_id
+                # Tag gold delta for incremental ribbon updates
+                gold_gained = event.get("gold_gained", 0)
+                if gold_gained:
+                    anim.gold_delta = gold_gained
+                    anim.gold_delta_faction = faction_id
                 self.animation.add_persistent_agenda_animation(anim)
                 self.create_effect_animations(event, faction_id, delay,
                                               hex_ownership, small_font)
@@ -355,6 +376,31 @@ class AnimationOrchestrator:
                     and not anim._hex_revealed):
                 display_hex_ownership[anim.hex_reveal] = anim.hex_reveal_faction
                 anim._hex_revealed = True
+
+    def apply_gold_deltas(self, display_factions: dict):
+        """Incrementally update gold display as agenda animations become active."""
+        for anim in self.animation.get_persistent_agenda_animations():
+            if anim.active and anim.gold_delta and not anim._gold_applied:
+                fid = anim.gold_delta_faction
+                if fid and fid in display_factions:
+                    fd = display_factions[fid]
+                    fd["gold"] = fd.get("gold", 0) + anim.gold_delta
+                anim._gold_applied = True
+
+    def apply_war_reveals(self, display_wars: list):
+        """Incrementally reveal wars as steal animations become active."""
+        for anim in self.animation.get_persistent_agenda_animations():
+            if anim.active and anim.war_reveals and not anim._wars_revealed:
+                for wd in anim.war_reveals:
+                    fa, fb = wd["faction_a"], wd["faction_b"]
+                    already = any(
+                        (w.get("faction_a") == fa and w.get("faction_b") == fb)
+                        or (w.get("faction_a") == fb and w.get("faction_b") == fa)
+                        for w in display_wars
+                    )
+                    if not already:
+                        display_wars.append(wd)
+                anim._wars_revealed = True
 
     # --- State queries ---
 
