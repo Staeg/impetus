@@ -732,12 +732,16 @@ class GameScene:
                         count += 1
         return count
 
-    def _build_guidance_tooltip(self, faction_id: str, is_blocked: bool) -> str:
+    def _build_guidance_tooltip(self, faction_id: str, is_blocked: bool,
+                                is_contested_blocked: bool = False) -> str:
         """Build tooltip for a Guidance faction button."""
         fdata = self.factions.get(faction_id, {})
         worship_id = fdata.get("worship_spirit") if isinstance(fdata, dict) else None
         lines = []
-        if is_blocked:
+        if is_contested_blocked:
+            lines.append("Contested last turn;")
+            lines.append("cannot target this turn.")
+        elif is_blocked:
             lines.append("This Faction Worships you;")
             lines.append("you cannot Guide them.")
         elif worship_id:
@@ -762,12 +766,14 @@ class GameScene:
             if not self.factions.get(fid, {}).get("eliminated", False)
         ]
         blocked = self.phase_options.get("worship_blocked", [])
+        contested_blocked = self.phase_options.get("contested_blocked", [])
         self.faction_buttons = []
-        all_factions = available + blocked
+        all_factions = available + blocked + contested_blocked
         for i, fid in enumerate(all_factions):
             color = FACTION_COLORS.get(fid, (100, 100, 100))
             is_blocked = fid in blocked
-            tooltip = self._build_guidance_tooltip(fid, is_blocked)
+            is_contested_blocked = fid in contested_blocked
+            tooltip = self._build_guidance_tooltip(fid, is_blocked, is_contested_blocked)
             btn = Button(
                 pygame.Rect(_GUIDANCE_BTN_X, _BTN_START_Y + i * 40, _BTN_W, 34),
                 FACTION_DISPLAY_NAMES.get(fid, fid),
@@ -776,7 +782,7 @@ class GameScene:
                 tooltip=tooltip,
                 tooltip_always=True,
             )
-            if is_blocked:
+            if is_blocked or is_contested_blocked:
                 btn.enabled = False
             self.faction_buttons.append(btn)
         # Set up guidance title rect

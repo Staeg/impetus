@@ -38,6 +38,8 @@ class GameState:
         self.spoils_pending: dict[str, list[dict]] = {}
         # Auto-resolved spoils waiting for batch finalization
         self.auto_spoils_choices: list[dict] = []
+        # Contested guidance cooldowns: spirit_id -> set of faction_ids blocked for 1 turn
+        self.guidance_cooldowns: dict[str, set[str]] = {}
 
     def setup_game(self, player_info: list[dict]) -> tuple[GameStateSnapshot, list[tuple[list[dict], GameStateSnapshot]]]:
         """Initialize the game with the given players.
@@ -147,11 +149,14 @@ class GameState:
             if not spirit.is_vagrant:
                 return {"action": "none", "reason": "not_vagrant"}
             # Can guide any unoccupied, non-eliminated faction or place an idol
-            available_factions = [
+            cooldown_set = self.guidance_cooldowns.get(spirit_id, set())
+            guidable = [
                 fid for fid, f in self.factions.items()
                 if f.guiding_spirit is None and not f.eliminated
                 and f.worship_spirit != spirit_id
             ]
+            available_factions = [fid for fid in guidable if fid not in cooldown_set]
+            contested_blocked = [fid for fid in guidable if fid in cooldown_set]
             worship_blocked = [
                 fid for fid, f in self.factions.items()
                 if f.guiding_spirit is None and not f.eliminated
@@ -165,6 +170,7 @@ class GameState:
                 "action": "choose",
                 "available_factions": available_factions,
                 "worship_blocked": worship_blocked,
+                "contested_blocked": contested_blocked,
                 "neutral_hexes": neutral_hexes,
                 "idol_types": [t.value for t in IdolType],
                 "can_place_idol": not spirit.has_placed_idol_as_vagrant,
@@ -234,10 +240,12 @@ class GameState:
             return "Must choose at least one action"
 
         # If both guidance and idol placement are available, require both
+        cooldown_set = self.guidance_cooldowns.get(spirit.spirit_id, set())
         can_guide = any(
             f.guiding_spirit is None and not f.eliminated
             and f.worship_spirit != spirit.spirit_id
-            for f in self.factions.values()
+            and fid not in cooldown_set
+            for fid, f in self.factions.items()
         )
         can_place_idol = (
             not spirit.has_placed_idol_as_vagrant
@@ -252,6 +260,8 @@ class GameState:
         if guide_target:
             if guide_target not in self.factions:
                 return f"Unknown faction: {guide_target}"
+            if guide_target in cooldown_set:
+                return "Contested guidance cooldown: cannot target this faction this turn"
 
         if idol_type:
             if spirit.has_placed_idol_as_vagrant:
@@ -311,6 +321,9 @@ class GameState:
     def _resolve_vagrant_phase(self) -> list[dict]:
         events = []
 
+        # Clear previous turn's contested guidance cooldowns before resolving new ones
+        self.guidance_cooldowns.clear()
+
         # Group guide attempts by target faction, and collect idol placements
         guide_attempts: dict[str, list[str]] = {}
         idol_placements = []
@@ -361,6 +374,9 @@ class GameState:
                     "spirits": spirit_ids,
                     "faction": target_faction,
                 })
+                # Apply 1-turn cooldown: none of these spirits can target this faction next turn
+                for sid in spirit_ids:
+                    self.guidance_cooldowns.setdefault(sid, set()).add(target_faction)
 
         self.pending_actions.clear()
         self.phase = Phase.AGENDA_PHASE

@@ -202,6 +202,45 @@ class TestVagrantPhase:
         assert set(contested[0]["spirits"]) == {"spirit_0", "spirit_1"}
         assert contested[0]["faction"] == "mountain"
 
+    def test_contested_guidance_cooldown(self):
+        """Contested guidance blocks the faction for 1 turn, then expires."""
+        gs = make_game(2)
+        h = neutral_hexes(gs)
+        gs.submit_action("spirit_0", {
+            "guide_target": "mountain",
+            "idol_type": "battle", "idol_q": h[0][0], "idol_r": h[0][1],
+        })
+        gs.submit_action("spirit_1", {
+            "guide_target": "mountain",
+            "idol_type": "affluence", "idol_q": h[1][0], "idol_r": h[1][1],
+        })
+        for _ in range(5):  # vagrant through cleanup
+            gs.resolve_current_phase()
+
+        # Next turn: mountain blocked for both spirits
+        opts0 = gs.get_phase_options("spirit_0")
+        assert "mountain" not in opts0["available_factions"]
+        assert "mountain" in opts0["contested_blocked"]
+        err = gs.submit_action("spirit_0", {"guide_target": "mountain"})
+        assert err is not None
+
+        # Guide different factions instead, advance a full turn
+        gs.pending_actions.clear()
+        gs.submit_action("spirit_0", {"guide_target": "mesa"})
+        gs.submit_action("spirit_1", {"guide_target": "plains"})
+        gs.resolve_current_phase()  # vagrant — clears cooldowns
+        assert gs.spirits["spirit_0"].guided_faction == "mesa"
+
+        # Eject to become vagrant again, advance to next vagrant phase
+        gs.spirits["spirit_0"].become_vagrant()
+        gs.factions["mesa"].guiding_spirit = None
+        for _ in range(4):  # agenda through cleanup
+            gs.resolve_current_phase()
+
+        # Cooldown expired: mountain available again
+        opts0 = gs.get_phase_options("spirit_0")
+        assert "mountain" in opts0["available_factions"]
+
     def test_submit_no_action_fails(self):
         gs = make_game(2)
         err = gs.submit_action("spirit_0", {})
@@ -236,8 +275,9 @@ class TestVagrantPhase:
         assert options["can_place_idol"] is False
 
         # With can_place_idol False, only guide_target is required
+        # (mountain is contested-blocked, so pick a different faction)
         err = gs.submit_action("spirit_0", {
-            "guide_target": "mountain",
+            "guide_target": "mesa",
         })
         assert err is None
 
