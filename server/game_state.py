@@ -37,13 +37,15 @@ class GameState:
         # Spoils of war choice pending (spirit_id -> pending data)
         self.spoils_pending: dict[str, list[dict]] = {}
 
-    def setup_game(self, player_info: list[dict]) -> list[dict]:
-        """Initialize the game with the given players. Returns bootstrap events.
+    def setup_game(self, player_info: list[dict]) -> tuple[GameStateSnapshot, list[tuple[list[dict], GameStateSnapshot]]]:
+        """Initialize the game with the given players.
+
+        Returns (initial_snapshot, turn_results) where:
+        - initial_snapshot: state before any automated turns (just starting hexes)
+        - turn_results: list of (events, post_turn_snapshot) per automated turn
 
         player_info: list of {spirit_id, name}
         """
-        events = []
-
         # Create factions
         for faction_id in FACTION_NAMES:
             faction = Faction(faction_id)
@@ -58,9 +60,12 @@ class GameState:
             spirit = Spirit(info["spirit_id"], info["name"])
             self.spirits[spirit.spirit_id] = spirit
 
+        turn_results: list[tuple[list[dict], GameStateSnapshot]] = []
+
         def _run_automated_turn(turn_number: int, agenda_choices: dict[str, AgendaType],
                                 agenda_event_type: str):
             """Resolve a full non-player turn (agenda, war, scoring) and cleanup state."""
+            events: list[dict] = []
             events.append({"type": "turn_start", "turn": turn_number})
 
             for fid, at in agenda_choices.items():
@@ -89,6 +94,11 @@ class GameState:
             self.ejection_pending.clear()
             self.spoils_pending.clear()
 
+            turn_results.append((events, self.get_snapshot()))
+
+        # Capture initial snapshot before any automated turns
+        initial_snapshot = self.get_snapshot()
+
         # Turn 1: all factions play Change.
         _run_automated_turn(
             turn_number=1,
@@ -113,7 +123,7 @@ class GameState:
         # Players begin taking actions on Turn 3.
         self.turn = 3
         self.phase = Phase.VAGRANT_PHASE
-        return events
+        return initial_snapshot, turn_results
 
     def get_snapshot(self) -> GameStateSnapshot:
         return GameStateSnapshot(

@@ -359,33 +359,19 @@ class GameServer:
             for s in room.players.values()
         ]
         room.game_state = GameState()
-        setup_events = room.game_state.setup_game(player_info)
+        initial_snapshot, turn_results = room.game_state.setup_game(player_info)
 
-        snapshot = room.game_state.get_snapshot()
-        await room.broadcast(create_message(MessageType.GAME_START, snapshot.to_dict()))
+        # Send initial state (pre-setup) so client starts with just starting hexes
+        await room.broadcast(create_message(MessageType.GAME_START, initial_snapshot.to_dict()))
 
-        # Broadcast setup events so players see what happened during setup
-        if setup_events:
-            # Keep opening turns isolated so client animation ordering cannot
-            # mix turn 1 and turn 2 agendas when rendering setup playback.
-            setup_batches: list[list[dict]] = []
-            current_batch: list[dict] = []
-            saw_turn_start = False
-            for event in setup_events:
-                if event.get("type") == "turn_start":
-                    saw_turn_start = True
-                    if current_batch:
-                        setup_batches.append(current_batch)
-                        current_batch = []
-                current_batch.append(event)
-            if current_batch:
-                setup_batches.append(current_batch)
-
-            if saw_turn_start and len(setup_batches) > 1:
-                for batch in setup_batches:
-                    await self._broadcast_phase_result(room, batch)
-            else:
-                await self._broadcast_phase_result(room, setup_events)
+        # Send each automated turn with its own post-turn snapshot so the
+        # client's animation system can diff hex ownership correctly.
+        for events, snapshot in turn_results:
+            await room.broadcast(create_message(MessageType.PHASE_RESULT, {
+                "phase": room.game_state.phase.value,
+                "events": events,
+                "state": snapshot.to_dict(),
+            }))
 
         # Send phase options to each player
         await self._send_phase_options(room)
