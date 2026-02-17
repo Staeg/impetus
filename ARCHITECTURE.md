@@ -123,7 +123,7 @@ Phase details:
 | AGENDA_PHASE | Guiding spirits choose 1 agenda from drawn hand | Simultaneous reveal. Non-guided factions draw randomly. Resolve in order: Trade → Steal → Expand → Change. Eject 0-influence spirits (they choose agenda to add). Worship checked. |
 | WAR_PHASE | None (dice rolls are server-side), unless guided spirits need to choose spoils cards | Resolve ripe wars first: roll + power. Losers lose gold, winners gain gold + spoils agenda (guided spirits draw 1+influence spoils cards and choose). Then ripen new wars (select battlegrounds). Spoils resolved in agenda order. Check for faction eliminations. |
 | SCORING | None | Calculate VP per spirit based on idols in factions where they have Worship. Round down. Check for 10 VP winner. |
-| CLEANUP | None | Shuffle agenda cards back into faction decks. Advance turn counter. |
+| CLEANUP | None | Clear `played_agenda_this_turn` on each faction (no cards to return since the deck is a pool sampled with replacement). Advance turn counter. |
 
 The `GameState` object holds all mutable game data: the hex map, all factions, all spirits, current phase, pending wars, and the turn counter. It exposes methods like `submit_action(spirit_id, action)` and `resolve_current_phase()`.
 
@@ -133,7 +133,7 @@ Each faction tracks:
 - `name` and `color` (Mountain/red, Mesa/orange, Sand/yellow, Plains/green, River/blue, Jungle/purple)
 - `gold: int` (starts at 0, minimum 0 - gold cannot go negative)
 - `territories: set[HexCoord]` (starts with 1 hex)
-- `agenda_deck: list[AgendaCard]` (starts with 1 of each: Steal, Trade, Expand, Change)
+- `agenda_deck: list[AgendaCard]` (a pool of card types, starts with 1 of each: Steal, Trade, Expand, Change; cards are sampled with replacement via `random.choices`, never removed, so drawn hands can contain duplicates)
 - `change_modifiers: dict[AgendaType, int]` (accumulated Change upgrades per agenda type)
 - `regard: dict[FactionId, int]` (bilateral regard with other factions, starts at 0)
 - `guiding_spirit: Optional[SpiritId]`
@@ -141,6 +141,8 @@ Each faction tracks:
 - `eliminated: bool` (True when faction has 0 territories; eliminated factions skip all phases)
 
 Neighbors are determined dynamically: two factions are neighbors if any of their territories are adjacent on the hex grid.
+
+When a spirit is ejected (0 influence), they choose an agenda card type to add to the faction's deck pool via `add_agenda_card()`, which permanently grows the pool.
 
 A faction with 0 territories is eliminated: its guiding spirit is ejected, its Worship is cleared, and any active wars involving it are cancelled.
 
@@ -167,13 +169,13 @@ Trade also grants bilateral regard between co-traders: each trading faction gain
 
 The Change modifier system is cumulative. A faction's Change modifiers permanently boost subsequent plays of that agenda type.
 
-Spoils of War agendas follow the same resolution order but are resolved in a separate sub-pass after war resolution. If the winning faction is guided by a spirit, the spirit draws 1 + influence spoils cards and chooses one (mirroring the normal agenda draw mechanic).
+Spoils of War agendas are collected and resolved in batch. After all wars are resolved, all spoils draws happen first: guided spirits draw 1 + influence spoils cards each, while non-guided factions auto-draw. Guided spirits submit all their war spoils choices at once (a list of card indices, one per war won). Non-guided auto-choices wait for all guided spirits to submit. Once all choices are in, all spoils resolve simultaneously via `finalize_all_spoils()` in the standard agenda order (Trade → Steal → Expand → Change). If two factions target the same hex via spoils Expand, neither gets it (contested — both receive the `expand_failed` gold bonus instead). If a chosen spoils card is Change, a follow-up modifier sub-choice is triggered (same batched pattern).
 
 ### 6. War System (`server/war.py`)
 
 Wars have a two-turn lifecycle:
 1. **Eruption**: Triggered during Steal resolution when regard hits -2 or lower. War is created in "pending" state.
-2. **Resolution**: At the start of the War Phase, ripe wars from the *previous* turn are resolved first. Each side rolls 1d6 + power (number of territories). Higher total wins. Winners draw spoils; if the faction is guided, the spirit draws 1+influence spoils cards and chooses.
+2. **Resolution**: At the start of the War Phase, all ripe wars from the *previous* turn are resolved **simultaneously**. Territory counts are snapshotted before any war resolves, and all wars use the same pre-resolution power values (number of territories). Each side rolls 1d6 + power. Higher total wins. `War.resolve()` takes pre-computed power values and returns a result dict without side effects. Gold changes from all wars are calculated as net gains/losses first, then applied simultaneously after all wars are resolved. Winners draw spoils (see Spoils section below).
 3. **Ripening**: After resolution, pending wars become ripe. A random border hex pair between the two factions is chosen as the battleground.
 
 Multiple wars can exist simultaneously. A faction can be involved in multiple wars in the same turn.
@@ -211,7 +213,7 @@ Message types fall into two categories:
 | `submit_agenda_choice` | Agenda phase | `{agenda_index}` (index into drawn hand) |
 | `submit_change_choice` | Agenda/Change sub-phase | `{card_index}` (index into drawn change cards) |
 | `submit_ejection_agenda` | Agenda/ejection sub-phase | `{agenda_type}` (card to add to faction deck) |
-| `submit_spoils_choice` | War/spoils sub-phase | `{card_index}` (index into drawn spoils cards) |
+| `submit_spoils_choice` | War/spoils sub-phase | `{card_indices}` (list of indices, one per war won, into each drawn spoils hand) |
 | `submit_spoils_change_choice` | War/spoils Change sub-phase | `{card_index}` (index into drawn change cards) |
 
 **Server → Client:**

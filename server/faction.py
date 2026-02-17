@@ -64,26 +64,19 @@ class Faction:
         self.regard[other_faction_id] = current + delta
 
     def draw_agenda_cards(self, count: int) -> list[AgendaCard]:
-        """Draw `count` cards from the shuffled agenda deck.
+        """Draw `count` cards from the agenda pool (with replacement).
 
-        Cards are removed from the deck when drawn. They should be
-        returned via played_agenda_this_turn during cleanup.
+        The pool is never depleted — cards are sampled with replacement,
+        so duplicates are possible.
         """
-        random.shuffle(self.agenda_deck)
-        n = min(count, len(self.agenda_deck))
-        hand = self.agenda_deck[:n]
-        self.agenda_deck = self.agenda_deck[n:]
-        return hand
+        return random.choices(self.agenda_deck, k=count)
 
     def draw_random_agenda(self) -> AgendaCard:
         """Draw a single random agenda card (for non-guided factions).
 
-        The card is removed from the deck and should be returned
-        via played_agenda_this_turn during cleanup.
+        The pool is never depleted.
         """
-        card = random.choice(self.agenda_deck)
-        self.agenda_deck.remove(card)
-        return card
+        return random.choice(self.agenda_deck)
 
     def add_agenda_card(self, agenda_type: AgendaType):
         self.agenda_deck.append(AgendaCard(agenda_type))
@@ -92,10 +85,8 @@ class Faction:
         self.change_modifiers[card_value] = self.change_modifiers.get(card_value, 0) + 1
 
     def cleanup_deck(self):
-        """Return all played cards to the deck and shuffle."""
-        self.agenda_deck.extend(self.played_agenda_this_turn)
+        """Clear turn tracking. The pool is static — no cards to return."""
         self.played_agenda_this_turn.clear()
-        random.shuffle(self.agenda_deck)
 
     def shuffle_agenda_deck(self):
         random.shuffle(self.agenda_deck)

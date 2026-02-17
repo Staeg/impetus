@@ -46,15 +46,16 @@ Each phase: wait for input → validate → resolve → broadcast → transition
 ### Sub-phases
 Several phases trigger sub-phases where the server waits for a specific player choice before continuing. These are **bare strings**, not in the `Phase` enum:
 - `change_choice` — After a Change agenda resolves, the guiding spirit picks a modifier card
-- `ejection_choice` — When a spirit is ejected (0 influence), they pick an agenda card to add to the faction's deck
-- `spoils_choice` — After a war victory, the winning guided spirit picks a spoils agenda card
-- `spoils_change_choice` — If the spoils card is Change, the spirit picks a modifier card
+- `ejection_choice` — When a spirit is ejected (0 influence), they pick an agenda card to add to the faction's pool
+- `spoils_choice` — After war victories, the winning guided spirit picks spoils agenda cards for ALL wars at once (multi-pick UI). Server sends a `choices` list with one entry per war won.
+- `spoils_change_choice` — If any spoils cards are Change, the spirit picks modifier cards for all of them at once
 
 ### Core game concepts
 - **6 factions** (Mountain, Mesa, Sand, Plains, River, Jungle) on a hex grid (axial coords, side-length 5)
 - **Spirits** (players) indirectly control factions via guidance and influence
+- **Agenda deck** is a static pool — cards are sampled with replacement (`random.choices`), never removed. Duplicates are possible. `add_agenda_card()` (ejection) permanently grows the pool.
 - **Agenda resolution order** is always: Trade → Steal → Expand → Change (same-type resolves simultaneously)
-- **Wars** have a two-turn lifecycle: erupt → ripen → resolve (resolve ripe first, then ripen new)
+- **Wars** have a two-turn lifecycle: erupt → ripen → resolve. All ripe wars resolve simultaneously using snapshotted territory counts; gold changes are applied as a net batch after all wars resolve.
 - **Worship** (`worship_spirit` on factions): spirits compete for faction Worship via idol counts; a spirit cannot guide a faction that Worships them
 - **Scoring**: VP from idols in faction territories where the spirit has Worship (Battle/Affluence/Spread idol types)
 - **Faction elimination**: factions with 0 territories are eliminated (guiding spirit ejected, Worship cleared, wars cancelled)
@@ -62,19 +63,20 @@ Several phases trigger sub-phases where the server waits for a specific player c
 ### Simultaneous resolution
 "Simultaneous" means all factions playing the same agenda type resolve in one step, using the game state from before any of them applied:
 - **Steal**: If A and B both Steal and are neighbors, neither takes gold from the other (both had gold reduced "at the same time"), but regard still drops
-- **Expand**: If two factions expand into the same neutral hex, neither gets it (contested). If a faction expands into a hex adjacent to multiple factions, all neighbor regard changes apply
+- **Expand**: If two factions expand into the same neutral hex, neither gets it (contested). If a faction expands into a hex adjacent to multiple factions, all neighbor regard changes apply. For spoils expand, if two factions target the same battleground hex, neither gets it (contested — both get expand_failed gold bonus).
 - **Trade**: All gold gains and regard changes are calculated from pre-resolution state
+- **Wars**: All ripe wars resolve using territory counts snapshotted before any war resolves. Gold changes are applied as net deltas after all wars complete.
 
 ### War spoils
-Wars can generate spoils choices. When a faction wins a war, a spoils card is drawn from the faction's deck and resolved. If the winning faction is guided by a spirit, the spirit draws `1 + influence` cards and chooses one. The drawn card is resolved and returned to the deck during cleanup (no permanent deck growth). If the chosen card is Change, a follow-up modifier choice is triggered. Spoils agendas resolve in the standard agenda order (Trade → Steal → Expand → Change) in a separate sub-pass after war resolution.
+Wars can generate spoils choices. When a faction wins a war, a spoils card is drawn from the faction's agenda pool. If the winning faction is guided by a spirit, the spirit draws `1 + influence` cards (with replacement, duplicates possible) and chooses one. If the chosen card is Change, a follow-up modifier choice is triggered. All spoils are collected in batch: non-guided auto choices wait for all guided spirits to submit, then everything resolves simultaneously via `finalize_all_spoils()` in standard agenda order. If two factions target the same hex via spoils Expand, neither gets it (contested — both receive the expand_failed gold bonus). A spirit winning multiple wars submits all spoils choices at once (list of card indices).
 
 ### Card choice flow
 Several game moments follow the same pattern: the server sends a list of cards to a specific player, the client renders a card picker UI, the player clicks a card, and the client sends back the chosen index. This pattern is used for:
-- **Agenda choice** (AGENDA_PHASE): spirit draws `1 + influence` cards, picks one
+- **Agenda choice** (AGENDA_PHASE): spirit draws `1 + influence` cards from pool, picks one
 - **Change modifier** (change_choice): spirit picks from the Change modifier deck
-- **Ejection agenda** (ejection_choice): ejected spirit picks an agenda type to add
-- **Spoils card** (spoils_choice): spirit picks from drawn spoils cards
-- **Spoils Change modifier** (spoils_change_choice): follow-up if spoils card was Change
+- **Ejection agenda** (ejection_choice): ejected spirit picks an agenda type to add to the pool
+- **Spoils cards** (spoils_choice): spirit picks from drawn spoils cards for ALL wars at once. Server sends `options.choices` (list of {cards, loser}). Client renders multiple card pickers vertically. Client sends back `card_indices` (list of chosen index per war).
+- **Spoils Change modifiers** (spoils_change_choice): follow-up if any spoils cards are Change. Same multi-pick pattern.
 
 ### Client scene system
 Scenes implement `handle_event()`, `update(dt)`, `render(screen)`. One active at a time. `game_scene.py` is the largest file (~1385 lines) handling all gameplay phases.

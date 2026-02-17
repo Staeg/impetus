@@ -43,14 +43,18 @@ class TestWar:
         factions["mesa"].gold = 5
         war = War("mountain", "mesa")
         war.ripen(hm)
-        result = war.resolve(factions, hm)
+        power_a = len(hm.get_faction_territories("mountain"))
+        power_b = len(hm.get_faction_territories("mesa"))
+        result = war.resolve(power_a, power_b)
         assert "roll_a" in result
         assert "roll_b" in result
         assert "power_a" in result
         assert "power_b" in result
-        # One faction should have lost gold (or both in tie)
-        total_gold = factions["mountain"].gold + factions["mesa"].gold
-        assert total_gold <= 10  # At most what they started with
+        assert result["power_a"] == power_a
+        assert result["power_b"] == power_b
+        # resolve() no longer applies gold — only determines winner
+        assert factions["mountain"].gold == 5
+        assert factions["mesa"].gold == 5
 
     def test_war_to_state(self):
         hm = HexMap()
@@ -69,3 +73,16 @@ class TestWar:
         war = War("mountain", "plains")
         result = war.ripen(hm)
         assert result is False  # They are not neighbors
+
+    def test_resolve_uses_provided_power(self):
+        """resolve() should use the provided power values, not compute its own."""
+        war = War("mountain", "mesa")
+        war.is_ripe = True
+        war.battleground = ((0, 0), (1, 0))
+        # Provide arbitrary power values
+        result = war.resolve(10, 20)
+        assert result["power_a"] == 10
+        assert result["power_b"] == 20
+        # No gold side effects (no faction objects involved)
+        assert result["total_a"] == result["roll_a"] + 10
+        assert result["total_b"] == result["roll_b"] + 20

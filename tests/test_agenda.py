@@ -256,7 +256,7 @@ class TestSpoilsChoices:
             "battleground": None,
         }]
 
-        pending = resolve_spoils(
+        pending, auto_choices = resolve_spoils(
             factions, hm, war_results, wars, events,
             normal_trade_factions=[], spirits={spirit.spirit_id: spirit},
         )
@@ -267,3 +267,92 @@ class TestSpoilsChoices:
             e["type"] == "spoils_drawn" and e["faction"] == "mountain"
             for e in events
         )
+        # Auto choice should have been collected
+        assert len(auto_choices) == 1
+        assert auto_choices[0]["winner"] == "mountain"
+
+
+class TestDeckPool:
+    def test_draw_agenda_cards_does_not_deplete_deck(self):
+        """Drawing cards from the pool should not remove them."""
+        factions = make_factions()
+        faction = factions["mountain"]
+        original_size = len(faction.agenda_deck)
+        hand = faction.draw_agenda_cards(3)
+        assert len(hand) == 3
+        assert len(faction.agenda_deck) == original_size
+
+    def test_draw_random_agenda_does_not_deplete_deck(self):
+        factions = make_factions()
+        faction = factions["mountain"]
+        original_size = len(faction.agenda_deck)
+        card = faction.draw_random_agenda()
+        assert card is not None
+        assert len(faction.agenda_deck) == original_size
+
+    def test_draw_agenda_cards_allows_duplicates(self):
+        """With a pool of 1 card, drawing 3 should give 3 copies."""
+        factions = make_factions()
+        faction = factions["mountain"]
+        faction.agenda_deck = [AgendaCard(AgendaType.TRADE)]
+        hand = faction.draw_agenda_cards(3)
+        assert len(hand) == 3
+        assert all(c.agenda_type == AgendaType.TRADE for c in hand)
+
+    def test_cleanup_deck_clears_played(self):
+        factions = make_factions()
+        faction = factions["mountain"]
+        faction.played_agenda_this_turn.append(AgendaCard(AgendaType.STEAL))
+        original_size = len(faction.agenda_deck)
+        faction.cleanup_deck()
+        assert len(faction.played_agenda_this_turn) == 0
+        # Pool should not grow from cleanup
+        assert len(faction.agenda_deck) == original_size
+
+    def test_add_agenda_card_grows_pool(self):
+        """Ejection still permanently grows the pool."""
+        factions = make_factions()
+        faction = factions["mountain"]
+        original_size = len(faction.agenda_deck)
+        faction.add_agenda_card(AgendaType.STEAL)
+        assert len(faction.agenda_deck) == original_size + 1
+
+
+class TestContestedSpoilsExpand:
+    def test_contested_spoils_expand_neither_gets_hex(self):
+        """If two factions target the same hex via spoils expand, neither gets it."""
+        from server.agenda import finalize_all_spoils
+        factions = make_factions()
+        hm = HexMap()
+        wars = []
+        events = []
+
+        # Find a hex owned by mesa
+        mesa_hexes = list(hm.get_faction_territories("mesa"))
+        target_hex = mesa_hexes[0]
+        bg = [{"q": target_hex[0], "r": target_hex[1]}]
+
+        all_spoils = [
+            {
+                "winner": "mountain",
+                "loser": "mesa",
+                "agenda_type": AgendaType.EXPAND,
+                "battleground": bg,
+            },
+            {
+                "winner": "sand",
+                "loser": "mesa",
+                "agenda_type": AgendaType.EXPAND,
+                "battleground": bg,
+            },
+        ]
+
+        finalize_all_spoils(factions, hm, wars, events, all_spoils,
+                           normal_trade_factions=[])
+
+        # Neither should have claimed mesa's hex
+        assert hm.ownership.get(target_hex) == "mesa"
+        # Both should get expand_failed events
+        failed = [e for e in events if e["type"] == "expand_failed"]
+        assert len(failed) == 2
+        assert all(e.get("contested") for e in failed)

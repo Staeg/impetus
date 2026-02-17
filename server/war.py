@@ -2,7 +2,6 @@
 
 import random
 import uuid
-from typing import Optional
 from shared.models import HexCoord, WarState
 
 
@@ -25,16 +24,12 @@ class War:
         self.is_ripe = True
         return True
 
-    def resolve(self, factions: dict, hex_map) -> dict:
-        """Resolve this war. Returns a result dict with outcome details."""
-        from server.faction import Faction
+    def resolve(self, power_a: int, power_b: int) -> dict:
+        """Resolve this war using pre-computed power values.
 
-        faction_a: Faction = factions[self.faction_a]
-        faction_b: Faction = factions[self.faction_b]
-
-        power_a = len(hex_map.get_faction_territories(self.faction_a))
-        power_b = len(hex_map.get_faction_territories(self.faction_b))
-
+        Returns a result dict with outcome details. Does NOT apply gold
+        changes — the caller is responsible for applying gold simultaneously.
+        """
         roll_a = random.randint(1, 6)
         roll_b = random.randint(1, 6)
 
@@ -63,20 +58,12 @@ class War:
         if total_a > total_b:
             result["winner"] = self.faction_a
             result["loser"] = self.faction_b
-            faction_b.lose_gold(1)
-            faction_a.add_gold(1)
-            faction_a.wars_won_this_turn += 1
         elif total_b > total_a:
             result["winner"] = self.faction_b
             result["loser"] = self.faction_a
-            faction_a.lose_gold(1)
-            faction_b.add_gold(1)
-            faction_b.wars_won_this_turn += 1
         else:
             result["winner"] = None
             result["loser"] = None
-            faction_a.lose_gold(1)
-            faction_b.lose_gold(1)
 
         return result
 

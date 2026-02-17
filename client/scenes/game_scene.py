@@ -159,9 +159,12 @@ class GameScene:
         self.ejection_pending = False
         self.ejection_faction = ""
         self.selected_ejection_type: str | None = None
-        self.spoils_cards: list[str] = []
-        self.spoils_change_cards: list[str] = []
-        self.spoils_opponent: str = ""
+        self.spoils_cards: list[list[str]] = []  # list of card lists per war
+        self.spoils_opponents: list[str] = []   # opponent per war
+        self.spoils_selections: list[int] = []  # selected card index per war (-1 = none)
+        self.spoils_change_cards: list[list[str]] = []  # list of card lists per change choice
+        self.spoils_change_opponents: list[str] = []
+        self.spoils_change_selections: list[int] = []
 
         # UI buttons
         self.action_buttons: list[Button] = []
@@ -360,19 +363,40 @@ class GameScene:
                         self._submit_card_choice(i, MessageType.SUBMIT_CHANGE_CHOICE, "change_cards")
                         return
 
-            # Check spoils card clicks
+            # Check spoils card clicks (multi-war)
             if self.spoils_cards:
-                for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.spoils_cards))):
-                    if rect.collidepoint(event.pos):
-                        self._submit_card_choice(i, MessageType.SUBMIT_SPOILS_CHOICE, "spoils_cards")
-                        return
+                y_offset = 136
+                for war_idx, cards in enumerate(self.spoils_cards):
+                    rects = self._calc_left_choice_card_rects(len(cards), y=y_offset)
+                    for i, rect in enumerate(rects):
+                        if rect.collidepoint(event.pos):
+                            self.spoils_selections[war_idx] = i
+                            # If all wars have a selection, submit
+                            if all(s >= 0 for s in self.spoils_selections):
+                                self.app.network.send(MessageType.SUBMIT_SPOILS_CHOICE,
+                                    {"card_indices": list(self.spoils_selections)})
+                                self.spoils_cards = []
+                                self.spoils_opponents = []
+                                self.spoils_selections = []
+                            return
+                    y_offset += 170  # spacing between war rows
 
-            # Check spoils change card clicks
+            # Check spoils change card clicks (multi-choice)
             if self.spoils_change_cards:
-                for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.spoils_change_cards))):
-                    if rect.collidepoint(event.pos):
-                        self._submit_card_choice(i, MessageType.SUBMIT_SPOILS_CHANGE_CHOICE, "spoils_change_cards")
-                        return
+                y_offset = 136
+                for choice_idx, cards in enumerate(self.spoils_change_cards):
+                    rects = self._calc_left_choice_card_rects(len(cards), y=y_offset)
+                    for i, rect in enumerate(rects):
+                        if rect.collidepoint(event.pos):
+                            self.spoils_change_selections[choice_idx] = i
+                            if all(s >= 0 for s in self.spoils_change_selections):
+                                self.app.network.send(MessageType.SUBMIT_SPOILS_CHANGE_CHOICE,
+                                    {"card_indices": list(self.spoils_change_selections)})
+                                self.spoils_change_cards = []
+                                self.spoils_change_opponents = []
+                                self.spoils_change_selections = []
+                            return
+                    y_offset += 170
 
             # Check change delta chip clicks (faction panel)
             for rect, log_idx in self.panel_change_rects:
@@ -558,9 +582,9 @@ class GameScene:
             # Preserve sub-phases while this player still has cards to choose
             if active_sub_phase == "change_choice" and self.change_cards:
                 self.phase = active_sub_phase
-            elif active_sub_phase == "spoils_choice" and self.spoils_cards:
+            elif active_sub_phase == "spoils_choice" and any(self.spoils_cards):
                 self.phase = active_sub_phase
-            elif active_sub_phase == "spoils_change_choice" and self.spoils_change_cards:
+            elif active_sub_phase == "spoils_change_choice" and any(self.spoils_change_cards):
                 self.phase = active_sub_phase
             # Log events (consolidate agenda play + resolution into one line)
             self._log_events_batch(events)
@@ -646,12 +670,27 @@ class GameScene:
             self.change_cards = payload_cards if (payload_cards := self.phase_options.get("cards")) else []
 
         elif self.phase == "spoils_choice":
-            self.spoils_cards = payload_cards if (payload_cards := self.phase_options.get("cards")) else []
-            self.spoils_opponent = self.phase_options.get("loser", "")
+            choices = self.phase_options.get("choices", [])
+            if choices:
+                self.spoils_cards = [c.get("cards", []) for c in choices]
+                self.spoils_opponents = [c.get("loser", "") for c in choices]
+            else:
+                # Backwards compat: single-war format
+                cards = self.phase_options.get("cards", [])
+                self.spoils_cards = [cards] if cards else []
+                self.spoils_opponents = [self.phase_options.get("loser", "")] if cards else []
+            self.spoils_selections = [-1] * len(self.spoils_cards)
 
         elif self.phase == "spoils_change_choice":
-            self.spoils_change_cards = payload_cards if (payload_cards := self.phase_options.get("cards")) else []
-            self.spoils_opponent = self.phase_options.get("loser", "")
+            choices = self.phase_options.get("choices", [])
+            if choices:
+                self.spoils_change_cards = [c.get("cards", []) for c in choices]
+                self.spoils_change_opponents = [c.get("loser", "") for c in choices]
+            else:
+                cards = self.phase_options.get("cards", [])
+                self.spoils_change_cards = [cards] if cards else []
+                self.spoils_change_opponents = [self.phase_options.get("loser", "")] if cards else []
+            self.spoils_change_selections = [-1] * len(self.spoils_change_cards)
 
         elif self.phase == "ejection_choice":
             self.ejection_pending = True
@@ -854,18 +893,23 @@ class GameScene:
                     return
 
         if self.spoils_cards:
-            for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.spoils_cards))):
-                if rect.collidepoint(mx, my):
-                    atype = self.spoils_cards[i]
-                    self.hovered_card_tooltip = build_agenda_tooltip(atype, modifiers, is_spoils=True)
-                    self.hovered_card_rect = rect
-                    return
+            y_offset = 136
+            for war_idx, cards in enumerate(self.spoils_cards):
+                for i, rect in enumerate(self._calc_left_choice_card_rects(len(cards), y=y_offset)):
+                    if rect.collidepoint(mx, my):
+                        atype = cards[i]
+                        self.hovered_card_tooltip = build_agenda_tooltip(atype, modifiers, is_spoils=True)
+                        self.hovered_card_rect = rect
+                        return
+                y_offset += 170
 
         if self.spoils_change_cards:
-            for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.spoils_change_cards))):
-                if rect.collidepoint(mx, my):
-                    self.hovered_card_tooltip = build_modifier_tooltip(self.spoils_change_cards[i])
-                    self.hovered_card_rect = rect
+            y_offset = 136
+            for choice_idx, cards in enumerate(self.spoils_change_cards):
+                for i, rect in enumerate(self._calc_left_choice_card_rects(len(cards), y=y_offset)):
+                    if rect.collidepoint(mx, my):
+                        self.hovered_card_tooltip = build_modifier_tooltip(cards[i])
+                        self.hovered_card_rect = rect
                     return
 
         # Check faction ribbon agenda labels
@@ -1380,11 +1424,17 @@ class GameScene:
             for cr in self._calc_left_choice_card_rects(len(self.change_cards)):
                 rects.append((cr, _WEIGHT_NON_TEXT))
         if self.spoils_cards:
-            for cr in self._calc_left_choice_card_rects(len(self.spoils_cards)):
-                rects.append((cr, _WEIGHT_NON_TEXT))
+            y_offset = 136
+            for cards in self.spoils_cards:
+                for cr in self._calc_left_choice_card_rects(len(cards), y=y_offset):
+                    rects.append((cr, _WEIGHT_NON_TEXT))
+                y_offset += 170
         if self.spoils_change_cards:
-            for cr in self._calc_left_choice_card_rects(len(self.spoils_change_cards)):
-                rects.append((cr, _WEIGHT_NON_TEXT))
+            y_offset = 136
+            for cards in self.spoils_change_cards:
+                for cr in self._calc_left_choice_card_rects(len(cards), y=y_offset):
+                    rects.append((cr, _WEIGHT_NON_TEXT))
+                y_offset += 170
 
         set_ui_rects(rects)
 
@@ -2066,43 +2116,53 @@ class GameScene:
     def _render_spoils_ui(self, screen):
         if not self.spoils_cards:
             return
-        opponent_name = FACTION_DISPLAY_NAMES.get(self.spoils_opponent, self.spoils_opponent)
-        title_text = f"Spoils of War vs {opponent_name} - Choose an agenda:" if opponent_name else "Spoils of War - Choose an agenda:"
-        title = self.font.render(title_text, True, (255, 200, 100))
-        title_x = max(20, (_HEX_MAP_LEFT_X - title.get_width()) // 2)
-        screen.blit(title, (title_x, 106))
-
         modifiers = self._get_current_faction_modifiers()
-        hand = [{"agenda_type": card} for card in self.spoils_cards]
-        card_rects = self._calc_left_choice_card_rects(len(hand))
-        start_x = card_rects[0].x if card_rects else 20
-        start_y = 136
-        self.ui_renderer.draw_card_hand(
-            screen, hand, -1,
-            start_x, start_y,
-            modifiers=modifiers,
-            card_images=agenda_card_images,
-            is_spoils=True,
-        )
+        y_offset = 106
+        for war_idx, cards in enumerate(self.spoils_cards):
+            opponent = self.spoils_opponents[war_idx] if war_idx < len(self.spoils_opponents) else ""
+            opponent_name = FACTION_DISPLAY_NAMES.get(opponent, opponent)
+            selected = self.spoils_selections[war_idx] if war_idx < len(self.spoils_selections) else -1
+            title_text = f"Spoils of War vs {opponent_name} - Choose an agenda:" if opponent_name else "Spoils of War - Choose an agenda:"
+            title = self.font.render(title_text, True, (255, 200, 100))
+            title_x = max(20, (_HEX_MAP_LEFT_X - title.get_width()) // 2)
+            screen.blit(title, (title_x, y_offset))
+
+            hand = [{"agenda_type": card} for card in cards]
+            card_rects = self._calc_left_choice_card_rects(len(hand), y=y_offset + 30)
+            start_x = card_rects[0].x if card_rects else 20
+            start_y = y_offset + 30
+            self.ui_renderer.draw_card_hand(
+                screen, hand, selected,
+                start_x, start_y,
+                modifiers=modifiers,
+                card_images=agenda_card_images,
+                is_spoils=True,
+            )
+            y_offset += 170
 
     def _render_spoils_change_ui(self, screen):
         if not self.spoils_change_cards:
             return
-        opponent_name = FACTION_DISPLAY_NAMES.get(self.spoils_opponent, self.spoils_opponent)
-        title_text = f"Spoils of War vs {opponent_name} - Choose a Change modifier:" if opponent_name else "Spoils of War - Choose a Change modifier:"
-        title = self.font.render(title_text, True, (255, 200, 100))
-        title_x = max(20, (_HEX_MAP_LEFT_X - title.get_width()) // 2)
-        screen.blit(title, (title_x, 106))
+        y_offset = 106
+        for choice_idx, cards in enumerate(self.spoils_change_cards):
+            opponent = self.spoils_change_opponents[choice_idx] if choice_idx < len(self.spoils_change_opponents) else ""
+            opponent_name = FACTION_DISPLAY_NAMES.get(opponent, opponent)
+            selected = self.spoils_change_selections[choice_idx] if choice_idx < len(self.spoils_change_selections) else -1
+            title_text = f"Spoils of War vs {opponent_name} - Choose a Change modifier:" if opponent_name else "Spoils of War - Choose a Change modifier:"
+            title = self.font.render(title_text, True, (255, 200, 100))
+            title_x = max(20, (_HEX_MAP_LEFT_X - title.get_width()) // 2)
+            screen.blit(title, (title_x, y_offset))
 
-        hand = []
-        for card_name in self.spoils_change_cards:
-            desc = self.ui_renderer._build_modifier_description(card_name)
-            hand.append({"agenda_type": card_name, "description": desc})
-        card_rects = self._calc_left_choice_card_rects(len(hand))
-        start_x = card_rects[0].x if card_rects else 20
-        start_y = 136
-        self.ui_renderer.draw_card_hand(
-            screen, hand, -1,
-            start_x, start_y,
-            card_images=agenda_card_images,
-        )
+            hand = []
+            for card_name in cards:
+                desc = self.ui_renderer._build_modifier_description(card_name)
+                hand.append({"agenda_type": card_name, "description": desc})
+            card_rects = self._calc_left_choice_card_rects(len(hand), y=y_offset + 30)
+            start_x = card_rects[0].x if card_rects else 20
+            start_y = y_offset + 30
+            self.ui_renderer.draw_card_hand(
+                screen, hand, selected,
+                start_x, start_y,
+                card_images=agenda_card_images,
+            )
+            y_offset += 170

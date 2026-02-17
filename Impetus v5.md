@@ -17,19 +17,19 @@ All Factions start at 0 Regard with each other.
   * Several Idols can end up on the same territory.
   * If several Spirits try to Guide the same Faction, all of them waste their turn.
   * Successfully Guiding a Faction sets a Spirit's Influence to 3\.
-* All Spirits draw 1 Agenda card \+ however much Influence they have from the Guided Faction's Agenda deck, choose 1 of the drawn Agendas for their Guided Faction to play, then lose 1 Influence.
+* All Spirits draw 1 Agenda card \+ however much Influence they have from the Guided Faction's Agenda pool, choose 1 of the drawn Agendas for their Guided Faction to play, then lose 1 Influence. Cards are sampled with replacement from the pool and are never removed, so duplicates are possible in a single draw.
   * This choice is made in secret, then revealed simultaneously.
-* Factions without a Spirit Guiding them just draw a random Agenda card from their decks.
+* Factions without a Spirit Guiding them just draw a random Agenda card from their pool.
 * Agendas are resolved in the following order:
   * Trade
   * Steal
   * Expand
   * Change
-* Spirits with 0 Influence Guiding a Faction add one Agenda card of their choice to that Faction's deck, then become Vagrant.
+* Spirits with 0 Influence Guiding a Faction add one Agenda card of their choice to that Faction's pool, then become Vagrant.
 
 ## Agenda phase
 
-Each Faction starts with 1 of each Agenda in their deck.
+Each Faction starts with 1 of each Agenda in their pool. The pool is static — cards are sampled with replacement and never consumed.
 
 * Steal: \-1 Regard with and \-1 gold to all neighbors. \+1 gold to this Faction for each gold lost by neighbors. Then a War erupts with any neighboring Factions who have \-2 Regard or less with this Faction.
 * Trade: \+1 gold, \+1 gold for every other Faction playing Trade this turn. \+1 Regard with each other Faction playing Trade this turn.
@@ -40,16 +40,19 @@ Each Faction starts with 1 of each Agenda in their deck.
 
 ## War
 
-Each Faction’s Power baseline is equal to the number of Territories it controls.
+Each Faction's Power baseline is equal to the number of Territories it controls.
 
-* War erupts whenever two neighboring Factions have \-2 Regard or lower after one or both of them resolve a Steal action.  
+* War erupts whenever two neighboring Factions have \-2 Regard or lower after one or both of them resolve a Steal action.
 * After the Agenda Phase, all Ripe Wars from the previous turn are resolved first. Then all Wars that erupted this turn become Ripe.
   * When a War becomes Ripe, a random border between two hexes owned by those two Factions is chosen as the Battleground.
-* To determine the winner, both Factions roll a 6-sided die and add their Power.  
-* The loser loses 1 gold. The winner gains 1 gold and draws a Spoils of War Agenda card from their Faction's deck and resolves it. If the winning Faction is guided by a Spirit, the Spirit draws 1 \+ their Influence Spoils cards and chooses 1 among them.
-  * Expand functions differently when drawn as Spoils of War: instead of paying gold to expand into neutral territory, the winning Faction takes control of the hex on the loser’s side of the Battleground.  
-    * In the unlikely event that two Factions both win a War against the same Faction and draw Expand to conquer the same hex, the Faction with greater Power succeeds. A further tie is resolved randomly.  
-  * Other Agendas function as normal, including the possibility of Steal starting another War between the same Factions.  
+* All Ripe Wars are resolved simultaneously. Each Faction's Power is snapshotted from its territory count at the start of the War Phase, so territory changes from one war do not affect another war's Power calculations.
+* To determine the winner, both Factions roll a 6-sided die and add their Power.
+* Gold changes from all wars (losses and gains) are applied simultaneously after all wars are resolved.
+* The loser loses 1 gold. The winner gains 1 gold and draws a Spoils of War Agenda card from their Faction's pool and resolves it. If the winning Faction is guided by a Spirit, the Spirit draws 1 \+ their Influence Spoils cards and chooses 1 among them.
+  * All Spoils of War are collected into a batch and then resolved simultaneously, following the standard agenda resolution order (Trade → Steal → Expand → Change).
+  * Expand functions differently when drawn as Spoils of War: instead of paying gold to expand into neutral territory, the winning Faction takes control of the hex on the loser's side of the Battleground.
+    * If two Factions both win a War against the same Faction and draw Expand to conquer the same hex, the hex is contested and neither Faction gets it.
+  * Other Agendas function as normal, including the possibility of Steal starting another War between the same Factions.
   * Trade Spoils of War also give 1 gold and Regard (plus their Trade Change modifier) to every other Faction that resolved Trade normally this turn.
 * In the event of a tie, both Factions lose 1 gold and no Spoils of War are drawn.
 
