@@ -273,6 +273,11 @@ class AnimationOrchestrator:
                 # Tag war reveals onto steal animations
                 if etype == "steal" and faction_id in war_by_faction:
                     anim.war_reveals = war_by_faction[faction_id]
+                # Tag change modifier onto change animations
+                if etype == "change":
+                    modifier = event.get("modifier", "")
+                    if modifier:
+                        anim.change_modifier = modifier
                 self.animation.add_persistent_agenda_animation(anim)
                 self.create_effect_animations(event, faction_id, delay,
                                               hex_ownership, small_font)
@@ -338,6 +343,11 @@ class AnimationOrchestrator:
                         gold_deltas.append((faction_id, -cost))
                 if gold_deltas:
                     anim.gold_deltas = gold_deltas
+                # Tag change modifier onto change animations
+                if etype == "change":
+                    modifier = event.get("modifier", "")
+                    if modifier:
+                        anim.change_modifier = modifier
                 self.animation.add_persistent_agenda_animation(anim)
                 self.create_effect_animations(event, faction_id, delay,
                                               hex_ownership, small_font)
@@ -443,6 +453,18 @@ class AnimationOrchestrator:
                     if not already:
                         display_wars.append(wd)
                 anim._wars_revealed = True
+
+    def apply_change_modifier_deltas(self, display_factions: dict):
+        """Incrementally update change_modifiers display as change animations become active."""
+        for anim in self.animation.get_persistent_agenda_animations():
+            if anim.active and not anim._change_modifier_applied and anim.change_modifier:
+                fid = anim.faction_id
+                if fid and fid in display_factions:
+                    fd = display_factions[fid]
+                    mods = fd.get("change_modifiers")
+                    if mods is not None:
+                        mods[anim.change_modifier] = mods.get(anim.change_modifier, 0) + 1
+                anim._change_modifier_applied = True
 
     # --- State queries ---
 
