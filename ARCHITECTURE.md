@@ -32,7 +32,7 @@ impetus/
 │   ├── server.py               # WebSocket server, lobby/room management
 │   ├── game_state.py           # Core game state machine and turn resolution
 │   ├── hex_map.py              # Hex grid generation, adjacency, pathfinding
-│   ├── faction.py              # Faction model (gold, territories, agenda deck, modifiers)
+│   ├── faction.py              # Faction model (gold, territories, agenda pool, modifiers)
 │   ├── spirit.py               # Spirit model (influence, worship, idols, VP)
 │   ├── war.py                  # War eruption tracking, ripening, resolution
 │   ├── agenda.py               # Agenda card system and resolution logic
@@ -133,7 +133,7 @@ Each faction tracks:
 - `name` and `color` (Mountain/red, Mesa/orange, Sand/yellow, Plains/green, River/blue, Jungle/purple)
 - `gold: int` (starts at 0, minimum 0 - gold cannot go negative)
 - `territories: set[HexCoord]` (starts with 1 hex)
-- `agenda_deck: list[AgendaCard]` (a pool of card types, starts with 1 of each: Steal, Trade, Expand, Change; cards are sampled with replacement via `random.choices`, never removed, so drawn hands can contain duplicates)
+- `agenda_pool: list[AgendaCard]` (starts with 1 of each: Steal, Trade, Expand, Change; cards are sampled with replacement via `random.choices`, never consumed, so drawn hands can contain duplicates; ejection replaces one card type with another, keeping pool size constant)
 - `change_modifiers: dict[AgendaType, int]` (accumulated Change upgrades per agenda type)
 - `regard: dict[FactionId, int]` (bilateral regard with other factions, starts at 0)
 - `guiding_spirit: Optional[SpiritId]`
@@ -142,7 +142,7 @@ Each faction tracks:
 
 Neighbors are determined dynamically: two factions are neighbors if any of their territories are adjacent on the hex grid.
 
-When a spirit is ejected (0 influence), they choose an agenda card type to add to the faction's deck pool via `add_agenda_card()`, which permanently grows the pool.
+When a spirit is ejected (0 influence), they choose one card type to remove and one to add via `replace_agenda_card()`, keeping the pool size constant.
 
 A faction with 0 territories is eliminated: its guiding spirit is ejected, its Worship is cleared, and any active wars involving it are cancelled.
 
@@ -212,7 +212,7 @@ Message types fall into two categories:
 | `submit_vagrant_action` | Vagrant phase | `{guide_target, idol_type, idol_q, idol_r}` (guide faction AND/OR place idol) |
 | `submit_agenda_choice` | Agenda phase | `{agenda_index}` (index into drawn hand) |
 | `submit_change_choice` | Agenda/Change sub-phase | `{card_index}` (index into drawn change cards) |
-| `submit_ejection_agenda` | Agenda/ejection sub-phase | `{agenda_type}` (card to add to faction deck) |
+| `submit_ejection_agenda` | Agenda/ejection sub-phase | `{remove_type, add_type}` (card type to remove and add to faction pool) |
 | `submit_spoils_choice` | War/spoils sub-phase | `{card_indices}` (list of indices, one per war won, into each drawn spoils hand) |
 | `submit_spoils_change_choice` | War/spoils Change sub-phase | `{card_index}` (index into drawn change cards) |
 
@@ -315,7 +315,7 @@ class FactionState:
     color: tuple[int, int, int]
     gold: int
     territories: list[HexCoord]
-    agenda_deck: list[AgendaCard]
+    agenda_pool: list[AgendaCard]
     change_modifiers: dict[str, int]
     regard: dict[str, int]
     guiding_spirit: str | None

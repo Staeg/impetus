@@ -1,4 +1,4 @@
-"""Faction model: gold, territories, agenda deck, modifiers, regard."""
+"""Faction model: gold, territories, agenda pool, modifiers, regard."""
 
 import random
 from typing import Optional
@@ -16,7 +16,7 @@ class Faction:
         self.faction_id = faction_id
         self.color = FACTION_COLORS[faction_id]
         self.gold: int = STARTING_GOLD
-        self.agenda_deck: list[AgendaCard] = [
+        self.agenda_pool: list[AgendaCard] = [
             AgendaCard(AgendaType.STEAL),
             AgendaCard(AgendaType.TRADE),
             AgendaCard(AgendaType.EXPAND),
@@ -35,7 +35,7 @@ class Faction:
         self.gold_gained_this_turn: int = 0
         self.territories_gained_this_turn: int = 0
         self.wars_won_this_turn: int = 0
-        # Agenda deck tracking for cleanup
+        # Played agenda tracking for cleanup
         self.played_agenda_this_turn: list[AgendaCard] = []
 
     def reset_turn_tracking(self):
@@ -69,17 +69,27 @@ class Faction:
         The pool is never depleted — cards are sampled with replacement,
         so duplicates are possible.
         """
-        return random.choices(self.agenda_deck, k=count)
+        return random.choices(self.agenda_pool, k=count)
 
     def draw_random_agenda(self) -> AgendaCard:
         """Draw a single random agenda card (for non-guided factions).
 
         The pool is never depleted.
         """
-        return random.choice(self.agenda_deck)
+        return random.choice(self.agenda_pool)
 
-    def add_agenda_card(self, agenda_type: AgendaType):
-        self.agenda_deck.append(AgendaCard(agenda_type))
+    def replace_agenda_card(self, remove_type: AgendaType, add_type: AgendaType):
+        """Replace one card of remove_type with add_type in the agenda pool.
+
+        The pool size stays the same. If remove_type is not found (shouldn't
+        happen in normal gameplay), appends add_type as a fallback.
+        """
+        for i, card in enumerate(self.agenda_pool):
+            if card.agenda_type == remove_type:
+                self.agenda_pool[i] = AgendaCard(add_type)
+                return
+        # Fallback: type not in pool (shouldn't happen)
+        self.agenda_pool.append(AgendaCard(add_type))
 
     def add_change_modifier(self, card_value: str):
         self.change_modifiers[card_value] = self.change_modifiers.get(card_value, 0) + 1
@@ -88,8 +98,8 @@ class Faction:
         """Clear turn tracking. The pool is static — no cards to return."""
         self.played_agenda_this_turn.clear()
 
-    def shuffle_agenda_deck(self):
-        random.shuffle(self.agenda_deck)
+    def shuffle_agenda_pool(self):
+        random.shuffle(self.agenda_pool)
 
     def to_state(self, hex_map) -> FactionState:
         territories = hex_map.get_faction_territories(self.faction_id)
@@ -98,7 +108,7 @@ class Faction:
             color=self.color,
             gold=self.gold,
             territories=[HexCoord(q, r) for q, r in territories],
-            agenda_deck=list(self.agenda_deck),
+            agenda_pool=list(self.agenda_pool),
             change_modifiers=dict(self.change_modifiers),
             regard=dict(self.regard),
             guiding_spirit=self.guiding_spirit,

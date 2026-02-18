@@ -25,7 +25,7 @@ All Factions start at 0 Regard with each other.
   * Steal
   * Expand
   * Change
-* Spirits with 0 Influence Guiding a Faction add one Agenda card of their choice to that Faction's pool, then become Vagrant.
+* Spirits with 0 Influence Guiding a Faction replace one Agenda card in that Faction's pool with another of their choice, then become Vagrant.
 
 ## Agenda phase
 

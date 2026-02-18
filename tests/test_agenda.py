@@ -248,7 +248,7 @@ class TestSpoilsChoices:
         factions["mountain"].guiding_spirit = spirit.spirit_id
 
         # Force a single possible spoils card.
-        factions["mountain"].agenda_deck = [AgendaCard(AgendaType.TRADE)]
+        factions["mountain"].agenda_pool = [AgendaCard(AgendaType.TRADE)]
 
         war_results = [{
             "winner": "mountain",
@@ -277,24 +277,24 @@ class TestDeckPool:
         """Drawing cards from the pool should not remove them."""
         factions = make_factions()
         faction = factions["mountain"]
-        original_size = len(faction.agenda_deck)
+        original_size = len(faction.agenda_pool)
         hand = faction.draw_agenda_cards(3)
         assert len(hand) == 3
-        assert len(faction.agenda_deck) == original_size
+        assert len(faction.agenda_pool) == original_size
 
     def test_draw_random_agenda_does_not_deplete_deck(self):
         factions = make_factions()
         faction = factions["mountain"]
-        original_size = len(faction.agenda_deck)
+        original_size = len(faction.agenda_pool)
         card = faction.draw_random_agenda()
         assert card is not None
-        assert len(faction.agenda_deck) == original_size
+        assert len(faction.agenda_pool) == original_size
 
     def test_draw_agenda_cards_allows_duplicates(self):
         """With a pool of 1 card, drawing 3 should give 3 copies."""
         factions = make_factions()
         faction = factions["mountain"]
-        faction.agenda_deck = [AgendaCard(AgendaType.TRADE)]
+        faction.agenda_pool = [AgendaCard(AgendaType.TRADE)]
         hand = faction.draw_agenda_cards(3)
         assert len(hand) == 3
         assert all(c.agenda_type == AgendaType.TRADE for c in hand)
@@ -303,19 +303,23 @@ class TestDeckPool:
         factions = make_factions()
         faction = factions["mountain"]
         faction.played_agenda_this_turn.append(AgendaCard(AgendaType.STEAL))
-        original_size = len(faction.agenda_deck)
+        original_size = len(faction.agenda_pool)
         faction.cleanup_deck()
         assert len(faction.played_agenda_this_turn) == 0
         # Pool should not grow from cleanup
-        assert len(faction.agenda_deck) == original_size
+        assert len(faction.agenda_pool) == original_size
 
-    def test_add_agenda_card_grows_pool(self):
-        """Ejection still permanently grows the pool."""
+    def test_replace_agenda_card_keeps_pool_size(self):
+        """Ejection replaces one card, so pool size stays the same."""
         factions = make_factions()
         faction = factions["mountain"]
-        original_size = len(faction.agenda_deck)
-        faction.add_agenda_card(AgendaType.STEAL)
-        assert len(faction.agenda_deck) == original_size + 1
+        original_size = len(faction.agenda_pool)
+        faction.replace_agenda_card(AgendaType.STEAL, AgendaType.TRADE)
+        assert len(faction.agenda_pool) == original_size
+        # One Steal was removed and one Trade was added
+        types = [c.agenda_type for c in faction.agenda_pool]
+        assert AgendaType.STEAL not in types
+        assert types.count(AgendaType.TRADE) == 2
 
 
 class TestContestedSpoilsExpand:
