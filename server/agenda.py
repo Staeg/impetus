@@ -330,7 +330,7 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
         loser = result.get("loser")
         faction = factions[winner]
 
-        if not faction.agenda_deck:
+        if not faction.agenda_pool:
             events.append({"type": "spoils_wasted", "faction": winner})
             continue
 
@@ -338,7 +338,7 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
         if faction.guiding_spirit and faction.guiding_spirit in spirits:
             spirit = spirits[faction.guiding_spirit]
             draw_count = 1 + spirit.influence
-            drawn = random.choices(faction.agenda_deck, k=draw_count)
+            drawn = random.choices(faction.agenda_pool, k=draw_count)
 
             if len(drawn) == 1:
                 # No meaningful choice — auto-resolve
@@ -375,7 +375,7 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
             continue
 
         # Non-guided: single random draw, auto-resolve later
-        card = random.choice(faction.agenda_deck)
+        card = random.choice(faction.agenda_pool)
         faction.played_agenda_this_turn.append(card)
         spoils_type = card.agenda_type
         result["spoils"] = spoils_type.value
@@ -413,7 +413,7 @@ def resolve_spoils_choice(factions, hex_map, wars, events, spirit_id,
     faction = factions[winner]
     # Track for scoring (pool is static, no return needed)
     faction.played_agenda_this_turn.append(
-        faction.agenda_deck[0].__class__(chosen)  # Create AgendaCard from type
+        faction.agenda_pool[0].__class__(chosen)  # Create AgendaCard from type
     )
 
     events.append({

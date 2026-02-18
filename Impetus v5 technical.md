@@ -35,7 +35,7 @@
       * If there are any neutral Territories with Idols in them within reach: the Faction chooses at random between those territories.
     * Change: draw a card from the Change modifier deck, then shuffle it back in.  
       * If guided, the Spirit draws additional cards equal to their current Influence and chooses 1 among them.
-  * Any Spirits with 0 Influence currently Guiding a Faction are ejected; they may add a copy of an Agenda card to that Faction's Agenda pool
+  * Any Spirits with 0 Influence currently Guiding a Faction are ejected; they replace one Agenda card in that Faction's Agenda pool with another of their choice (pool size stays the same)
     * Worship changes are checked
 * War phase
   * Each Faction's Power is snapshotted from its territory count at the start of the War Phase; all wars use this snapshot

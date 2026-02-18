@@ -292,16 +292,24 @@ class GameState:
         self.pending_actions[spirit.spirit_id] = action
         return None
 
-    def submit_ejection_choice(self, spirit_id: str, agenda_type: str) -> Optional[str]:
-        """Submit the ejection agenda card choice."""
+    def submit_ejection_choice(self, spirit_id: str, remove_type: str, add_type: str) -> Optional[str]:
+        """Submit the ejection agenda card replacement choice."""
         if spirit_id not in self.ejection_pending:
             return "No ejection pending"
         try:
-            at = AgendaType(agenda_type)
+            remove_at = AgendaType(remove_type)
         except ValueError:
-            return f"Invalid agenda type: {agenda_type}"
+            return f"Invalid remove agenda type: {remove_type}"
+        try:
+            add_at = AgendaType(add_type)
+        except ValueError:
+            return f"Invalid add agenda type: {add_type}"
         faction_id = self.ejection_pending[spirit_id]
-        self.factions[faction_id].add_agenda_card(at)
+        faction = self.factions[faction_id]
+        pool_types = [c.agenda_type for c in faction.agenda_pool]
+        if remove_at not in pool_types:
+            return f"Type {remove_type} not in faction's agenda pool"
+        faction.replace_agenda_card(remove_at, add_at)
         del self.ejection_pending[spirit_id]
         return None
 

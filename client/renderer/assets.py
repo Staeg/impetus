@@ -7,6 +7,7 @@ import pygame
 # Module-level caches: agenda name -> pygame.Surface
 agenda_images: dict[str, pygame.Surface] = {}        # 48x48 for map animations
 agenda_card_images: dict[str, pygame.Surface] = {}    # 70x70 for card faces
+agenda_ribbon_icons: dict[str, pygame.Surface] = {}   # 15x15 for ribbon pool grid
 
 AGENDA_NAMES = ["steal", "trade", "expand", "change"]
 
@@ -42,6 +43,7 @@ def load_assets():
 
         agenda_images[name] = pygame.transform.smoothscale(alpha_img, (48, 48))
         agenda_card_images[name] = pygame.transform.smoothscale(alpha_img, (70, 70))
+        agenda_ribbon_icons[name] = pygame.transform.smoothscale(alpha_img, (15, 15))
 
     # Create expand_failed composite: expand image with red X overlay
     if "expand" in agenda_images:

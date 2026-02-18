@@ -6,6 +6,7 @@ from shared.constants import (
     Phase, AgendaType, IdolType, FACTION_COLORS, FACTION_DISPLAY_NAMES,
     FACTION_NAMES,
 )
+from client.renderer.assets import agenda_ribbon_icons
 
 
 def _wrap_text(text: str, font: "pygame.font.Font", max_width: int) -> list[str]:
@@ -238,13 +239,15 @@ class UIRenderer:
                               animated_agenda_factions: set = None):
         """Draw a compact overview strip showing all factions' gold, agenda, wars, and worship.
 
-        Returns list of agenda label hover entries:
-        (faction_id, agenda_type, is_spoils, rect).
+        Returns (agenda_label_entries, pool_icon_rects):
+        - agenda_label_entries: list of (faction_id, agenda_type, is_spoils, rect)
+        - pool_icon_rects: dict of faction_id -> pygame.Rect covering the pool icons row
         """
         spirits = spirits or {}
         faction_spoils_agendas = faction_spoils_agendas or {}
         animated_agenda_factions = animated_agenda_factions or set()
         agenda_label_entries: list[tuple[str, str, bool, pygame.Rect]] = []
+        pool_icon_rects: dict[str, pygame.Rect] = {}
         strip_y = 42
         strip_h = 55
         sw = surface.get_width()
@@ -341,13 +344,42 @@ class UIRenderer:
                     draw_dotted_underline(surface, a_pos[0], a_pos[1] + a_surf.get_height(),
                                           a_surf.get_width())
 
-            # War indicators (second row): crossed swords icon + tiny enemy hex per opponent
+            # Agenda pool icons: 2×2 grid filling space below faction name
+            pool_types = fd.get("agenda_pool", []) if isinstance(fd, dict) else []
+            icon_size = 15   # px per icon (square)
+            icon_gap = 3     # px gap between icons
+            grid_start_x = cx + 6
+            grid_start_y = strip_y + 18
+            grid_total_w = 2 * icon_size + icon_gap
+            grid_total_h = 2 * icon_size + icon_gap
+            if len(pool_types) == 4:
+                # Fixed 2×2 positions: [0]=top-left, [1]=top-right, [2]=bottom-left, [3]=bottom-right
+                positions = [
+                    (grid_start_x,                         grid_start_y),
+                    (grid_start_x + icon_size + icon_gap,  grid_start_y),
+                    (grid_start_x,                         grid_start_y + icon_size + icon_gap),
+                    (grid_start_x + icon_size + icon_gap,  grid_start_y + icon_size + icon_gap),
+                ]
+                for (px, py), at_str in zip(positions, pool_types):
+                    img = agenda_ribbon_icons.get(at_str)
+                    if img:
+                        surface.blit(img, (px, py))
+                    else:
+                        # Fallback: colored square if image not loaded
+                        icon_color = agenda_colors.get(at_str, (160, 160, 180))
+                        pygame.draw.rect(surface, icon_color,
+                                         pygame.Rect(px, py, icon_size, icon_size), border_radius=2)
+                pool_icon_rects[fid] = pygame.Rect(
+                    grid_start_x, grid_start_y, grid_total_w, grid_total_h)
+
+            # War indicators: to the right of the pool grid
+            wars_x_start = grid_start_x + grid_total_w + 5
+            sy = grid_start_y + grid_total_h // 2  # center y aligned with pool grid
             if fid in war_lookup:
-                wx = cx + 6
+                wx = wars_x_start
                 any_ripe = any(ripe for _, ripe in war_lookup[fid])
                 sword_color = (255, 50, 50) if any_ripe else (180, 60, 60)
                 # Draw crossed swords icon (two diagonal lines)
-                sy = strip_y + 28  # vertical center of icon
                 pygame.draw.line(surface, sword_color, (wx, sy - 5), (wx + 10, sy + 5), 2)
                 pygame.draw.line(surface, sword_color, (wx + 10, sy - 5), (wx, sy + 5), 2)
                 wx += 14
@@ -366,7 +398,7 @@ class UIRenderer:
                         pygame.draw.polygon(surface, (255, 255, 255), points, 1)
                     wx += 14
 
-        return agenda_label_entries
+        return agenda_label_entries, pool_icon_rects
 
     def _render_strikethrough(self, surface, font, text_str, color, pos):
         """Render text with a strikethrough line."""
@@ -464,9 +496,14 @@ class UIRenderer:
             active_modifiers = sum(1 for v in modifiers.values() if v > 0)
             if active_modifiers:
                 panel_h += 4 + 18 + active_modifiers * 18
-            extra_agendas = faction_data.get("agenda_deck_extra", {})
-            if extra_agendas:
-                panel_h += 4 + 18 + len(extra_agendas) * 18
+            pool_types = faction_data.get("agenda_pool", [])
+            pool_counts = {}
+            for pt in pool_types:
+                pool_counts[pt] = pool_counts.get(pt, 0) + 1
+            pool_differs = set(pool_counts.keys()) != {"steal", "trade", "expand", "change"} or any(v != 1 for v in pool_counts.values())
+            if pool_differs:
+                pool_entries = len(pool_counts)
+                panel_h += 4 + 18 + pool_entries * 18
             if war_opponents:
                 panel_h += 4 + 18 + len(war_opponents) * 18
         panel_h += 8  # bottom padding
@@ -655,17 +692,38 @@ class UIRenderer:
                         surface.blit(text, (x + 10, dy))
                     dy += 18
 
-        # Extra agenda cards
-        extra_agendas = faction_data.get("agenda_deck_extra", {})
-        if extra_agendas:
+        # Agenda pool (show when it differs from the standard 1-of-each baseline)
+        pool_types = faction_data.get("agenda_pool", [])
+        pool_counts: dict[str, int] = {}
+        for pt in pool_types:
+            pool_counts[pt] = pool_counts.get(pt, 0) + 1
+        pool_differs = set(pool_counts.keys()) != {"steal", "trade", "expand", "change"} or any(v != 1 for v in pool_counts.values())
+        if pool_differs:
             dy += 4
-            text = self.small_font.render("Extra Agendas:", True, (150, 150, 170))
+            text = self.small_font.render("Agenda Pool:", True, (150, 150, 170))
             surface.blit(text, (x + 10, dy))
             dy += 18
-            for atype, count in extra_agendas.items():
-                text = self.small_font.render(f"  {atype}: +{count}", True, (200, 180, 100))
-                surface.blit(text, (x + 10, dy))
-                dy += 18
+            agenda_colors_map = {
+                "steal": (255, 100, 100),
+                "trade": (255, 220, 100),
+                "expand": (100, 220, 100),
+                "change": (200, 150, 255),
+            }
+            for atype in ["steal", "trade", "expand", "change"]:
+                count = pool_counts.get(atype, 0)
+                if count == 0:
+                    color = (120, 60, 60)
+                    label = f"  {atype}: none"
+                elif count == 1:
+                    color = agenda_colors_map.get(atype, (200, 180, 100))
+                    label = f"  {atype}"
+                else:
+                    color = agenda_colors_map.get(atype, (200, 180, 100))
+                    label = f"  {atype} \u00d7{count}"
+                if count != 1:
+                    text = self.small_font.render(label, True, color)
+                    surface.blit(text, (x + 10, dy))
+                    dy += 18
 
         # Wars
         if war_opponents:

@@ -258,7 +258,10 @@ class GameServer:
         elif msg_type == MessageType.SUBMIT_EJECTION_AGENDA:
             if room.game_state:
                 error = room.game_state.submit_ejection_choice(
-                    spirit_id, payload.get("agenda_type", ""))
+                    spirit_id,
+                    payload.get("remove_type", ""),
+                    payload.get("add_type", ""),
+                )
                 if error:
                     await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
                 elif room.game_state.has_pending_sub_choices():
@@ -400,11 +403,14 @@ class GameServer:
         """Send ejection choice options to spirits that need them."""
         gs = room.game_state
         for spirit_id, faction_id in gs.ejection_pending.items():
+            faction = gs.factions[faction_id]
+            agenda_pool = [c.agenda_type.value for c in faction.agenda_pool]
             await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
                 "phase": "ejection_choice",
                 "turn": gs.turn,
                 "options": {
                     "faction": faction_id,
+                    "agenda_pool": agenda_pool,
                     "agenda_types": [at.value for at in AgendaType],
                 },
             }))

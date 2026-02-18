@@ -58,7 +58,7 @@ class TestGameStateSetup:
         agenda_calls = {"n": 0}
 
         def fake_choice(seq):
-            # Agenda deck draw (list[AgendaCard])
+            # Agenda pool draw (list[AgendaCard])
             if seq and hasattr(seq[0], "agenda_type"):
                 agenda_calls["n"] += 1
                 # First agenda draw belongs to mountain in setup_game order.

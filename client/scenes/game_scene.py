@@ -42,11 +42,11 @@ _INFLUENCE_TOOLTIP = (
     "when it reaches 0."
 )
 
-_AGENDA_DECK_TOOLTIP = (
+_AGENDA_POOL_TOOLTIP = (
     "All possible Agendas a Faction can draw and play. The base "
-    "deck contains 1 of each type: Trade, Steal, Expand, "
-    "and Change. Extra cards can be added via the Change agenda "
-    "or when a Spirit is ejected from Guidance. Spirits with "
+    "pool contains 1 of each type: Trade, Steal, Expand, "
+    "and Change. When a Spirit is ejected, they replace one card "
+    "in the pool with another of their choice. Spirits with "
     "more Influence draw more options from it."
 )
 
@@ -96,7 +96,7 @@ _CONTESTED_TOOLTIP = (
 )
 
 _GUIDANCE_HOVER_REGIONS = [
-    HoverRegion("Agenda deck", _AGENDA_DECK_TOOLTIP, sub_regions=[
+    HoverRegion("Agenda pool", _AGENDA_POOL_TOOLTIP, sub_regions=[
         HoverRegion("Influence", _INFLUENCE_TOOLTIP, sub_regions=[]),
     ]),
     HoverRegion("Influence", _INFLUENCE_TOOLTIP, sub_regions=[]),
@@ -171,7 +171,9 @@ class GameScene:
         self.change_cards: list[str] = []
         self.ejection_pending = False
         self.ejection_faction = ""
-        self.selected_ejection_type: str | None = None
+        self.ejection_pool: list[str] = []
+        self.selected_ejection_remove_type: str | None = None
+        self.selected_ejection_add_type: str | None = None
         self.spoils_cards: list[list[str]] = []  # list of card lists per war
         self.spoils_opponents: list[str] = []   # opponent per war
         self.spoils_selections: list[int] = []  # selected card index per war (-1 = none)
@@ -181,6 +183,7 @@ class GameScene:
 
         # UI buttons
         self.action_buttons: list[Button] = []
+        self.remove_buttons: list[Button] = []
         self.submit_button: Button | None = None
         self.faction_buttons: list[Button] = []
         self.idol_buttons: list[Button] = []
@@ -205,6 +208,9 @@ class GameScene:
         self.hovered_agenda_label_rect: pygame.Rect | None = None
         self.hovered_anim_tooltip: str | None = None
         self.hovered_anim_rect: pygame.Rect | None = None
+        # Pool icon hover state
+        self.pool_icon_rects: dict[str, pygame.Rect] = {}
+        self.hovered_pool_faction: str | None = None
 
         # Faction panel / VP hover tooltip state
         self.hovered_panel_guided: bool = False
@@ -319,7 +325,7 @@ class GameScene:
             self.popup_manager.handle_escape()
 
         if event.type == pygame.MOUSEMOTION:
-            for btn in self.action_buttons + self.faction_buttons + self.idol_buttons:
+            for btn in self.action_buttons + self.remove_buttons + self.faction_buttons + self.idol_buttons:
                 btn.update(event.pos)
             if self.submit_button:
                 self.submit_button.update(event.pos)
@@ -338,6 +344,12 @@ class GameScene:
             self._update_spirit_panel_hover(event.pos)
             # Ejection title keyword hover detection
             self._update_ejection_title_hover(event.pos)
+            # Agenda pool icon hover detection
+            self.hovered_pool_faction = None
+            for fid, rect in self.pool_icon_rects.items():
+                if rect.collidepoint(event.pos):
+                    self.hovered_pool_faction = fid
+                    break
             # Popup keyword hover
             self.popup_manager.update_hover(event.pos)
 
@@ -346,6 +358,12 @@ class GameScene:
             if self.submit_button and self.submit_button.clicked(event.pos):
                 self._submit_action()
                 return
+
+            # Check ejection remove buttons
+            for btn in self.remove_buttons:
+                if btn.clicked(event.pos):
+                    self.selected_ejection_remove_type = btn.text.lower()
+                    return
 
             # Check action buttons
             for btn in self.action_buttons:
@@ -474,7 +492,7 @@ class GameScene:
 
     def _handle_action_button(self, text: str):
         if self.ejection_pending:
-            self.selected_ejection_type = text.lower()
+            self.selected_ejection_add_type = text.lower()
             return
 
     def _handle_faction_select(self, faction_id: str):
@@ -526,9 +544,10 @@ class GameScene:
                 })
                 self._clear_selection()
         elif self.phase == "ejection_choice":
-            if self.selected_ejection_type:
+            if self.selected_ejection_remove_type and self.selected_ejection_add_type:
                 self.app.network.send(MessageType.SUBMIT_EJECTION_AGENDA, {
-                    "agenda_type": self.selected_ejection_type,
+                    "remove_type": self.selected_ejection_remove_type,
+                    "add_type": self.selected_ejection_add_type,
                 })
                 self._clear_selection()
                 self.ejection_pending = False
@@ -543,9 +562,12 @@ class GameScene:
         self.selected_idol_type = None
         self.panel_faction = None
         self.selected_agenda_index = -1
-        self.selected_ejection_type = None
+        self.selected_ejection_remove_type = None
+        self.selected_ejection_add_type = None
+        self.ejection_pool = []
         self.agenda_hand = []
         self.action_buttons = []
+        self.remove_buttons = []
         self.faction_buttons = []
         self.idol_buttons = []
         self.submit_button = None
@@ -710,15 +732,33 @@ class GameScene:
         elif self.phase == "ejection_choice":
             self.ejection_pending = True
             self.ejection_faction = self.phase_options.get("faction", "")
-            self.selected_ejection_type = None
-            # Build ejection buttons
-            y = SCREEN_HEIGHT - 200
-            self.action_buttons = []
+            self.ejection_pool = self.phase_options.get("agenda_pool", [])
+            self.selected_ejection_remove_type = None
+            self.selected_ejection_add_type = None
             modifiers = self._get_faction_modifiers(self.ejection_faction)
+            # Build remove buttons (one per unique type in the current pool)
+            y_remove = SCREEN_HEIGHT - 240
+            self.remove_buttons = []
+            seen_types: list[str] = []
+            for at_str in self.ejection_pool:
+                if at_str not in seen_types:
+                    seen_types.append(at_str)
+            for i, at_str in enumerate(seen_types):
+                tooltip = build_agenda_tooltip(at_str, modifiers)
+                btn = Button(
+                    pygame.Rect(20 + i * 110, y_remove, 100, 36),
+                    at_str.title(), (110, 50, 50),
+                    tooltip=tooltip,
+                    tooltip_always=True,
+                )
+                self.remove_buttons.append(btn)
+            # Build add buttons (all agenda types)
+            y_add = SCREEN_HEIGHT - 185
+            self.action_buttons = []
             for i, at in enumerate(AgendaType):
                 tooltip = build_agenda_tooltip(at.value, modifiers)
                 btn = Button(
-                    pygame.Rect(20 + i * 110, y, 100, 36),
+                    pygame.Rect(20 + i * 110, y_add, 100, 36),
                     at.value.title(), (80, 60, 130),
                     tooltip=tooltip,
                     tooltip_always=True,
@@ -1042,7 +1082,7 @@ class GameScene:
     _GUIDANCE_GENERIC_TOOLTIP = (
         "A Spirit can Guide a Faction by choosing it during the "
         "Vagrant phase. While Guiding, the Spirit draws from the "
-        "Faction's Agenda deck and picks which Agenda the Faction "
+        "Faction's Agenda pool and picks which Agenda the Faction "
         "plays each turn. Guidance lasts until the Spirit's "
         "Influence runs out."
     )
@@ -1050,7 +1090,7 @@ class GameScene:
     _UNGUIDED_FACTION_TOOLTIP = (
         "This Faction is not currently Guided by any Spirit. "
         "An unguided Faction draws and plays 1 random Agenda "
-        "from its Agenda deck each turn. A Vagrant Spirit can "
+        "from its Agenda pool each turn. A Vagrant Spirit can "
         "choose to Guide it during the Vagrant phase."
     )
 
@@ -1063,7 +1103,7 @@ class GameScene:
         return (
             "When Guidance begins, the Spirit's Influence is set to 3. "
             "Spirits draw 1 Agenda card + however much Influence they have "
-            "from the Guided Faction's Agenda deck, choose 1 of the drawn "
+            "from the Guided Faction's Agenda pool, choose 1 of the drawn "
             "Agendas for their Guided Faction to play, then lose 1 Influence. "
             f"This Spirit currently has {influence} remaining Influence and "
             f"will become Vagrant again after that many turns."
@@ -1391,7 +1431,7 @@ class GameScene:
         # Draw faction overview strip (with war indicators, use display state)
         disp_factions = self.display_factions
         animated_agenda_factions = self.animation.get_persistent_agenda_factions()
-        self.agenda_label_rects = self.ui_renderer.draw_faction_overview(
+        self.agenda_label_rects, self.pool_icon_rects = self.ui_renderer.draw_faction_overview(
             screen, disp_factions, self.faction_agendas_this_turn,
             wars=render_wars,
             faction_spoils_agendas=self.faction_spoils_agendas_this_turn,
@@ -1573,6 +1613,36 @@ class GameScene:
                 r.centerx, r.bottom, below=True,
             ))
 
+        # Agenda pool icon hover tooltip
+        if self.hovered_pool_faction:
+            pool_rect = self.pool_icon_rects.get(self.hovered_pool_faction)
+            if pool_rect:
+                fdata = self.display_factions.get(self.hovered_pool_faction, {})
+                pool_types = fdata.get("agenda_pool", []) if isinstance(fdata, dict) else []
+                change_modifiers = fdata.get("change_modifiers", {}) if isinstance(fdata, dict) else {}
+                if pool_types:
+                    counts: dict[str, int] = {}
+                    for pt in pool_types:
+                        counts[pt] = counts.get(pt, 0) + 1
+                    fname = FACTION_DISPLAY_NAMES.get(self.hovered_pool_faction, self.hovered_pool_faction)
+                    lines = [f"{fname} Agenda Pool"]
+                    for at_str in ["steal", "trade", "expand", "change"]:
+                        c = counts.get(at_str, 0)
+                        mod = change_modifiers.get(at_str, 0)
+                        mod_str = "+" * mod if mod > 0 else ""
+                        suffix = f" {mod_str}" if mod_str else ""
+                        if c == 0:
+                            lines.append(f"  {at_str.title()}{suffix}: none")
+                        elif c == 1:
+                            lines.append(f"  {at_str.title()}{suffix}")
+                        else:
+                            lines.append(f"  {c}x {at_str.title()}{suffix}")
+                    tooltip_text = "\n".join(lines)
+                    self.tooltip_registry.offer(TooltipDescriptor(
+                        tooltip_text, [],
+                        pool_rect.centerx, pool_rect.bottom, below=True,
+                    ))
+
         # Render the single active tooltip (suppressed when popups are open)
         self.tooltip_registry.render(screen, self.small_font, self.popup_manager)
 
@@ -1694,7 +1764,7 @@ class GameScene:
         "this turn, 2 additional choices next turn and 1 additional "
         "choice the turn after that. You will be ejected after this "
         "last turn of Guidance, but you will leave behind a lasting "
-        "effect: adding an additional Agenda card to its Agenda deck.\n\n"
+        "effect: replacing one Agenda card in its Agenda pool with one of your choice.\n\n"
         "Additionally, every time you begin and end Guidance of a "
         "Faction, you will attempt to become Worshipped by that Faction. "
         "If that Faction is not Worshipping any Spirit, you automatically "
@@ -1856,15 +1926,19 @@ class GameScene:
         faction_name = FACTION_DISPLAY_NAMES.get(self.ejection_faction, self.ejection_faction)
         title_text = (
             f"As the last remnants of your Influence leave the {faction_name} faction, "
-            f"you nudge their future. Choose an Agenda card to add to {faction_name}'s Agenda deck:"
+            f"you nudge their future. Choose one card to remove from {faction_name}'s Agenda pool "
+            f"and one to add in its place:"
         )
-        keywords = ["Influence", "Agenda deck"]
+        keywords = ["Influence", "Agenda pool"]
         text_x = 20
         max_text_width = max(220, _HEX_MAP_LEFT_X - 30)
         lines = self._wrap_lines(title_text, self.font, max_text_width)
         line_h = self.font.get_linesize()
         title_h = len(lines) * line_h
-        buttons_top = min((btn.rect.top for btn in self.action_buttons), default=SCREEN_HEIGHT - 200)
+        buttons_top = min(
+            (btn.rect.top for btn in self.remove_buttons + self.action_buttons),
+            default=SCREEN_HEIGHT - 240,
+        )
         text_y = max(96, buttons_top - title_h - 10)
         self.ejection_keyword_rects = self._render_rich_lines(
             screen, self.font, lines, text_x, text_y,
@@ -1875,23 +1949,42 @@ class GameScene:
             hovered_keyword_color=(140, 255, 245),
         )
 
-        # Highlight selected button
+        # Section labels
+        if self.remove_buttons:
+            remove_label_y = self.remove_buttons[0].rect.top - line_h - 2
+            lbl = self.font.render("Remove:", True, (200, 120, 120))
+            screen.blit(lbl, (text_x, remove_label_y))
+        if self.action_buttons:
+            add_label_y = self.action_buttons[0].rect.top - line_h - 2
+            lbl = self.font.render("Add:", True, (120, 200, 120))
+            screen.blit(lbl, (text_x, add_label_y))
+
+        # Highlight and draw remove buttons
+        for btn in self.remove_buttons:
+            if self.selected_ejection_remove_type and btn.text.lower() == self.selected_ejection_remove_type:
+                btn.color = (160, 60, 60)
+            else:
+                btn.color = (110, 50, 50)
+            btn.draw(screen, self.font)
+
+        # Highlight and draw add buttons
         for btn in self.action_buttons:
-            if self.selected_ejection_type and btn.text.lower() == self.selected_ejection_type:
-                btn.color = (120, 80, 180)
+            if self.selected_ejection_add_type and btn.text.lower() == self.selected_ejection_add_type:
+                btn.color = (80, 150, 80)
             else:
                 btn.color = (80, 60, 130)
             btn.draw(screen, self.font)
 
-        # Register ejection button tooltips with the registry
-        for btn in self.action_buttons:
+        # Register tooltips for all ejection buttons
+        all_ejection_btns = self.remove_buttons + self.action_buttons
+        for btn in all_ejection_btns:
             if btn.tooltip and btn.hovered and (btn.tooltip_always or not btn.enabled):
                 self.tooltip_registry.offer(TooltipDescriptor(
                     btn.tooltip, _GUIDANCE_HOVER_REGIONS,
                     btn.rect.centerx, btn.rect.top,
                 ))
         if self.hovered_ejection_keyword:
-            tooltip = _INFLUENCE_TOOLTIP if self.hovered_ejection_keyword == "Influence" else _AGENDA_DECK_TOOLTIP
+            tooltip = _INFLUENCE_TOOLTIP if self.hovered_ejection_keyword == "Influence" else _AGENDA_POOL_TOOLTIP
             rects = self.ejection_keyword_rects.get(self.hovered_ejection_keyword, [])
             if rects:
                 mx, my = pygame.mouse.get_pos()
@@ -1905,15 +1998,12 @@ class GameScene:
                     anchor.centerx, anchor.bottom, below=True,
                 ))
 
-        # Selection feedback
-        if self.selected_ejection_type:
-            sel_text = self.font.render(
-                f"Selected: {self.selected_ejection_type.title()}", True, (200, 200, 220))
-            screen.blit(sel_text, (20, SCREEN_HEIGHT - 110))
-
         # Confirm button
         if self.submit_button:
-            self.submit_button.enabled = self.selected_ejection_type is not None
+            self.submit_button.enabled = (
+                self.selected_ejection_remove_type is not None
+                and self.selected_ejection_add_type is not None
+            )
             self.submit_button.draw(screen, self.font)
 
     def _wrap_lines(self, text: str, font: pygame.font.Font, max_width: int) -> list[str]:

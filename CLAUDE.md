@@ -46,14 +46,14 @@ Each phase: wait for input → validate → resolve → broadcast → transition
 ### Sub-phases
 Several phases trigger sub-phases where the server waits for a specific player choice before continuing. These are **bare strings**, not in the `Phase` enum:
 - `change_choice` — After a Change agenda resolves, the guiding spirit picks a modifier card
-- `ejection_choice` — When a spirit is ejected (0 influence), they pick an agenda card to add to the faction's pool
+- `ejection_choice` — When a spirit is ejected (0 influence), they pick one agenda card to remove from the faction's pool and one to add in its place (pool size stays the same)
 - `spoils_choice` — After war victories, the winning guided spirit picks spoils agenda cards for ALL wars at once (multi-pick UI). Server sends a `choices` list with one entry per war won.
 - `spoils_change_choice` — If any spoils cards are Change, the spirit picks modifier cards for all of them at once
 
 ### Core game concepts
 - **6 factions** (Mountain, Mesa, Sand, Plains, River, Jungle) on a hex grid (axial coords, side-length 5)
 - **Spirits** (players) indirectly control factions via guidance and influence
-- **Agenda deck** is a static pool — cards are sampled with replacement (`random.choices`), never removed. Duplicates are possible. `add_agenda_card()` (ejection) permanently grows the pool.
+- **Agenda pool** — cards are sampled with replacement (`random.choices`), never consumed. Duplicates are possible. `replace_agenda_card()` (ejection) swaps one card type for another, keeping the pool size constant.
 - **Agenda resolution order** is always: Trade → Steal → Expand → Change (same-type resolves simultaneously)
 - **Wars** have a two-turn lifecycle: erupt → ripen → resolve. All ripe wars resolve simultaneously using snapshotted territory counts; gold changes are applied as a net batch after all wars resolve.
 - **Worship** (`worship_spirit` on factions): spirits compete for faction Worship via idol counts; a spirit cannot guide a faction that Worships them
@@ -74,7 +74,7 @@ Wars can generate spoils choices. When a faction wins a war, a spoils card is dr
 Several game moments follow the same pattern: the server sends a list of cards to a specific player, the client renders a card picker UI, the player clicks a card, and the client sends back the chosen index. This pattern is used for:
 - **Agenda choice** (AGENDA_PHASE): spirit draws `1 + influence` cards from pool, picks one
 - **Change modifier** (change_choice): spirit picks from the Change modifier deck
-- **Ejection agenda** (ejection_choice): ejected spirit picks an agenda type to add to the pool
+- **Ejection agenda** (ejection_choice): ejected spirit picks a type to remove and a type to add (two-step UI). Server sends `agenda_pool` (current pool list) in options. Client sends `remove_type` + `add_type`.
 - **Spoils cards** (spoils_choice): spirit picks from drawn spoils cards for ALL wars at once. Server sends `options.choices` (list of {cards, loser}). Client renders multiple card pickers vertically. Client sends back `card_indices` (list of chosen index per war).
 - **Spoils Change modifiers** (spoils_change_choice): follow-up if any spoils cards are Change. Same multi-pick pattern.
 
