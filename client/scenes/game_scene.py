@@ -151,8 +151,11 @@ class GameScene:
         self._display_factions: dict | None = None
         self._display_wars: list | None = None
         self.waiting_for: list[str] = []
+        self.has_submitted: bool = False
         self.event_log: list[str] = []
         self.event_log_scroll_offset: int = 0
+        # Per-spirit influence values from last state update (for fade animation detection)
+        self._influence_prev: dict[str, int] = {}
 
         # Faction overview tracking
         self.faction_agendas_this_turn: dict[str, str] = {}
@@ -263,7 +266,17 @@ class GameScene:
         self.turn = data.get("turn", self.turn)
         self.phase = data.get("phase", self.phase)
         self.factions = data.get("factions", self.factions)
+        # Snapshot old influence before overwriting spirits, so we can detect decreases
+        old_influences = {sid: s.get("influence", 0) for sid, s in self.spirits.items()}
         self.spirits = data.get("spirits", self.spirits)
+        # Start fade-out animations for circles that lost influence
+        for sid, spirit in self.spirits.items():
+            new_inf = spirit.get("influence", 0)
+            old_inf = old_influences.get(sid, self._influence_prev.get(sid, new_inf))
+            if old_inf > new_inf:
+                for idx in range(new_inf, old_inf):
+                    self.animation.add_tween(f"infl_{sid}_{idx}", 1.0, 0.0, 3.0)
+            self._influence_prev[sid] = new_inf
 
         # Parse wars
         self.wars = []
@@ -303,6 +316,20 @@ class GameScene:
         self._display_hex_ownership = None
         self._display_factions = None
         self._display_wars = None
+
+    def _get_influence_fills(self, spirit_id: str) -> list[float]:
+        """Return a list of 3 fill values (0.0-1.0) for each influence circle slot.
+
+        Filled slots use 1.0; slots lost since last update use a fading tween value.
+        """
+        influence = self.spirits.get(spirit_id, {}).get("influence", 0)
+        fills = []
+        for idx in range(3):
+            if idx < influence:
+                fills.append(1.0)
+            else:
+                fills.append(self.animation.get_tween_value(f"infl_{spirit_id}_{idx}", 0.0))
+        return fills
 
     @property
     def display_hex_ownership(self) -> dict:
@@ -427,6 +454,7 @@ class GameScene:
                                 self.spoils_cards = []
                                 self.spoils_opponents = []
                                 self.spoils_selections = []
+                                self.has_submitted = True
                             return
                     y_offset += _MULTI_CHOICE_BLOCK_STEP
 
@@ -444,6 +472,7 @@ class GameScene:
                                 self.spoils_change_cards = []
                                 self.spoils_change_opponents = []
                                 self.spoils_change_selections = []
+                                self.has_submitted = True
                             return
                     y_offset += _MULTI_CHOICE_BLOCK_STEP
 
@@ -552,12 +581,14 @@ class GameScene:
                                          self.selected_hex[0], self.selected_hex[1])
                 self.app.network.send(MessageType.SUBMIT_VAGRANT_ACTION, payload)
                 self._clear_selection()
+                self.has_submitted = True
         elif self.phase == Phase.AGENDA_PHASE.value:
             if self.selected_agenda_index >= 0:
                 self.app.network.send(MessageType.SUBMIT_AGENDA_CHOICE, {
                     "agenda_index": self.selected_agenda_index,
                 })
                 self._clear_selection()
+                self.has_submitted = True
         elif self.phase == "ejection_choice":
             if self.selected_ejection_remove_type and self.selected_ejection_add_type:
                 self.app.network.send(MessageType.SUBMIT_EJECTION_AGENDA, {
@@ -566,10 +597,12 @@ class GameScene:
                 })
                 self._clear_selection()
                 self.ejection_pending = False
+                self.has_submitted = True
 
     def _submit_card_choice(self, index: int, msg_type: MessageType, card_attr: str):
         self.app.network.send(msg_type, {"card_index": index})
         setattr(self, card_attr, [])
+        self.has_submitted = True
 
     def _clear_selection(self):
         self.selected_faction = None
@@ -697,6 +730,7 @@ class GameScene:
     def _setup_phase_ui(self):
         """Build UI elements for the current phase."""
         self._clear_selection()
+        self.has_submitted = False
         action = self.phase_options.get("action", "none")
 
         if self.phase == Phase.VAGRANT_PHASE.value and action == "choose":
@@ -1481,10 +1515,12 @@ class GameScene:
         if self.spirit_panel_spirit_id:
             # Spirit panel
             spirit = self.spirits.get(self.spirit_panel_spirit_id, {})
+            fills = self._get_influence_fills(self.spirit_panel_spirit_id)
             self.ui_renderer.draw_spirit_panel(
                 screen, spirit, self.factions, self.all_idols,
                 self.hex_ownership, SCREEN_WIDTH - 240, 102, 230,
                 my_spirit_id=self.spirit_panel_spirit_id,
+                circle_fills=fills,
             )
             # Clear faction panel rects
             self.ui_renderer.faction_panel_rect = None
@@ -1521,6 +1557,18 @@ class GameScene:
             self.ui_renderer.spirit_panel_influence_rect = None
             self.ui_renderer.spirit_panel_worship_rects.clear()
 
+        # Draw persistent spirit stats panel (bottom, left of event log)
+        my_spirit = self.spirits.get(self.app.my_spirit_id, {})
+        if my_spirit:
+            fills = self._get_influence_fills(self.app.my_spirit_id)
+            self.ui_renderer.draw_spirit_panel(
+                screen, my_spirit, self.factions, self.all_idols,
+                self.hex_ownership, SCREEN_WIDTH - 540, SCREEN_HEIGHT - 200, 230,
+                my_spirit_id=self.app.my_spirit_id,
+                circle_fills=fills,
+                store_hover_rects=False,
+            )
+
         # Draw event log (bottom right)
         self.ui_renderer.draw_event_log(
             screen, self.event_log,
@@ -1529,9 +1577,12 @@ class GameScene:
             highlight_log_idx=self.highlighted_log_index,
         )
 
-        # Draw waiting indicator (suppress while UI is deferred for animations)
-        if self.waiting_for and not self.orchestrator.deferred_phase_start:
-            self.ui_renderer.draw_waiting_overlay(screen, self.waiting_for, self.spirits)
+        # Draw waiting indicator near confirm button area, only after player has submitted
+        if self.has_submitted and self.waiting_for and not self.orchestrator.deferred_phase_start:
+            self.ui_renderer.draw_waiting_overlay(
+                screen, self.waiting_for, self.spirits,
+                x=20, y=SCREEN_HEIGHT - 90,
+            )
 
         # Reset tooltip registry for this frame (before phase-specific UI
         # which may offer tooltips, and before the main tooltip registration block)
@@ -1884,20 +1935,6 @@ class GameScene:
                 self.idol_title_rect.bottom, below=True,
             ))
 
-        # Selection info at bottom
-        y = SCREEN_HEIGHT - 110
-        parts = []
-        if self.selected_faction:
-            fname = FACTION_DISPLAY_NAMES.get(self.selected_faction, self.selected_faction)
-            parts.append(f"Guide: {fname}")
-        if self.selected_idol_type:
-            parts.append(f"Idol: {self.selected_idol_type}")
-        if self.selected_hex:
-            parts.append(f"Hex: ({self.selected_hex[0]}, {self.selected_hex[1]})")
-        if parts:
-            text = self.font.render(" | ".join(parts), True, (200, 200, 220))
-            screen.blit(text, (SCREEN_WIDTH // 2 - text.get_width() // 2, y))
-
         # Submit button
         if self.submit_button:
             has_guide = bool(self.selected_faction)
@@ -1908,7 +1945,46 @@ class GameScene:
                 self.submit_button.enabled = has_guide and has_idol
             else:
                 self.submit_button.enabled = has_guide or has_idol
+
+            # Selection info right above the Confirm button
+            parts = []
+            if self.selected_faction:
+                fname = FACTION_DISPLAY_NAMES.get(self.selected_faction, self.selected_faction)
+                parts.append(f"Guide: {fname}")
+            if self.selected_idol_type:
+                parts.append(f"Idol: {self.selected_idol_type}")
+            if self.selected_hex:
+                parts.append(f"Hex: ({self.selected_hex[0]}, {self.selected_hex[1]})")
+            if parts:
+                text = self.font.render(" | ".join(parts), True, (200, 200, 220))
+                screen.blit(text, (20, self.submit_button.rect.top - text.get_height() - 4))
+
+            # Disabled tooltip: explain what's still needed
+            if not self.submit_button.enabled:
+                missing = []
+                if can_guide and not has_guide:
+                    missing.append("a Faction to Guide")
+                if can_place_idol:
+                    if not self.selected_idol_type and not self.selected_hex:
+                        missing.append("an Idol type and a hex location")
+                    elif not self.selected_idol_type:
+                        missing.append("an Idol type")
+                    elif not self.selected_hex:
+                        missing.append("a hex location for your Idol")
+                if missing:
+                    self.submit_button.tooltip = "Still needed: " + ", ".join(missing)
+                else:
+                    self.submit_button.tooltip = None
+            else:
+                self.submit_button.tooltip = None
+
             self.submit_button.draw(screen, self.font)
+            if (self.submit_button.tooltip and self.submit_button.hovered
+                    and not self.submit_button.enabled):
+                self.tooltip_registry.offer(TooltipDescriptor(
+                    self.submit_button.tooltip, _GUIDANCE_HOVER_REGIONS,
+                    self.submit_button.rect.centerx, self.submit_button.rect.top,
+                ))
 
     def _get_current_faction_modifiers(self) -> dict:
         """Get the change_modifiers for the current player's guided faction."""
@@ -1997,11 +2073,11 @@ class GameScene:
 
         # Section labels
         if self.remove_buttons:
-            remove_label_y = self.remove_buttons[0].rect.top - line_h - 2
+            remove_label_y = self.remove_buttons[0].rect.top - line_h - 8
             lbl = self.font.render("Remove:", True, (200, 120, 120))
             screen.blit(lbl, (text_x, remove_label_y))
         if self.action_buttons:
-            add_label_y = self.action_buttons[0].rect.top - line_h - 2
+            add_label_y = self.action_buttons[0].rect.top - line_h - 8
             lbl = self.font.render("Add:", True, (120, 200, 120))
             screen.blit(lbl, (text_x, add_label_y))
 
