@@ -758,7 +758,9 @@ class UIRenderer:
     def draw_spirit_panel(self, surface: "pygame.Surface", spirit_data: dict,
                           factions: dict, all_idols: list, hex_ownership: dict,
                           x: int, y: int, width: int = 230,
-                          my_spirit_id: str = ""):
+                          my_spirit_id: str = "",
+                          circle_fills: "list[float] | None" = None,
+                          store_hover_rects: bool = True):
         """Draw spirit info panel showing guidance, influence, worship, and idol counts."""
         if not spirit_data:
             return
@@ -786,7 +788,8 @@ class UIRenderer:
         panel_rect = pygame.Rect(x, y, width, panel_h)
         pygame.draw.rect(surface, (30, 30, 40), panel_rect, border_radius=4)
         pygame.draw.rect(surface, (255, 255, 100), panel_rect, 2, border_radius=4)
-        self.spirit_panel_rect = panel_rect
+        if store_hover_rects:
+            self.spirit_panel_rect = panel_rect
 
         dy = y + 8
 
@@ -812,20 +815,40 @@ class UIRenderer:
             label_surf = self.small_font.render("Vagrant", True, (140, 140, 160))
             surface.blit(label_surf, (x + 10, dy))
             guidance_text_w = label_surf.get_width()
-        self.spirit_panel_guidance_rect = pygame.Rect(x + 10, guidance_line_y, guidance_text_w, 16)
+        if store_hover_rects:
+            self.spirit_panel_guidance_rect = pygame.Rect(x + 10, guidance_line_y, guidance_text_w, 16)
         draw_dotted_underline(surface, x + 10, guidance_line_y + 14, guidance_text_w)
         dy += 18
 
-        # Influence line
+        # Influence circles
         influence_line_y = dy
-        inf_surf = self.small_font.render(f"Influence: {influence}", True, (180, 180, 200))
-        surface.blit(inf_surf, (x + 10, dy))
-        self.spirit_panel_influence_rect = pygame.Rect(x + 10, influence_line_y, inf_surf.get_width(), 16)
-        draw_dotted_underline(surface, x + 10, influence_line_y + 14, inf_surf.get_width())
-        dy += 22
+        inf_label = self.small_font.render("Influence ", True, (180, 180, 200))
+        surface.blit(inf_label, (x + 10, dy))
+        circle_r = 7
+        cx_start = x + 10 + inf_label.get_width()
+        for idx in range(3):
+            cx = cx_start + idx * (circle_r * 2 + 3) + circle_r
+            cy = dy + circle_r
+            if circle_fills is not None:
+                fill = circle_fills[idx]
+            else:
+                fill = 1.0 if idx < influence else 0.0
+            if fill > 0.01:
+                tmp = pygame.Surface((circle_r * 2, circle_r * 2), pygame.SRCALPHA)
+                pygame.draw.circle(tmp, (180, 180, 220, int(fill * 255)),
+                                   (circle_r, circle_r), circle_r)
+                surface.blit(tmp, (cx - circle_r, cy - circle_r))
+            pygame.draw.circle(surface, (120, 120, 160), (cx, cy), circle_r, 1)
+        circles_w = 3 * (circle_r * 2 + 3)
+        total_w = inf_label.get_width() + circles_w
+        if store_hover_rects:
+            self.spirit_panel_influence_rect = pygame.Rect(x + 10, influence_line_y, total_w, circle_r * 2)
+        draw_dotted_underline(surface, x + 10, influence_line_y + circle_r * 2 + 2, total_w)
+        dy += circle_r * 2 + 6
 
         # Worshipped by section
-        self.spirit_panel_worship_rects.clear()
+        if store_hover_rects:
+            self.spirit_panel_worship_rects.clear()
         section_surf = self.small_font.render("Worshipped by:", True, (150, 150, 170))
         surface.blit(section_surf, (x + 10, dy))
         dy += 18
@@ -837,7 +860,8 @@ class UIRenderer:
                 fname_surf = self.small_font.render(faction_name, True, faction_color)
                 surface.blit(fname_surf, (x + 14, dy))
                 fname_w = fname_surf.get_width()
-                self.spirit_panel_worship_rects[fid] = pygame.Rect(x + 14, dy, fname_w, 16)
+                if store_hover_rects:
+                    self.spirit_panel_worship_rects[fid] = pygame.Rect(x + 14, dy, fname_w, 16)
                 draw_dotted_underline(surface, x + 14, dy + 14, fname_w)
                 dy += 18
 
@@ -1050,12 +1074,15 @@ class UIRenderer:
                 surface.blit(arrow_down, (indicator_x, y + height - 18))
 
     def draw_waiting_overlay(self, surface: pygame.Surface, waiting_for: list[str],
-                             spirits: dict):
+                             spirits: dict, x: int = None, y: int = None):
         """Draw overlay showing who we're waiting for."""
         if not waiting_for:
             return
         names = [spirits.get(sid, {}).get("name", sid[:6]) for sid in waiting_for]
         text = f"Waiting for: {', '.join(names)}"
         text_surf = self.font.render(text, True, (200, 200, 100))
-        x = surface.get_width() // 2 - text_surf.get_width() // 2
-        surface.blit(text_surf, (x, 102))
+        if x is None:
+            x = surface.get_width() // 2 - text_surf.get_width() // 2
+        if y is None:
+            y = 102
+        surface.blit(text_surf, (x, y))
