@@ -117,6 +117,12 @@ _WAR_HOVER_REGIONS = [
     HoverRegion("resolves", _WAR_RESOLVES_TOOLTIP, sub_regions=[]),
 ]
 
+_RIBBON_WAR_HOVER_REGIONS = [
+    HoverRegion("War", _WAR_TOOLTIP, sub_regions=[
+        HoverRegion("resolves", _WAR_RESOLVES_TOOLTIP, sub_regions=[]),
+    ]),
+]
+
 _CHOICE_CARD_Y = 136
 _MULTI_CHOICE_BLOCK_STEP = 220
 
@@ -211,6 +217,9 @@ class GameScene:
         # Pool icon hover state
         self.pool_icon_rects: dict[str, pygame.Rect] = {}
         self.hovered_pool_faction: str | None = None
+        # Ribbon war indicator hover state
+        self.ribbon_war_rects: dict[str, pygame.Rect] = {}
+        self.hovered_ribbon_war_fid: str | None = None
 
         # Faction panel / VP hover tooltip state
         self.hovered_panel_guided: bool = False
@@ -349,6 +358,12 @@ class GameScene:
             for fid, rect in self.pool_icon_rects.items():
                 if rect.collidepoint(event.pos):
                     self.hovered_pool_faction = fid
+                    break
+            # Ribbon war indicator hover detection
+            self.hovered_ribbon_war_fid = None
+            for fid, rect in self.ribbon_war_rects.items():
+                if rect.collidepoint(event.pos):
+                    self.hovered_ribbon_war_fid = fid
                     break
             # Popup keyword hover
             self.popup_manager.update_hover(event.pos)
@@ -1109,6 +1124,20 @@ class GameScene:
             f"will become Vagrant again after that many turns."
         )
 
+    def _build_ribbon_war_tooltip(self, fid: str) -> str:
+        """Build 'At War with: Mountain, Mesa' tooltip for ribbon war indicator."""
+        war_names = []
+        for w in self.display_wars:
+            fa = w.get('faction_a') if isinstance(w, dict) else getattr(w, 'faction_a', None)
+            fb = w.get('faction_b') if isinstance(w, dict) else getattr(w, 'faction_b', None)
+            if fa == fid:
+                war_names.append(FACTION_DISPLAY_NAMES.get(fb, fb))
+            elif fb == fid:
+                war_names.append(FACTION_DISPLAY_NAMES.get(fa, fa))
+        if not war_names:
+            return "At War with: (none)"
+        return f"At War with: {', '.join(war_names)}"
+
     def _build_worship_panel_tooltip(self, faction_id: str) -> str:
         """Build tooltip text for Worshipping hover."""
         worship_id = self.ui_renderer.panel_worship_spirit_id
@@ -1432,7 +1461,7 @@ class GameScene:
         # Draw faction overview strip (with war indicators, use display state)
         disp_factions = self.display_factions
         animated_agenda_factions = self.animation.get_persistent_agenda_factions()
-        self.agenda_label_rects, self.pool_icon_rects = self.ui_renderer.draw_faction_overview(
+        self.agenda_label_rects, self.pool_icon_rects, self.ribbon_war_rects = self.ui_renderer.draw_faction_overview(
             screen, disp_factions, self.faction_agendas_this_turn,
             wars=render_wars,
             faction_spoils_agendas=self.faction_spoils_agendas_this_turn,
@@ -1643,6 +1672,16 @@ class GameScene:
                         tooltip_text, [],
                         pool_rect.centerx, pool_rect.bottom, below=True,
                     ))
+
+        # Ribbon war indicator hover tooltip
+        if self.hovered_ribbon_war_fid:
+            war_rect = self.ribbon_war_rects.get(self.hovered_ribbon_war_fid)
+            if war_rect:
+                tooltip_text = self._build_ribbon_war_tooltip(self.hovered_ribbon_war_fid)
+                self.tooltip_registry.offer(TooltipDescriptor(
+                    tooltip_text, _RIBBON_WAR_HOVER_REGIONS,
+                    war_rect.centerx, war_rect.bottom, below=True,
+                ))
 
         # Render the single active tooltip (suppressed when popups are open)
         self.tooltip_registry.render(screen, self.small_font, self.popup_manager)

@@ -248,6 +248,7 @@ class UIRenderer:
         animated_agenda_factions = animated_agenda_factions or set()
         agenda_label_entries: list[tuple[str, str, bool, pygame.Rect]] = []
         pool_icon_rects: dict[str, pygame.Rect] = {}
+        ribbon_war_rects: dict[str, pygame.Rect] = {}
         strip_y = 42
         strip_h = 55
         sw = surface.get_width()
@@ -378,19 +379,23 @@ class UIRenderer:
                 pool_icon_rects[fid] = pygame.Rect(
                     grid_start_x, grid_start_y, grid_total_w, grid_total_h)
 
-            # War indicators: to the right of the pool grid
-            wars_x_start = grid_start_x + grid_total_w + 5
+            # War indicators: centered in the faction cell (away from the pool)
             sy = grid_start_y + grid_total_h // 2  # center y aligned with pool grid
             if fid in war_lookup:
+                opponents = war_lookup[fid]
+                # Total width: 14px for swords + 14px per opponent hex
+                total_war_w = 14 + len(opponents) * 14
+                # Center the group horizontally in the faction cell
+                wars_x_start = cx + cell_w // 2 - total_war_w // 2
                 wx = wars_x_start
-                any_ripe = any(ripe for _, ripe in war_lookup[fid])
+                any_ripe = any(ripe for _, ripe in opponents)
                 sword_color = (255, 50, 50) if any_ripe else (180, 60, 60)
                 # Draw crossed swords icon (two diagonal lines)
                 pygame.draw.line(surface, sword_color, (wx, sy - 5), (wx + 10, sy + 5), 2)
                 pygame.draw.line(surface, sword_color, (wx + 10, sy - 5), (wx, sy + 5), 2)
                 wx += 14
                 # Draw tiny hex for each enemy faction
-                for opponent_fid, is_ripe in war_lookup[fid]:
+                for opponent_fid, is_ripe in opponents:
                     enemy_color = tuple(FACTION_COLORS.get(opponent_fid, (150, 150, 150)))
                     hx, hy = wx + 5, sy  # center of tiny hex
                     r = 5  # radius of tiny hex
@@ -403,8 +408,10 @@ class UIRenderer:
                     if is_ripe:
                         pygame.draw.polygon(surface, (255, 255, 255), points, 1)
                     wx += 14
+                # Store hoverable rect covering the whole war indicator group
+                ribbon_war_rects[fid] = pygame.Rect(wars_x_start, strip_y, total_war_w, strip_h)
 
-        return agenda_label_entries, pool_icon_rects
+        return agenda_label_entries, pool_icon_rects, ribbon_war_rects
 
     def _render_strikethrough(self, surface, font, text_str, color, pos):
         """Render text with a strikethrough line."""
