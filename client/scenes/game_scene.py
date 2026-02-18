@@ -1296,6 +1296,7 @@ class GameScene:
             self.orchestrator.apply_hex_reveals(self._display_hex_ownership)
         if self._display_factions is not None:
             self.orchestrator.apply_gold_deltas(self._display_factions)
+            self.orchestrator.apply_change_modifier_deltas(self._display_factions)
         if self._display_wars is not None:
             self.orchestrator.apply_war_reveals(self._display_wars)
         self.orchestrator.try_show_deferred_phase_ui(self)
@@ -1905,7 +1906,10 @@ class GameScene:
     def _render_change_ui(self, screen):
         if not self.change_cards:
             return
-        title = self.font.render("Choose a Change modifier:", True, (200, 200, 220))
+        my_spirit = self.spirits.get(self.app.my_spirit_id, {})
+        fid = my_spirit.get("guided_faction", "")
+        faction_name = FACTION_DISPLAY_NAMES.get(fid, fid) if fid else "your Faction"
+        title = self.font.render(f"Choose a modifier for {faction_name}:", True, (200, 200, 220))
         title_x = max(20, (_HEX_MAP_LEFT_X - title.get_width()) // 2)
         screen.blit(title, (title_x, 106))
 
@@ -1916,10 +1920,13 @@ class GameScene:
         card_rects = self._calc_left_choice_card_rects(len(hand))
         start_x = card_rects[0].x if card_rects else 20
         start_y = 136
+        modifiers = self._get_current_faction_modifiers()
         self.ui_renderer.draw_card_hand(
             screen, hand, -1,
             start_x, start_y,
+            modifiers=modifiers,
             card_images=agenda_card_images,
+            show_preview_plus=True,
         )
 
     def _render_ejection_ui(self, screen):

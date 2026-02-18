@@ -243,6 +243,9 @@ class AgendaSlideAnimation:
         # War reveal: display war updates when this anim becomes active
         self.war_reveals: list[dict] | None = None
         self._wars_revealed: bool = False
+        # Change modifier reveal: display change_modifiers updates when this anim becomes active
+        self.change_modifier: str | None = None
+        self._change_modifier_applied: bool = False
 
     def update(self, dt: float):
         self.elapsed += dt

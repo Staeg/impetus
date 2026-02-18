@@ -360,6 +360,8 @@ class UIRenderer:
                     (grid_start_x,                         grid_start_y + icon_size + icon_gap),
                     (grid_start_x + icon_size + icon_gap,  grid_start_y + icon_size + icon_gap),
                 ]
+                change_mods = fd.get("change_modifiers", {}) if isinstance(fd, dict) else {}
+                plus_font = self._get_font(8)
                 for (px, py), at_str in zip(positions, pool_types):
                     img = agenda_ribbon_icons.get(at_str)
                     if img:
@@ -369,6 +371,10 @@ class UIRenderer:
                         icon_color = agenda_colors.get(at_str, (160, 160, 180))
                         pygame.draw.rect(surface, icon_color,
                                          pygame.Rect(px, py, icon_size, icon_size), border_radius=2)
+                    mod_count = change_mods.get(at_str, 0)
+                    if mod_count > 0:
+                        plus_surf = plus_font.render("+" * mod_count, True, (255, 255, 255))
+                        surface.blit(plus_surf, (px + 1, py + 1))
                 pool_icon_rects[fid] = pygame.Rect(
                     grid_start_x, grid_start_y, grid_total_w, grid_total_h)
 
@@ -923,7 +929,8 @@ class UIRenderer:
                        selected_index: int, x: int, y: int,
                        modifiers: dict | None = None,
                        card_images: dict | None = None,
-                       is_spoils: bool = False) -> list[pygame.Rect]:
+                       is_spoils: bool = False,
+                       show_preview_plus: bool = False) -> list[pygame.Rect]:
         """Draw clickable agenda cards. Returns list of card rects.
 
         Each card dict should have "agenda_type". May optionally have
@@ -959,6 +966,18 @@ class UIRenderer:
                 img_y = y + 30
                 surface.blit(img, (img_x, img_y))
                 desc_y = y + 30 + img.get_height() + 4
+                mod_count = modifiers.get(agenda_type, 0)
+                if mod_count > 0 or show_preview_plus:
+                    plus_size = max(10, img.get_height() // 3)
+                    plus_font = self._get_font(plus_size)
+                    plus_x = cx + 3  # left margin of card, clear of the centered image
+                    for k in range(mod_count):
+                        plus_surf = plus_font.render("+", True, (255, 255, 255))
+                        surface.blit(plus_surf, (plus_x, img_y + 2 + k * (plus_size + 2)))
+                    if show_preview_plus:
+                        faded_surf = plus_font.render("+", True, (255, 255, 255))
+                        faded_surf.set_alpha(70)
+                        surface.blit(faded_surf, (plus_x, img_y + 2 + mod_count * (plus_size + 2)))
 
             # Detailed description (custom or auto-generated)
             desc_lines = card.get("description") or self._build_card_description(
