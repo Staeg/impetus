@@ -214,15 +214,28 @@ class TestVagrantPhase:
             "guide_target": "mountain",
             "idol_type": "affluence", "idol_q": h[1][0], "idol_r": h[1][1],
         })
-        for _ in range(5):  # vagrant through cleanup
+        gs.resolve_current_phase()  # resolve vagrant phase
+
+        # Cooldown is set immediately after the contested guidance resolves.
+        # Check this now, before running war phases that might eliminate mountain.
+        assert "mountain" in gs.guidance_cooldowns.get("spirit_0", set())
+        assert "mountain" in gs.guidance_cooldowns.get("spirit_1", set())
+        err = gs.submit_action("spirit_0", {"guide_target": "mountain"})
+        assert err is not None  # blocked by cooldown
+
+        # Advance to next vagrant phase. Use a loop rather than a fixed count:
+        # the agenda phase can take 2 calls when a guided faction draws Change,
+        # and wars from automated setup turns may eliminate factions.
+        for _ in range(10):
+            if gs.phase == Phase.VAGRANT_PHASE:
+                break
             gs.resolve_current_phase()
 
-        # Next turn: mountain blocked for both spirits
-        opts0 = gs.get_phase_options("spirit_0")
-        assert "mountain" not in opts0["available_factions"]
-        assert "mountain" in opts0["contested_blocked"]
-        err = gs.submit_action("spirit_0", {"guide_target": "mountain"})
-        assert err is not None
+        # If mountain survived wars, verify it appears as contested-blocked.
+        if not gs.factions["mountain"].eliminated:
+            opts0 = gs.get_phase_options("spirit_0")
+            assert "mountain" not in opts0["available_factions"]
+            assert "mountain" in opts0["contested_blocked"]
 
         # Guide different factions instead, advance a full turn
         gs.pending_actions.clear()
@@ -231,15 +244,20 @@ class TestVagrantPhase:
         gs.resolve_current_phase()  # vagrant — clears cooldowns
         assert gs.spirits["spirit_0"].guided_faction == "mesa"
 
-        # Eject to become vagrant again, advance to next vagrant phase
+        # Eject to become vagrant again, advance to next vagrant phase.
+        # spirit_1 still guides plains, so agenda phase may block for change
+        # choices — loop until VAGRANT rather than using a fixed count.
         gs.spirits["spirit_0"].become_vagrant()
         gs.factions["mesa"].guiding_spirit = None
-        for _ in range(4):  # agenda through cleanup
+        for _ in range(10):
+            if gs.phase == Phase.VAGRANT_PHASE:
+                break
             gs.resolve_current_phase()
 
-        # Cooldown expired: mountain available again
-        opts0 = gs.get_phase_options("spirit_0")
-        assert "mountain" in opts0["available_factions"]
+        # Cooldown expired: mountain available again (if not eliminated by wars)
+        if not gs.factions["mountain"].eliminated:
+            opts0 = gs.get_phase_options("spirit_0")
+            assert "mountain" in opts0["available_factions"]
 
     def test_submit_no_action_fails(self):
         gs = make_game(2)

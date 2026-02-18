@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Workflow rules
 
 - **Never commit or push** unless the user explicitly asks you to. Do not proactively create commits, tags, or push to remote after completing a task.
+- **Version tags**: When asked to commit and push as the "next version", check existing tags (`git tag -l`) and increment — never overwrite an existing tag. If `v1.64` already exists, the next version is `v1.65`.
 
 ## Project Overview
 
