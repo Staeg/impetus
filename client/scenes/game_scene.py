@@ -1,8 +1,9 @@
 """Primary gameplay scene: hex map, UI, phases."""
 
 import pygame
+from dataclasses import dataclass
 from shared.constants import (
-    MessageType, Phase, AgendaType, IdolType, MAP_SIDE_LENGTH,
+    MessageType, Phase, SubPhase, AgendaType, IdolType, MAP_SIDE_LENGTH,
     SCREEN_WIDTH, SCREEN_HEIGHT, HEX_SIZE, FACTION_NAMES, FACTION_DISPLAY_NAMES, FACTION_COLORS,
     BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPREAD_IDOL_VP,
 )
@@ -127,6 +128,14 @@ _CHOICE_CARD_Y = 136
 _MULTI_CHOICE_BLOCK_STEP = 220
 
 
+@dataclass
+class SpoilsEntry:
+    """One pending spoils card-pick for a single war."""
+    cards: list
+    loser: str
+    selected: int = -1
+
+
 class GameScene:
     def __init__(self, app):
         self.app = app
@@ -183,12 +192,8 @@ class GameScene:
         self.ejection_pool: list[str] = []
         self.selected_ejection_remove_type: str | None = None
         self.selected_ejection_add_type: str | None = None
-        self.spoils_cards: list[list[str]] = []  # list of card lists per war
-        self.spoils_opponents: list[str] = []   # opponent per war
-        self.spoils_selections: list[int] = []  # selected card index per war (-1 = none)
-        self.spoils_change_cards: list[list[str]] = []  # list of card lists per change choice
-        self.spoils_change_opponents: list[str] = []
-        self.spoils_change_selections: list[int] = []
+        self.spoils_entries: list[SpoilsEntry] = []
+        self.spoils_change_entries: list[SpoilsEntry] = []
 
         # UI buttons
         self.action_buttons: list[Button] = []
@@ -248,6 +253,16 @@ class GameScene:
 
         self._font = None
         self._small_font = None
+
+        # Network message dispatch table (built after all state is initialised)
+        self._net_handlers = {
+            MessageType.GAME_START:   self._handle_game_start,
+            MessageType.PHASE_START:  self._handle_phase_start,
+            MessageType.PHASE_RESULT: self._handle_phase_result,
+            MessageType.WAITING_FOR:  self._handle_waiting_for,
+            MessageType.GAME_OVER:    self._handle_game_over,
+            MessageType.ERROR:        self._handle_error,
+        }
 
     @property
     def font(self):
@@ -440,38 +455,33 @@ class GameScene:
                         return
 
             # Check spoils card clicks (multi-war)
-            if self.spoils_cards:
+            if self.spoils_entries:
                 y_offset = _CHOICE_CARD_Y
-                for war_idx, cards in enumerate(self.spoils_cards):
-                    rects = self._calc_left_choice_card_rects(len(cards), y=y_offset)
+                for war_idx, entry in enumerate(self.spoils_entries):
+                    rects = self._calc_left_choice_card_rects(len(entry.cards), y=y_offset)
                     for i, rect in enumerate(rects):
                         if rect.collidepoint(event.pos):
-                            self.spoils_selections[war_idx] = i
-                            # If all wars have a selection, submit
-                            if all(s >= 0 for s in self.spoils_selections):
+                            entry.selected = i
+                            if all(e.selected >= 0 for e in self.spoils_entries):
                                 self.app.network.send(MessageType.SUBMIT_SPOILS_CHOICE,
-                                    {"card_indices": list(self.spoils_selections)})
-                                self.spoils_cards = []
-                                self.spoils_opponents = []
-                                self.spoils_selections = []
+                                    {"card_indices": [e.selected for e in self.spoils_entries]})
+                                self.spoils_entries = []
                                 self.has_submitted = True
                             return
                     y_offset += _MULTI_CHOICE_BLOCK_STEP
 
             # Check spoils change card clicks (multi-choice)
-            if self.spoils_change_cards:
+            if self.spoils_change_entries:
                 y_offset = _CHOICE_CARD_Y
-                for choice_idx, cards in enumerate(self.spoils_change_cards):
-                    rects = self._calc_left_choice_card_rects(len(cards), y=y_offset)
+                for choice_idx, entry in enumerate(self.spoils_change_entries):
+                    rects = self._calc_left_choice_card_rects(len(entry.cards), y=y_offset)
                     for i, rect in enumerate(rects):
                         if rect.collidepoint(event.pos):
-                            self.spoils_change_selections[choice_idx] = i
-                            if all(s >= 0 for s in self.spoils_change_selections):
+                            entry.selected = i
+                            if all(e.selected >= 0 for e in self.spoils_change_entries):
                                 self.app.network.send(MessageType.SUBMIT_SPOILS_CHANGE_CHOICE,
-                                    {"card_indices": list(self.spoils_change_selections)})
-                                self.spoils_change_cards = []
-                                self.spoils_change_opponents = []
-                                self.spoils_change_selections = []
+                                    {"card_indices": [e.selected for e in self.spoils_change_entries]})
+                                self.spoils_change_entries = []
                                 self.has_submitted = True
                             return
                     y_offset += _MULTI_CHOICE_BLOCK_STEP
@@ -589,7 +599,7 @@ class GameScene:
                 })
                 self._clear_selection()
                 self.has_submitted = True
-        elif self.phase == "ejection_choice":
+        elif self.phase == SubPhase.EJECTION_CHOICE:
             if self.selected_ejection_remove_type and self.selected_ejection_add_type:
                 self.app.network.send(MessageType.SUBMIT_EJECTION_AGENDA, {
                     "remove_type": self.selected_ejection_remove_type,
@@ -627,111 +637,193 @@ class GameScene:
         self.hovered_ejection_keyword = None
 
     def handle_network(self, msg_type, payload):
-        if msg_type == MessageType.GAME_START:
-            self._update_state_from_snapshot(payload)
-            self.change_tracker.snapshot_and_reset(self.factions, self.spirits)
-            self.event_log.append("Game started.")
+        handler = self._net_handlers.get(msg_type)
+        if handler:
+            handler(payload)
 
-        elif msg_type == MessageType.PHASE_START:
-            phase = payload.get("phase", "")
-            action = payload.get("options", {}).get("action", "")
-            needs_input = action not in ("none", "") or phase in (
-                "change_choice", "spoils_choice",
-                "spoils_change_choice", "ejection_choice")
-            if needs_input and self.orchestrator.has_animations_playing():
-                self.orchestrator.deferred_phase_start = payload
-            else:
-                self.phase = payload.get("phase", self.phase)
-                self.turn = payload.get("turn", self.turn)
-                self.phase_options = payload.get("options", {})
-                self._setup_phase_ui()
+    def _handle_game_start(self, payload):
+        self._update_state_from_snapshot(payload)
+        self.change_tracker.snapshot_and_reset(self.factions, self.spirits)
+        self.event_log.append("Game started.")
 
-        elif msg_type == MessageType.WAITING_FOR:
-            self.waiting_for = payload.get("players_remaining", [])
+    def _handle_phase_start(self, payload):
+        phase = payload.get("phase", "")
+        action = payload.get("options", {}).get("action", "")
+        needs_input = action not in ("none", "") or phase in (
+            SubPhase.CHANGE_CHOICE, SubPhase.SPOILS_CHOICE,
+            SubPhase.SPOILS_CHANGE_CHOICE, SubPhase.EJECTION_CHOICE)
+        if needs_input and self.orchestrator.has_animations_playing():
+            self.orchestrator.deferred_phase_start = payload
+        else:
+            self.phase = payload.get("phase", self.phase)
+            self.turn = payload.get("turn", self.turn)
+            self.phase_options = payload.get("options", {})
+            self._setup_phase_ui()
 
-        elif msg_type == MessageType.PHASE_RESULT:
-            active_sub_phase = self.phase if self.phase in (
-                "change_choice", "spoils_choice", "spoils_change_choice") else None
-            # Snapshot display state before updating so animations render old state
-            events = payload.get("events", [])
-            _ANIM_ORDER = {
-                "trade": 0, "steal": 1,
-                "expand": 2, "expand_failed": 2, "expand_spoils": 2,
-                "change": 3,
-            }
-            agenda_events = [e for e in events if e.get("type", "") in _ANIM_ORDER
-                           and not e.get("is_guided_modifier")]
-            if agenda_events and "state" in payload:
-                self._snapshot_display_state()
-            if "state" in payload:
-                self._update_state_from_snapshot(payload["state"])
-            # Preserve sub-phases while this player still has cards to choose
-            if active_sub_phase == "change_choice" and self.change_cards:
-                self.phase = active_sub_phase
-            elif active_sub_phase == "spoils_choice" and any(self.spoils_cards):
-                self.phase = active_sub_phase
-            elif active_sub_phase == "spoils_change_choice" and any(self.spoils_change_cards):
-                self.phase = active_sub_phase
-            # Log events (consolidate agenda play + resolution into one line)
-            self._log_events_batch(events)
-            # VP gain animations
+    def _handle_waiting_for(self, payload):
+        self.waiting_for = payload.get("players_remaining", [])
+
+    def _handle_phase_result(self, payload):
+        active_sub_phase = self.phase if self.phase in (
+            SubPhase.CHANGE_CHOICE, SubPhase.SPOILS_CHOICE, SubPhase.SPOILS_CHANGE_CHOICE) else None
+        # Snapshot display state before updating so animations render old state
+        events = payload.get("events", [])
+        _ANIM_ORDER = {
+            "trade": 0, "steal": 1,
+            "expand": 2, "expand_failed": 2, "expand_spoils": 2,
+            "change": 3,
+        }
+        agenda_events = [e for e in events if e.get("type", "") in _ANIM_ORDER
+                       and not e.get("is_guided_modifier")]
+        if agenda_events and "state" in payload:
+            self._snapshot_display_state()
+        if "state" in payload:
+            self._update_state_from_snapshot(payload["state"])
+        # Preserve sub-phases while this player still has cards to choose
+        if active_sub_phase == SubPhase.CHANGE_CHOICE and self.change_cards:
+            self.phase = active_sub_phase
+        elif active_sub_phase == SubPhase.SPOILS_CHOICE and self.spoils_entries:
+            self.phase = active_sub_phase
+        elif active_sub_phase == SubPhase.SPOILS_CHANGE_CHOICE and self.spoils_change_entries:
+            self.phase = active_sub_phase
+        # Log events (consolidate agenda play + resolution into one line)
+        self._log_events_batch(events)
+        # VP gain animations
+        for event in events:
+            if event.get("type") == "vp_scored":
+                vp = event.get("vp_gained", 0)
+                sid = event.get("spirit", "")
+                if vp > 0 and sid:
+                    vp_pos = self.ui_renderer.vp_positions.get(sid)
+                    if vp_pos:
+                        self.animation.add_effect_animation(TextAnimation(
+                            f"+{vp:.1f} VP", vp_pos[0], vp_pos[1] + 16,
+                            (80, 255, 80),
+                            delay=0.0, duration=3.0, drift_pixels=40,
+                            direction=1, screen_space=True,
+                        ))
+        # Trigger agenda events immediately, but preserve turn_start segmentation
+        # for bootstrap payloads so Turn 1 and Turn 2 do not animate concurrently.
+        if agenda_events:
+            turn_batched_events: list[list[dict]] = []
+            current_turn_batch: list[dict] = []
+            saw_turn_markers = False
             for event in events:
-                if event.get("type") == "vp_scored":
-                    vp = event.get("vp_gained", 0)
-                    sid = event.get("spirit", "")
-                    if vp > 0 and sid:
-                        vp_pos = self.ui_renderer.vp_positions.get(sid)
-                        if vp_pos:
-                            self.animation.add_effect_animation(TextAnimation(
-                                f"+{vp:.1f} VP", vp_pos[0], vp_pos[1] + 16,
-                                (80, 255, 80),
-                                delay=0.0, duration=3.0, drift_pixels=40,
-                                direction=1, screen_space=True,
-                            ))
-            # Trigger agenda events immediately, but preserve turn_start segmentation
-            # for bootstrap payloads so Turn 1 and Turn 2 do not animate concurrently.
-            if agenda_events:
-                turn_batched_events: list[list[dict]] = []
-                current_turn_batch: list[dict] = []
-                saw_turn_markers = False
-                for event in events:
-                    etype = event.get("type", "")
-                    if etype == "turn_start":
-                        saw_turn_markers = True
-                        if current_turn_batch:
-                            turn_batched_events.append(current_turn_batch)
-                            current_turn_batch = []
-                        continue
-                    if (etype in _ANIM_ORDER or etype == "war_erupted") and not event.get("is_guided_modifier"):
-                        current_turn_batch.append(event)
-                if current_turn_batch:
-                    turn_batched_events.append(current_turn_batch)
+                etype = event.get("type", "")
+                if etype == "turn_start":
+                    saw_turn_markers = True
+                    if current_turn_batch:
+                        turn_batched_events.append(current_turn_batch)
+                        current_turn_batch = []
+                    continue
+                if (etype in _ANIM_ORDER or etype == "war_erupted") and not event.get("is_guided_modifier"):
+                    current_turn_batch.append(event)
+            if current_turn_batch:
+                turn_batched_events.append(current_turn_batch)
 
-                if not saw_turn_markers:
-                    war_events = [e for e in events if e.get("type") == "war_erupted"]
-                    anim_events = agenda_events + war_events
+            if not saw_turn_markers:
+                war_events = [e for e in events if e.get("type") == "war_erupted"]
+                anim_events = agenda_events + war_events
+                self.orchestrator.process_agenda_events(
+                    anim_events, self.hex_ownership, self.small_font)
+            else:
+                for batch in turn_batched_events:
                     self.orchestrator.process_agenda_events(
-                        anim_events, self.hex_ownership, self.small_font)
-                else:
-                    for batch in turn_batched_events:
-                        self.orchestrator.process_agenda_events(
-                            batch, self.hex_ownership, self.small_font)
-            # Clear previews after processing phase results
-            self.preview_guidance = None
-            self.preview_idol = None
+                        batch, self.hex_ownership, self.small_font)
+        # Clear previews after processing phase results
+        self.preview_guidance = None
+        self.preview_idol = None
 
-        elif msg_type == MessageType.GAME_OVER:
-            # Will be in the events
-            self.app.set_scene("results")
+    def _handle_game_over(self, payload):
+        # Game-over event will be in the PHASE_RESULT events; transition scene
+        self.app.set_scene("results")
 
-        elif msg_type == MessageType.ERROR:
-            self.event_log.append(f"Error: {payload.get('message', '?')}")
+    def _handle_error(self, payload):
+        self.event_log.append(f"Error: {payload.get('message', '?')}")
+
+    def _setup_change_choice_ui(self):
+        self.change_cards = self.phase_options.get("cards") or []
+
+    def _setup_spoils_choice_ui(self):
+        choices = self.phase_options.get("choices", [])
+        if choices:
+            self.spoils_entries = [
+                SpoilsEntry(cards=c.get("cards", []), loser=c.get("loser", ""))
+                for c in choices
+            ]
+        else:
+            # Backwards compat: single-war format
+            cards = self.phase_options.get("cards", [])
+            loser = self.phase_options.get("loser", "")
+            self.spoils_entries = [SpoilsEntry(cards=cards, loser=loser)] if cards else []
+
+    def _setup_spoils_change_choice_ui(self):
+        choices = self.phase_options.get("choices", [])
+        if choices:
+            self.spoils_change_entries = [
+                SpoilsEntry(cards=c.get("cards", []), loser=c.get("loser", ""))
+                for c in choices
+            ]
+        else:
+            cards = self.phase_options.get("cards", [])
+            loser = self.phase_options.get("loser", "")
+            self.spoils_change_entries = [SpoilsEntry(cards=cards, loser=loser)] if cards else []
+
+    def _setup_ejection_choice_ui(self):
+        self.ejection_pending = True
+        self.ejection_faction = self.phase_options.get("faction", "")
+        self.ejection_pool = self.phase_options.get("agenda_pool", [])
+        self.selected_ejection_remove_type = None
+        self.selected_ejection_add_type = None
+        modifiers = self._get_faction_modifiers(self.ejection_faction)
+        # Build remove buttons (one per unique type in the current pool)
+        y_remove = SCREEN_HEIGHT - 240
+        self.remove_buttons = []
+        seen_types: list[str] = []
+        for at_str in self.ejection_pool:
+            if at_str not in seen_types:
+                seen_types.append(at_str)
+        for i, at_str in enumerate(seen_types):
+            tooltip = build_agenda_tooltip(at_str, modifiers)
+            btn = Button(
+                pygame.Rect(20 + i * 110, y_remove, 100, 36),
+                at_str.title(), (110, 50, 50),
+                tooltip=tooltip,
+                tooltip_always=True,
+            )
+            self.remove_buttons.append(btn)
+        # Build add buttons (all agenda types)
+        y_add = SCREEN_HEIGHT - 185
+        self.action_buttons = []
+        for i, at in enumerate(AgendaType):
+            tooltip = build_agenda_tooltip(at.value, modifiers)
+            btn = Button(
+                pygame.Rect(20 + i * 110, y_add, 100, 36),
+                at.value.title(), (80, 60, 130),
+                tooltip=tooltip,
+                tooltip_always=True,
+            )
+            self.action_buttons.append(btn)
+        self.submit_button = Button(
+            pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
+            "Confirm", (60, 130, 60)
+        )
 
     def _setup_phase_ui(self):
         """Build UI elements for the current phase."""
         self._clear_selection()
         self.has_submitted = False
         action = self.phase_options.get("action", "none")
+
+        _SUB_PHASE_SETUP = {
+            SubPhase.CHANGE_CHOICE:        self._setup_change_choice_ui,
+            SubPhase.SPOILS_CHOICE:        self._setup_spoils_choice_ui,
+            SubPhase.SPOILS_CHANGE_CHOICE: self._setup_spoils_change_choice_ui,
+            SubPhase.EJECTION_CHOICE:      self._setup_ejection_choice_ui,
+        }
+        if self.phase in _SUB_PHASE_SETUP:
+            _SUB_PHASE_SETUP[self.phase]()
+            return
 
         if self.phase == Phase.VAGRANT_PHASE.value and action == "choose":
             # Build faction buttons (left) and idol buttons (right)
@@ -747,72 +839,6 @@ class GameScene:
             hand = self.phase_options.get("hand", [])
             self.agenda_hand = hand
             self.selected_agenda_index = -1
-            self.submit_button = Button(
-                pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
-                "Confirm", (60, 130, 60)
-            )
-
-        elif self.phase == "change_choice":
-            self.change_cards = payload_cards if (payload_cards := self.phase_options.get("cards")) else []
-
-        elif self.phase == "spoils_choice":
-            choices = self.phase_options.get("choices", [])
-            if choices:
-                self.spoils_cards = [c.get("cards", []) for c in choices]
-                self.spoils_opponents = [c.get("loser", "") for c in choices]
-            else:
-                # Backwards compat: single-war format
-                cards = self.phase_options.get("cards", [])
-                self.spoils_cards = [cards] if cards else []
-                self.spoils_opponents = [self.phase_options.get("loser", "")] if cards else []
-            self.spoils_selections = [-1] * len(self.spoils_cards)
-
-        elif self.phase == "spoils_change_choice":
-            choices = self.phase_options.get("choices", [])
-            if choices:
-                self.spoils_change_cards = [c.get("cards", []) for c in choices]
-                self.spoils_change_opponents = [c.get("loser", "") for c in choices]
-            else:
-                cards = self.phase_options.get("cards", [])
-                self.spoils_change_cards = [cards] if cards else []
-                self.spoils_change_opponents = [self.phase_options.get("loser", "")] if cards else []
-            self.spoils_change_selections = [-1] * len(self.spoils_change_cards)
-
-        elif self.phase == "ejection_choice":
-            self.ejection_pending = True
-            self.ejection_faction = self.phase_options.get("faction", "")
-            self.ejection_pool = self.phase_options.get("agenda_pool", [])
-            self.selected_ejection_remove_type = None
-            self.selected_ejection_add_type = None
-            modifiers = self._get_faction_modifiers(self.ejection_faction)
-            # Build remove buttons (one per unique type in the current pool)
-            y_remove = SCREEN_HEIGHT - 240
-            self.remove_buttons = []
-            seen_types: list[str] = []
-            for at_str in self.ejection_pool:
-                if at_str not in seen_types:
-                    seen_types.append(at_str)
-            for i, at_str in enumerate(seen_types):
-                tooltip = build_agenda_tooltip(at_str, modifiers)
-                btn = Button(
-                    pygame.Rect(20 + i * 110, y_remove, 100, 36),
-                    at_str.title(), (110, 50, 50),
-                    tooltip=tooltip,
-                    tooltip_always=True,
-                )
-                self.remove_buttons.append(btn)
-            # Build add buttons (all agenda types)
-            y_add = SCREEN_HEIGHT - 185
-            self.action_buttons = []
-            for i, at in enumerate(AgendaType):
-                tooltip = build_agenda_tooltip(at.value, modifiers)
-                btn = Button(
-                    pygame.Rect(20 + i * 110, y_add, 100, 36),
-                    at.value.title(), (80, 60, 130),
-                    tooltip=tooltip,
-                    tooltip_always=True,
-                )
-                self.action_buttons.append(btn)
             self.submit_button = Button(
                 pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
                 "Confirm", (60, 130, 60)
@@ -1593,13 +1619,13 @@ class GameScene:
             self._render_vagrant_ui(screen)
         elif self.phase == Phase.AGENDA_PHASE.value:
             self._render_agenda_ui(screen)
-        elif self.phase == "change_choice":
+        elif self.phase == SubPhase.CHANGE_CHOICE:
             self._render_change_ui(screen)
-        elif self.phase == "ejection_choice":
+        elif self.phase == SubPhase.EJECTION_CHOICE:
             self._render_ejection_ui(screen)
-        elif self.phase == "spoils_choice":
+        elif self.phase == SubPhase.SPOILS_CHOICE:
             self._render_spoils_ui(screen)
-        elif self.phase == "spoils_change_choice":
+        elif self.phase == SubPhase.SPOILS_CHANGE_CHOICE:
             self._render_spoils_change_ui(screen)
 
         # Register UI rects for tooltip placement scoring
@@ -2220,25 +2246,23 @@ class GameScene:
         return keyword_rects
 
     def _render_spoils_ui(self, screen):
-        if not self.spoils_cards:
+        if not self.spoils_entries:
             return
         modifiers = self._get_current_faction_modifiers()
         y_offset = 106
-        for war_idx, cards in enumerate(self.spoils_cards):
-            opponent = self.spoils_opponents[war_idx] if war_idx < len(self.spoils_opponents) else ""
-            opponent_name = FACTION_DISPLAY_NAMES.get(opponent, opponent)
-            selected = self.spoils_selections[war_idx] if war_idx < len(self.spoils_selections) else -1
+        for entry in self.spoils_entries:
+            opponent_name = FACTION_DISPLAY_NAMES.get(entry.loser, entry.loser)
             title_text = f"Spoils of War vs {opponent_name} - Choose an agenda:" if opponent_name else "Spoils of War - Choose an agenda:"
             title = self.font.render(title_text, True, (255, 200, 100))
             title_x = max(20, (_HEX_MAP_LEFT_X - title.get_width()) // 2)
             screen.blit(title, (title_x, y_offset))
 
-            hand = [{"agenda_type": card} for card in cards]
+            hand = [{"agenda_type": card} for card in entry.cards]
             card_rects = self._calc_left_choice_card_rects(len(hand), y=y_offset + 30)
             start_x = card_rects[0].x if card_rects else 20
             start_y = y_offset + 30
             self.ui_renderer.draw_card_hand(
-                screen, hand, selected,
+                screen, hand, entry.selected,
                 start_x, start_y,
                 modifiers=modifiers,
                 card_images=agenda_card_images,
@@ -2247,27 +2271,25 @@ class GameScene:
             y_offset += _MULTI_CHOICE_BLOCK_STEP
 
     def _render_spoils_change_ui(self, screen):
-        if not self.spoils_change_cards:
+        if not self.spoils_change_entries:
             return
         y_offset = 106
-        for choice_idx, cards in enumerate(self.spoils_change_cards):
-            opponent = self.spoils_change_opponents[choice_idx] if choice_idx < len(self.spoils_change_opponents) else ""
-            opponent_name = FACTION_DISPLAY_NAMES.get(opponent, opponent)
-            selected = self.spoils_change_selections[choice_idx] if choice_idx < len(self.spoils_change_selections) else -1
+        for entry in self.spoils_change_entries:
+            opponent_name = FACTION_DISPLAY_NAMES.get(entry.loser, entry.loser)
             title_text = f"Spoils of War vs {opponent_name} - Choose a Change modifier:" if opponent_name else "Spoils of War - Choose a Change modifier:"
             title = self.font.render(title_text, True, (255, 200, 100))
             title_x = max(20, (_HEX_MAP_LEFT_X - title.get_width()) // 2)
             screen.blit(title, (title_x, y_offset))
 
             hand = []
-            for card_name in cards:
+            for card_name in entry.cards:
                 desc = self.ui_renderer._build_modifier_description(card_name)
                 hand.append({"agenda_type": card_name, "description": desc})
             card_rects = self._calc_left_choice_card_rects(len(hand), y=y_offset + 30)
             start_x = card_rects[0].x if card_rects else 20
             start_y = y_offset + 30
             self.ui_renderer.draw_card_hand(
-                screen, hand, selected,
+                screen, hand, entry.selected,
                 start_x, start_y,
                 card_images=agenda_card_images,
             )

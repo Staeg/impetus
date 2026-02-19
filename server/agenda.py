@@ -59,7 +59,7 @@ def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils,
     for fid in playing_factions:
         faction = factions[fid]
         count = faction_counts.get(fid, 1)
-        steal_bonus = faction.change_modifiers.get(ChangeModifierTarget.STEAL.value, 0)
+        steal_bonus = faction.change_modifiers.get(ChangeModifierTarget.STEAL, 0)
         gold_stolen_per_neighbor = (1 + steal_bonus) * count
         regard_penalty = (1 + steal_bonus) * count
         regard_penalty_map[fid] = regard_penalty
@@ -92,9 +92,6 @@ def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils,
     # Simplification: each stealer takes min(victim_original_gold, amount), and
     # victim loses the total (capped at their gold).
     original_gold = {fid: f.gold for fid, f in factions.items()}
-
-    for (stealer, victim), loss in gold_losses.items():
-        pass  # losses already calculated from original gold
 
     # Apply losses to victims
     victim_total_loss = {}
@@ -163,7 +160,7 @@ def _resolve_trade(factions, playing_factions, events, is_spoils,
     for fid in playing_factions:
         faction = factions[fid]
         count = faction_counts.get(fid, 1)
-        trade_bonus = faction.change_modifiers.get(ChangeModifierTarget.TRADE.value, 0)
+        trade_bonus = faction.change_modifiers.get(ChangeModifierTarget.TRADE, 0)
         base = 1
         others_trading = len(playing_factions) - 1
         # Spoils traders also benefit from factions that traded normally this turn
@@ -193,7 +190,7 @@ def _resolve_trade(factions, playing_factions, events, is_spoils,
     # Spoils trade gives +1 gold (+ Trade modifier) and regard to every faction that traded normally
     if is_spoils and normal_trade_factions:
         for fid in normal_trade_factions:
-            trade_bonus = factions[fid].change_modifiers.get(ChangeModifierTarget.TRADE.value, 0)
+            trade_bonus = factions[fid].change_modifiers.get(ChangeModifierTarget.TRADE, 0)
             bonus = 1 + trade_bonus
             factions[fid].add_gold(bonus)
             # Regard with each spoils trader
@@ -222,7 +219,7 @@ def _resolve_expand(factions, hex_map, playing_factions, events, is_spoils,
     faction_counts = faction_counts or {}
     for fid in playing_factions:
         faction = factions[fid]
-        expand_discount = faction.change_modifiers.get(ChangeModifierTarget.EXPAND.value, 0)
+        expand_discount = faction.change_modifiers.get(ChangeModifierTarget.EXPAND, 0)
         expand_fail_bonus = 1 + expand_discount
         territory_count = len(hex_map.get_faction_territories(fid))
         cost = max(0, territory_count - expand_discount)
@@ -271,7 +268,7 @@ def _resolve_change(factions, playing_factions, events, is_spoils=False, faction
         for _ in range(count):
             # Draw a random change card
             card = random.choice(CHANGE_DECK)
-            faction.add_change_modifier(card.value)
+            faction.add_change_modifier(card)
             events.append({
                 "type": "change",
                 "faction": fid,
@@ -490,7 +487,7 @@ def finalize_all_spoils(factions, hex_map, wars, events,
                 contested_expand_counts[fid] += 1
                 faction = factions[fid]
                 expand_discount = faction.change_modifiers.get(
-                    ChangeModifierTarget.EXPAND.value, 0)
+                    ChangeModifierTarget.EXPAND, 0)
                 expand_fail_bonus = 1 + expand_discount
                 faction.add_gold(expand_fail_bonus)
                 events.append({

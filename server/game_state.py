@@ -1,9 +1,10 @@
 """Core game state machine and turn resolution."""
 
 import random
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Optional
 from shared.constants import (
-    Phase, AgendaType, IdolType, FACTION_NAMES, VP_TO_WIN,
+    Phase, SubPhase, AgendaType, IdolType, FACTION_NAMES, VP_TO_WIN,
     STARTING_INFLUENCE, CHANGE_DECK,
 )
 from shared.models import HexCoord, Idol, GameStateSnapshot
@@ -13,6 +14,18 @@ from server.spirit import Spirit
 from server.war import War
 from server.agenda import resolve_agendas, resolve_spoils, resolve_spoils_choice, finalize_all_spoils
 from server.scoring import calculate_scoring
+
+
+@dataclass
+class SpoilsPendingEntry:
+    """Represents one pending spoils choice for a guided spirit."""
+    winner: str
+    loser: str
+    cards: list          # list of AgendaType
+    battleground: Any = None
+    chosen_card: Any = None
+    stage: str = ""      # SubPhase.CHANGE_CHOICE when awaiting modifier
+    change_cards: list = field(default_factory=list)
 
 
 class GameState:
@@ -35,11 +48,15 @@ class GameState:
         # Track trade factions for spoils
         self.normal_trade_factions: list[str] = []
         # Spoils of war choice pending (spirit_id -> pending data)
-        self.spoils_pending: dict[str, list[dict]] = {}
+        self.spoils_pending: dict[str, list[SpoilsPendingEntry]] = {}
         # Auto-resolved spoils waiting for batch finalization
         self.auto_spoils_choices: list[dict] = []
         # Contested guidance cooldowns: spirit_id -> set of faction_ids blocked for 1 turn
         self.guidance_cooldowns: dict[str, set[str]] = {}
+        # Phase-scoped agenda resolution state (declared here to avoid mid-method creation)
+        self._stored_agenda_choices: dict[str, AgendaType] = {}
+        self._guided_change_factions: list[str] = []
+        self._guided_change_modifiers: dict[str, str] = {}
 
     def setup_game(self, player_info: list[dict]) -> tuple[GameStateSnapshot, list[tuple[list[dict], GameStateSnapshot]]]:
         """Initialize the game with the given players.
@@ -511,7 +528,7 @@ class GameState:
         # Store agenda choices for later resolution
         self._stored_agenda_choices = agenda_choices
         # Track which factions have guided change (modifier chosen by spirit)
-        self._guided_change_factions: list[str] = []
+        self._guided_change_factions = []
 
         # Identify guided Change spirits that need to choose
         for fid, at in agenda_choices.items():
@@ -551,12 +568,10 @@ class GameState:
         spirit = self.spirits[spirit_id]
         faction = self.factions[spirit.guided_faction]
         chosen = cards[card_index]
-        faction.add_change_modifier(chosen.value)
+        faction.add_change_modifier(chosen)
         del self.change_pending[spirit_id]
         # Store modifier so resolve_agenda_phase_after_changes can emit
         # a visual event in the normal resolution order.
-        if not hasattr(self, '_guided_change_modifiers'):
-            self._guided_change_modifiers: dict[str, str] = {}
         self._guided_change_modifiers[spirit.guided_faction] = chosen.value
         # Mark as non-animated: the visual event comes later in resolution
         events = [{
@@ -592,7 +607,7 @@ class GameState:
         # Add visual change events for guided change factions.
         # The modifier was already applied; this puts them in the
         # resolution batch so they animate in normal agenda order.
-        guided_modifiers = getattr(self, '_guided_change_modifiers', {})
+        guided_modifiers = self._guided_change_modifiers
         for fid in guided_change:
             modifier = guided_modifiers.get(fid, "")
             if modifier:
@@ -615,7 +630,7 @@ class GameState:
         Handles both prepare and resolve in one step. Used when called
         directly (e.g. from tests or when no change choices are needed).
         """
-        if not hasattr(self, '_stored_agenda_choices') or not self._stored_agenda_choices:
+        if not self._stored_agenda_choices:
             # Need to prepare first (direct call path)
             events = self.prepare_change_choices()
             if self.change_pending:
@@ -719,9 +734,20 @@ class GameState:
 
         # Collect spoils draws (guided pending + non-guided auto)
         if war_results:
-            self.spoils_pending, self.auto_spoils_choices = resolve_spoils(
+            raw_pending, self.auto_spoils_choices = resolve_spoils(
                 self.factions, self.hex_map, war_results, self.wars,
                 events, self.normal_trade_factions, spirits=self.spirits)
+            # Convert plain dicts from resolve_spoils into SpoilsPendingEntry objects
+            self.spoils_pending = {
+                spirit_id: [
+                    SpoilsPendingEntry(
+                        winner=d["winner"], loser=d["loser"], cards=d["cards"],
+                        battleground=d.get("battleground"),
+                    )
+                    for d in entries
+                ]
+                for spirit_id, entries in raw_pending.items()
+            }
         else:
             self.spoils_pending = {}
             self.auto_spoils_choices = []
@@ -788,6 +814,9 @@ class GameState:
         self.ejection_pending.clear()
         self.spoils_pending.clear()
         self.auto_spoils_choices.clear()
+        self._stored_agenda_choices = {}
+        self._guided_change_factions = []
+        self._guided_change_modifiers = {}
 
         self.turn += 1
         self.phase = Phase.VAGRANT_PHASE
@@ -805,8 +834,7 @@ class GameState:
         if len(card_indices) != len(pending_list):
             return f"Expected {len(pending_list)} choices, got {len(card_indices)}", []
         for i, idx in enumerate(card_indices):
-            cards = pending_list[i]["cards"]
-            if idx < 0 or idx >= len(cards):
+            if idx < 0 or idx >= len(pending_list[i].cards):
                 return f"Invalid card index {idx} for war {i}", []
 
         events = []
@@ -814,39 +842,35 @@ class GameState:
         # Process all choices, recording them on the pending entries
         for i in range(len(pending_list) - 1, -1, -1):
             pending = pending_list[i]
-            chosen = pending["cards"][card_indices[i]]
-            pending["chosen"] = chosen
+            chosen = pending.cards[card_indices[i]]
+            pending.chosen_card = chosen
 
-            faction = self.factions[pending["winner"]]
+            faction = self.factions[pending.winner]
             from shared.models import AgendaCard
             faction.played_agenda_this_turn.append(AgendaCard(chosen))
 
             events.append({
                 "type": "spoils_drawn",
-                "faction": pending["winner"],
+                "faction": pending.winner,
                 "agenda": chosen.value,
             })
 
             if chosen == AgendaType.CHANGE:
                 spirit = self.spirits[spirit_id]
                 draw_count = 1 + spirit.influence
-                from shared.constants import CHANGE_DECK
                 change_cards = random.sample(CHANGE_DECK, min(draw_count, len(CHANGE_DECK)))
-                pending["stage"] = "change_choice"
-                pending["change_cards"] = change_cards
+                pending.stage = SubPhase.CHANGE_CHOICE
+                pending.change_cards = change_cards
                 change_needed = True
 
-        if change_needed:
-            # Keep in spoils_pending — still need change choices
-            pass
-        else:
+        if not change_needed:
             # All choices made, collect for batch finalization
             for pending in pending_list:
                 self.auto_spoils_choices.append({
-                    "winner": pending["winner"],
-                    "loser": pending["loser"],
-                    "agenda_type": pending["chosen"],
-                    "battleground": pending.get("battleground"),
+                    "winner": pending.winner,
+                    "loser": pending.loser,
+                    "agenda_type": pending.chosen_card,
+                    "battleground": pending.battleground,
                 })
             del self.spoils_pending[spirit_id]
 
@@ -863,21 +887,20 @@ class GameState:
         if spirit_id not in self.spoils_pending:
             return "No spoils pending", []
         pending_list = self.spoils_pending[spirit_id]
-        change_pendings = [p for p in pending_list if p.get("stage") == "change_choice"]
+        change_pendings = [p for p in pending_list if p.stage == SubPhase.CHANGE_CHOICE]
         if len(card_indices) != len(change_pendings):
             return f"Expected {len(change_pendings)} change choices, got {len(card_indices)}", []
         for i, idx in enumerate(card_indices):
-            change_cards = change_pendings[i].get("change_cards", [])
-            if idx < 0 or idx >= len(change_cards):
+            if idx < 0 or idx >= len(change_pendings[i].change_cards):
                 return f"Invalid change card index {idx} for choice {i}", []
 
         events = []
         for i, pending in enumerate(change_pendings):
-            chosen = pending["change_cards"][card_indices[i]]
-            winner = pending["winner"]
+            chosen = pending.change_cards[card_indices[i]]
+            winner = pending.winner
             faction = self.factions[winner]
-            faction.add_change_modifier(chosen.value)
-            pending["chosen"] = AgendaType.CHANGE
+            faction.add_change_modifier(chosen)
+            pending.chosen_card = AgendaType.CHANGE
             events.append({
                 "type": "change",
                 "faction": winner,
@@ -887,10 +910,10 @@ class GameState:
         # All changes resolved — collect for batch finalization
         for pending in pending_list:
             self.auto_spoils_choices.append({
-                "winner": pending["winner"],
-                "loser": pending["loser"],
-                "agenda_type": pending.get("chosen", AgendaType.CHANGE),
-                "battleground": pending.get("battleground"),
+                "winner": pending.winner,
+                "loser": pending.loser,
+                "agenda_type": pending.chosen_card if pending.chosen_card is not None else AgendaType.CHANGE,
+                "battleground": pending.battleground,
             })
         del self.spoils_pending[spirit_id]
 

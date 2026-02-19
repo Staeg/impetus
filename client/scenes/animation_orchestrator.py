@@ -170,52 +170,23 @@ class AnimationOrchestrator:
                 max_remaining = remaining
         return max(0.0, max_remaining)
 
-    def process_agenda_events(self, agenda_events: list[dict],
-                              hex_ownership: dict, small_font,
-                              delay_offset: float = 0.0) -> float:
-        """Create agenda/effect animations for a set of agenda events.
+    _ANIM_ORDER = {
+        "trade": 0, "steal": 1,
+        "expand": 2, "expand_failed": 2, "expand_spoils": 2,
+        "change": 3,
+    }
 
-        Returns the duration window consumed (in seconds) so callers can
-        sequence multiple sets without overlap.
+    def _process_event_list(self, events: list[dict], hex_ownership: dict, small_font,
+                            is_spoils: bool, base_row: int, claim_row,
+                            base_delay: float, offset_start: int,
+                            war_by_faction: dict) -> int:
+        """Create slide/effect animations for one batch of sorted agenda events.
+
+        Returns the number of animations actually created (for computing
+        timeline offsets in a subsequent batch).
         """
-        base_delay = self._get_append_delay_from_existing_agendas() + max(0.0, delay_offset)
-
-        _ANIM_ORDER = {
-            "trade": 0, "steal": 1,
-            "expand": 2, "expand_failed": 2, "expand_spoils": 2,
-            "change": 3,
-        }
-        # Extract war events for tagging onto steal animations
-        war_events = [e for e in agenda_events if e.get("type") == "war_erupted"]
-        war_by_faction: dict[str, list[dict]] = {}
-        for we in war_events:
-            war_by_faction.setdefault(we["faction_a"], []).append(we)
-            war_by_faction.setdefault(we["faction_b"], []).append(we)
-
-        regular_events = [e for e in agenda_events
-                          if not e.get("is_spoils") and e.get("type") != "war_erupted"]
-        spoils_events = [e for e in agenda_events if e.get("is_spoils")]
-
-        # Allocate per-faction rows deterministically across the full event set
-        # so regular + spoils cards stack without overlap.
-        next_row_by_faction: dict[str, int] = {}
-
-        def _claim_row(faction_id: str, base_row: int = 0) -> int:
-            if faction_id not in next_row_by_faction:
-                existing = sum(
-                    1
-                    for a in self.animation.get_persistent_agenda_animations()
-                    if not a.done and a.faction_id == faction_id
-                )
-                next_row_by_faction[faction_id] = max(base_row, existing)
-            row = next_row_by_faction[faction_id]
-            next_row_by_faction[faction_id] += 1
-            return row
-
-        # --- Regular events ---
-        regular_events.sort(key=lambda e: _ANIM_ORDER.get(e["type"], 99))
-        agenda_anim_index = 0
-        for event in regular_events:
+        anim_index = 0
+        for event in events:
             etype = event["type"]
             if etype == "change":
                 modifier = event.get("modifier", "")
@@ -232,9 +203,9 @@ class AnimationOrchestrator:
             elif not faction_id:
                 print(f"[anim] No faction_id in {etype} event")
             else:
-                delay = base_delay + agenda_anim_index * 1.0
+                delay = base_delay + (offset_start + anim_index) * 1.0
                 img_w = img.get_width()
-                row = _claim_row(faction_id, base_row=0)
+                row = claim_row(faction_id, base_row=base_row)
                 target_x, target_y = self._get_agenda_label_pos(faction_id, img_w, row)
                 start_x, start_y = self._get_agenda_slide_start(faction_id, img_w, row)
                 anim = AgendaSlideAnimation(
@@ -243,6 +214,7 @@ class AnimationOrchestrator:
                     start_x, start_y,
                     delay=delay,
                     auto_fadeout_after=0.0,
+                    is_spoils=is_spoils,
                     agenda_type=etype,
                 )
                 # Tag expand animations with hex reveal info
@@ -270,8 +242,8 @@ class AnimationOrchestrator:
                         gold_deltas.append((faction_id, -cost))
                 if gold_deltas:
                     anim.gold_deltas = gold_deltas
-                # Tag war reveals onto steal animations
-                if etype == "steal" and faction_id in war_by_faction:
+                # Tag war reveals onto steal animations (regular events only)
+                if not is_spoils and etype == "steal" and faction_id in war_by_faction:
                     anim.war_reveals = war_by_faction[faction_id]
                 # Tag change modifier onto change animations
                 if etype == "change":
@@ -281,81 +253,65 @@ class AnimationOrchestrator:
                 self.animation.add_persistent_agenda_animation(anim)
                 self.create_effect_animations(event, faction_id, delay,
                                               hex_ownership, small_font)
-                agenda_anim_index += 1
+                anim_index += 1
+        return anim_index
 
-        # --- Spoils events (stack below regular agenda icons) ---
-        spoils_events.sort(key=lambda e: _ANIM_ORDER.get(e["type"], 99))
-        spoils_anim_index = 0
-        for event in spoils_events:
-            etype = event["type"]
-            if etype == "change":
-                modifier = event.get("modifier", "")
-                img_key = f"change_{modifier}" if f"change_{modifier}" in agenda_images else "change"
-            elif etype == "expand_failed":
-                img_key = "expand_failed"
-            else:
-                img_key = {"steal": "steal", "trade": "trade",
-                           "expand": "expand", "expand_spoils": "expand"}[etype]
-            img = agenda_images.get(img_key)
-            faction_id = event.get("faction")
-            if not img:
-                print(f"[anim] No image for '{img_key}' (loaded: {list(agenda_images.keys())})")
-            elif not faction_id:
-                print(f"[anim] No faction_id in {etype} event")
-            else:
-                # Continue the same timeline used by regular agenda events.
-                delay = base_delay + (agenda_anim_index + spoils_anim_index) * 1.0
-                row = _claim_row(faction_id, base_row=1)
-                img_w = img.get_width()
-                target_x, target_y = self._get_agenda_label_pos(faction_id, img_w, row)
-                start_x, start_y = self._get_agenda_slide_start(faction_id, img_w, row)
-                anim = AgendaSlideAnimation(
-                    img, faction_id,
-                    target_x, target_y,
-                    start_x, start_y,
-                    delay=delay,
-                    auto_fadeout_after=0.0,
-                    is_spoils=True,
-                    agenda_type=etype,
+    def process_agenda_events(self, agenda_events: list[dict],
+                              hex_ownership: dict, small_font,
+                              delay_offset: float = 0.0) -> float:
+        """Create agenda/effect animations for a set of agenda events.
+
+        Returns the duration window consumed (in seconds) so callers can
+        sequence multiple sets without overlap.
+        """
+        base_delay = self._get_append_delay_from_existing_agendas() + max(0.0, delay_offset)
+
+        # Extract war events for tagging onto steal animations
+        war_events = [e for e in agenda_events if e.get("type") == "war_erupted"]
+        war_by_faction: dict[str, list[dict]] = {}
+        for we in war_events:
+            war_by_faction.setdefault(we["faction_a"], []).append(we)
+            war_by_faction.setdefault(we["faction_b"], []).append(we)
+
+        regular_events = [e for e in agenda_events
+                          if not e.get("is_spoils") and e.get("type") != "war_erupted"]
+        spoils_events = [e for e in agenda_events if e.get("is_spoils")]
+
+        # Allocate per-faction rows deterministically across the full event set
+        # so regular + spoils cards stack without overlap.
+        next_row_by_faction: dict[str, int] = {}
+
+        def _claim_row(faction_id: str, base_row: int = 0) -> int:
+            if faction_id not in next_row_by_faction:
+                existing = sum(
+                    1
+                    for a in self.animation.get_persistent_agenda_animations()
+                    if not a.done and a.faction_id == faction_id
                 )
-                # Tag expand spoils animations with hex reveal info
-                if etype in ("expand", "expand_spoils"):
-                    target_hex = event.get("hex")
-                    if target_hex:
-                        anim.hex_reveal = (target_hex["q"], target_hex["r"])
-                        anim.hex_reveal_faction = faction_id
-                # Tag gold delta for incremental ribbon updates
-                gold_gained = event.get("gold_gained", 0)
-                if gold_gained:
-                    anim.gold_delta = gold_gained
-                    anim.gold_delta_faction = faction_id
-                gold_deltas: list[tuple[str, int]] = []
-                if gold_gained:
-                    gold_deltas.append((faction_id, gold_gained))
-                if etype == "steal":
-                    steal_amount = event.get("regard_penalty", 1)
-                    for nfid in event.get("neighbors", []):
-                        if steal_amount:
-                            gold_deltas.append((nfid, -steal_amount))
-                elif etype == "expand":
-                    cost = event.get("cost", 0)
-                    if cost:
-                        gold_deltas.append((faction_id, -cost))
-                if gold_deltas:
-                    anim.gold_deltas = gold_deltas
-                # Tag change modifier onto change animations
-                if etype == "change":
-                    modifier = event.get("modifier", "")
-                    if modifier:
-                        anim.change_modifier = modifier
-                self.animation.add_persistent_agenda_animation(anim)
-                self.create_effect_animations(event, faction_id, delay,
-                                              hex_ownership, small_font)
-                spoils_anim_index += 1
+                next_row_by_faction[faction_id] = max(base_row, existing)
+            row = next_row_by_faction[faction_id]
+            next_row_by_faction[faction_id] += 1
+            return row
 
-        total_anims = agenda_anim_index + spoils_anim_index
+        regular_events.sort(key=lambda e: self._ANIM_ORDER.get(e["type"], 99))
+        spoils_events.sort(key=lambda e: self._ANIM_ORDER.get(e["type"], 99))
+
+        regular_count = self._process_event_list(
+            regular_events, hex_ownership, small_font,
+            is_spoils=False, base_row=0, claim_row=_claim_row,
+            base_delay=base_delay, offset_start=0,
+            war_by_faction=war_by_faction,
+        )
+        spoils_count = self._process_event_list(
+            spoils_events, hex_ownership, small_font,
+            is_spoils=True, base_row=1, claim_row=_claim_row,
+            base_delay=base_delay, offset_start=regular_count,
+            war_by_faction=war_by_faction,
+        )
+
+        total_anims = regular_count + spoils_count
         if total_anims > 0:
-            print(f"[anim] Created {total_anims} agenda animations ({agenda_anim_index} regular, {spoils_anim_index} spoils)")
+            print(f"[anim] Created {total_anims} agenda animations ({regular_count} regular, {spoils_count} spoils)")
         if total_anims <= 0:
             return 0.0
         # Duration consumed by this event set on the local timeline.
