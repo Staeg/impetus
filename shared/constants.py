@@ -74,6 +74,13 @@ class Phase(str, Enum):
     GAME_OVER = "game_over"
 
 
+class SubPhase(str, Enum):
+    CHANGE_CHOICE        = "change_choice"
+    EJECTION_CHOICE      = "ejection_choice"
+    SPOILS_CHOICE        = "spoils_choice"
+    SPOILS_CHANGE_CHOICE = "spoils_change_choice"
+
+
 class AgendaType(str, Enum):
     STEAL = "steal"
     TRADE = "trade"

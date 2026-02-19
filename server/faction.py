@@ -22,10 +22,10 @@ class Faction:
             AgendaCard(AgendaType.EXPAND),
             AgendaCard(AgendaType.CHANGE),
         ]
-        self.change_modifiers: dict[str, int] = {
-            ChangeModifierTarget.TRADE.value: 0,
-            ChangeModifierTarget.STEAL.value: 0,
-            ChangeModifierTarget.EXPAND.value: 0,
+        self.change_modifiers: dict[ChangeModifierTarget, int] = {
+            ChangeModifierTarget.TRADE: 0,
+            ChangeModifierTarget.STEAL: 0,
+            ChangeModifierTarget.EXPAND: 0,
         }
         self.regard: dict[str, int] = {}
         self.guiding_spirit: Optional[str] = None
@@ -91,8 +91,8 @@ class Faction:
         # Fallback: type not in pool (shouldn't happen)
         self.agenda_pool.append(AgendaCard(add_type))
 
-    def add_change_modifier(self, card_value: str):
-        self.change_modifiers[card_value] = self.change_modifiers.get(card_value, 0) + 1
+    def add_change_modifier(self, modifier: ChangeModifierTarget):
+        self.change_modifiers[modifier] = self.change_modifiers.get(modifier, 0) + 1
 
     def cleanup_deck(self):
         """Clear turn tracking. The pool is static — no cards to return."""
