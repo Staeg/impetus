@@ -277,21 +277,8 @@ class AnimationOrchestrator:
                           if not e.get("is_spoils") and e.get("type") != "war_erupted"]
         spoils_events = [e for e in agenda_events if e.get("is_spoils")]
 
-        # Allocate per-faction rows deterministically across the full event set
-        # so regular + spoils cards stack without overlap.
-        next_row_by_faction: dict[str, int] = {}
-
         def _claim_row(faction_id: str, base_row: int = 0) -> int:
-            if faction_id not in next_row_by_faction:
-                existing = sum(
-                    1
-                    for a in self.animation.get_persistent_agenda_animations()
-                    if not a.done and a.faction_id == faction_id
-                )
-                next_row_by_faction[faction_id] = max(base_row, existing)
-            row = next_row_by_faction[faction_id]
-            next_row_by_faction[faction_id] += 1
-            return row
+            return base_row
 
         regular_events.sort(key=lambda e: self._ANIM_ORDER.get(e["type"], 99))
         spoils_events.sort(key=lambda e: self._ANIM_ORDER.get(e["type"], 99))
@@ -304,7 +291,7 @@ class AnimationOrchestrator:
         )
         spoils_count = self._process_event_list(
             spoils_events, hex_ownership, small_font,
-            is_spoils=True, base_row=1, claim_row=_claim_row,
+            is_spoils=True, base_row=0, claim_row=_claim_row,
             base_delay=base_delay, offset_start=regular_count,
             war_by_faction=war_by_faction,
         )
