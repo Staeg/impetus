@@ -17,17 +17,27 @@ def get_ai_vagrant_action(game_state, spirit_id) -> dict:
     neutral = options.get("neutral_hexes", [])
     idol_types = options.get("idol_types", [])
 
+    # Exclude hexes where this spirit already has an idol
+    existing_idol_positions = {
+        (i.position.q, i.position.r)
+        for i in game_state.hex_map.idols
+        if i.owner_spirit == spirit_id
+    }
+
     # Filter neutral hexes: must be adjacent to at least one owned (non-neutral) hex
     valid_idol_hexes = [
         h for h in neutral
-        if any(
+        if (h["q"], h["r"]) not in existing_idol_positions
+        and any(
             game_state.hex_map.ownership.get((nq, nr)) is not None
             for nq, nr in hex_neighbors(h["q"], h["r"])
             if (nq, nr) in game_state.hex_map.ownership
         )
     ]
-    # Fallback: if no faction-adjacent neutral hex found, use any neutral hex
-    idol_hexes = valid_idol_hexes if valid_idol_hexes else neutral
+    # Fallback: if no faction-adjacent neutral hex found, use any eligible neutral hex
+    idol_hexes = valid_idol_hexes if valid_idol_hexes else [
+        h for h in neutral if (h["q"], h["r"]) not in existing_idol_positions
+    ]
     can_place = can_place and bool(idol_hexes)
 
     action = {}

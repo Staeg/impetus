@@ -289,11 +289,6 @@ class GameServer:
                     return
                 session.is_spectator = True
                 session.ready = False
-                # Transfer host if this player was the host
-                if room.host_spirit_id == spirit_id:
-                    remaining = [p.spirit_id for p in room.players.values()
-                                 if not p.is_spectator and p.spirit_id != spirit_id]
-                    room.host_spirit_id = remaining[0] if remaining else ""
             await self._broadcast_lobby_state(room)
 
         elif msg_type == MessageType.SUBMIT_VAGRANT_ACTION:

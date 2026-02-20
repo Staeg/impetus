@@ -303,9 +303,17 @@ class GameState:
             and fid not in cooldown_set
             for fid, f in self.factions.items()
         )
+        spirit_idol_hexes = {
+            (i.position.q, i.position.r)
+            for i in self.hex_map.idols
+            if i.owner_spirit == spirit.spirit_id
+        }
         can_place_idol = (
             not spirit.has_placed_idol_as_vagrant
-            and any(self.hex_map.ownership.get(h) is None for h in self.hex_map.all_hexes)
+            and any(
+                self.hex_map.ownership.get(h) is None and h not in spirit_idol_hexes
+                for h in self.hex_map.all_hexes
+            )
         )
         if can_guide and can_place_idol:
             if not guide_target:
