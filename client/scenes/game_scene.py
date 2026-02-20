@@ -284,6 +284,12 @@ class GameScene:
         self._font = None
         self._small_font = None
 
+        # Queued PHASE_RESULT payloads — processed one at a time as animations finish
+        self._phase_result_queue: list[dict] = []
+        # Deferred game-over event: set when game_over payload is processed,
+        # consumed (scene transition) once all animations have settled.
+        self._pending_game_over: dict | None = None
+
         # Network message dispatch table (built after all state is initialised)
         self._net_handlers = {
             MessageType.GAME_START:   self._handle_game_start,
@@ -719,6 +725,8 @@ class GameScene:
             handler(payload)
 
     def _handle_game_start(self, payload):
+        self._phase_result_queue = []
+        self._pending_game_over = None
         self._update_state_from_snapshot(payload)
         self.change_tracker.snapshot_and_reset(self.factions, self.spirits)
         self.event_log.append("Game started.")
@@ -742,6 +750,10 @@ class GameScene:
         self.waiting_for = payload.get("players_remaining", [])
 
     def _handle_phase_result(self, payload):
+        """Queue PHASE_RESULT for sequential processing in update()."""
+        self._phase_result_queue.append(payload)
+
+    def _process_phase_result(self, payload):
         active_sub_phase = self.phase if self.phase in (
             SubPhase.CHANGE_CHOICE, SubPhase.SPOILS_CHOICE, SubPhase.SPOILS_CHANGE_CHOICE) else None
         # Snapshot display state before updating so animations render old state
@@ -1524,6 +1536,32 @@ class GameScene:
         # Clear display state when all animations are done
         if self._display_hex_ownership is not None and not self.orchestrator.has_animations_playing():
             self._clear_display_state()
+        # Drain queued PHASE_RESULT messages one at a time, waiting for each
+        # animation batch to finish before processing the next.  Non-animating
+        # payloads (war / scoring / cleanup with no agenda events) are consumed
+        # immediately since is_all_done() stays True after they are processed.
+        while not self.orchestrator.has_animations_playing() and self._phase_result_queue and not self._pending_game_over:
+            payload = self._phase_result_queue.pop(0)
+            game_over_event = next(
+                (e for e in payload.get("events", []) if e.get("type") == "game_over"),
+                None,
+            )
+            self._process_phase_result(payload)
+            if game_over_event:
+                self._pending_game_over = game_over_event
+                break
+        # Once game_over animations have settled, transition to the results scene.
+        if not self.orchestrator.has_animations_playing() and self._pending_game_over:
+            event = self._pending_game_over
+            self._pending_game_over = None
+            results = self.app.scenes.get("results")
+            if results:
+                results.set_results(
+                    event.get("winners", []),
+                    event.get("scores", {}),
+                    self.spirits,
+                )
+            self.app.set_scene("results")
 
     def _register_ui_rects_for_tooltips(self):
         """Populate the popup_manager rect registry for tooltip placement scoring."""

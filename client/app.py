@@ -84,28 +84,6 @@ class App:
             self.current_scene.handle_network(msg_type, payload)
             return
 
-        if msg_type == MessageType.GAME_OVER:
-            # Check if game_over event is in phase_result events
-            pass
-
-        # Check for game over in phase results
-        if msg_type == MessageType.PHASE_RESULT:
-            events = payload.get("events", [])
-            for event in events:
-                if event.get("type") == "game_over":
-                    game_scene = self.scenes.get("game")
-                    if game_scene:
-                        game_scene.handle_network(msg_type, payload)
-                    results = self.scenes.get("results")
-                    if results:
-                        results.set_results(
-                            event.get("winners", []),
-                            event.get("scores", {}),
-                            game_scene.spirits if game_scene else {},
-                        )
-                    self.set_scene("results")
-                    return
-
         # Forward to current scene
         if self.current_scene and hasattr(self.current_scene, "handle_network"):
             self.current_scene.handle_network(msg_type, payload)
