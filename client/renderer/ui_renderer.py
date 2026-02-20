@@ -461,7 +461,8 @@ class UIRenderer:
                            change_tracker=None, panel_faction_id: str = None,
                            highlight_log_idx: int = None,
                            change_rects: list = None,
-                           wars: list = None):
+                           wars: list = None,
+                           all_factions: dict = None):
         """Draw faction info panel."""
         if not faction_data:
             return
@@ -471,6 +472,12 @@ class UIRenderer:
         gold = faction_data.get("gold", 0)
         territories = faction_data.get("territories", [])
         regard = faction_data.get("regard", {})
+        if all_factions:
+            regard = {
+                other_fid: val
+                for other_fid, val in regard.items()
+                if not all_factions.get(other_fid, {}).get("eliminated", False)
+            }
         modifiers = faction_data.get("change_modifiers", {})
         guiding = faction_data.get("guiding_spirit")
         worship = faction_data.get("worship_spirit")

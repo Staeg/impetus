@@ -29,7 +29,9 @@ _FACTION_PANEL_X = SCREEN_WIDTH - 240
 # Centering positions for button columns
 _GUIDANCE_CENTER_X = _HEX_MAP_LEFT_X // 2
 _IDOL_CENTER_X = (_HEX_MAP_RIGHT_X + _FACTION_PANEL_X) // 2
-_BTN_W = 143
+_BTN_W = 157
+_BTN_H = 37
+_BTN_STEP_Y = 43
 _GUIDANCE_BTN_X = _GUIDANCE_CENTER_X - _BTN_W // 2
 _IDOL_BTN_X = _IDOL_CENTER_X - _BTN_W // 2
 
@@ -924,7 +926,7 @@ class GameScene:
             is_contested_blocked = fid in contested_blocked
             tooltip = self._build_guidance_tooltip(fid, is_blocked, is_contested_blocked)
             btn = Button(
-                pygame.Rect(_GUIDANCE_BTN_X, _BTN_START_Y + i * 40, _BTN_W, 34),
+                pygame.Rect(_GUIDANCE_BTN_X, _BTN_START_Y + i * _BTN_STEP_Y, _BTN_W, _BTN_H),
                 faction_full_name(fid),
                 color=tuple(max(c // 2, 30) for c in color),
                 text_color=(255, 255, 255),
@@ -955,7 +957,7 @@ class GameScene:
                 IdolType.SPREAD: (50, 120, 50),
             }
             btn = Button(
-                pygame.Rect(_IDOL_BTN_X, _BTN_START_Y + i * 40, _BTN_W, 34),
+                pygame.Rect(_IDOL_BTN_X, _BTN_START_Y + i * _BTN_STEP_Y, _BTN_W, _BTN_H),
                 it.value.title(), colors.get(it, (80, 80, 80)),
                 tooltip=idol_tooltips.get(it),
                 tooltip_always=True,
@@ -1646,6 +1648,7 @@ class GameScene:
                     highlight_log_idx=self.highlighted_log_index,
                     change_rects=self.panel_change_rects,
                     wars=render_wars,
+                    all_factions=self.factions,
                 )
             else:
                 self.ui_renderer.faction_panel_rect = None
@@ -2148,7 +2151,10 @@ class GameScene:
             (btn.rect.top for btn in self.remove_buttons + self.action_buttons),
             default=SCREEN_HEIGHT - 240,
         )
-        text_y = max(96, buttons_top - title_h - 10)
+        # Keep wrapped title clear of section labels ("Remove"/"Add"), not just buttons.
+        first_label_y = buttons_top - line_h - 8
+        text_bottom_limit = first_label_y - 8
+        text_y = max(96, text_bottom_limit - title_h)
         self.ejection_keyword_rects = self._render_rich_lines(
             screen, self.font, lines, text_x, text_y,
             keywords=keywords,
