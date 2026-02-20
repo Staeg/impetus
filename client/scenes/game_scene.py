@@ -243,6 +243,8 @@ class GameScene:
         # Ribbon war indicator hover state
         self.ribbon_war_rects: dict[str, pygame.Rect] = {}
         self.hovered_ribbon_war_fid: str | None = None
+        # Ribbon faction cell rects (for click handling)
+        self.ribbon_faction_rects: dict[str, pygame.Rect] = {}
 
         # Faction panel / VP hover tooltip state
         self.hovered_panel_guided: bool = False
@@ -562,6 +564,18 @@ class GameScene:
             # Clicking elsewhere closes the spirit panel
             if self.spirit_panel_spirit_id:
                 self.spirit_panel_spirit_id = None
+
+            # Ribbon faction name click — same effect as clicking that faction on the map
+            for fid, rect in self.ribbon_faction_rects.items():
+                if rect.collidepoint(event.pos):
+                    self.panel_faction = fid
+                    self.spirit_panel_spirit_id = None
+                    if self.phase == Phase.VAGRANT_PHASE.value and self.faction_buttons:
+                        available = set(self.phase_options.get("available_factions", []))
+                        blocked = set(self.phase_options.get("worship_blocked", []))
+                        if fid in available and fid not in blocked:
+                            self.selected_faction = fid
+                    return
 
             # Hex click
             hex_coord = self.hex_renderer.get_hex_at_screen(
@@ -1615,6 +1629,12 @@ class GameScene:
             animated_agenda_factions=animated_agenda_factions,
             faction_order=self.faction_order,
         )
+        if self.faction_order:
+            cell_w = SCREEN_WIDTH // len(self.faction_order)
+            self.ribbon_faction_rects = {
+                fid: pygame.Rect(i * cell_w, 42, cell_w, 55)
+                for i, fid in enumerate(self.faction_order)
+            }
 
         # Draw persistent agenda slide animations (on top of overview strip)
         self.orchestrator.render_persistent_agenda_animations(screen)
