@@ -335,7 +335,7 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
         if faction.guiding_spirit and faction.guiding_spirit in spirits:
             spirit = spirits[faction.guiding_spirit]
             draw_count = 1 + spirit.influence
-            drawn = random.choices(faction.agenda_pool, k=draw_count)
+            drawn = random.sample(faction.agenda_pool, min(draw_count, len(faction.agenda_pool)))
 
             if len(drawn) == 1:
                 # No meaningful choice — auto-resolve
