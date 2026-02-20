@@ -288,13 +288,13 @@ class GameServer:
                     await self._broadcast_phase_result(room, events)
                     # Check if this spirit now needs change modifier choices
                     pending_list = room.game_state.spoils_pending.get(spirit_id)
-                    if pending_list and any(p.get("stage") == "change_choice" for p in pending_list):
-                        change_pendings = [p for p in pending_list if p.get("stage") == "change_choice"]
+                    if pending_list and any(p.stage == "change_choice" for p in pending_list):
+                        change_pendings = [p for p in pending_list if p.stage == "change_choice"]
                         change_options = []
                         for p in change_pendings:
                             change_options.append({
-                                "cards": [c.value for c in p.get("change_cards", [])],
-                                "loser": p.get("loser", ""),
+                                "cards": [c.value for c in p.change_cards],
+                                "loser": p.loser,
                             })
                         await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
                             "phase": "spoils_change_choice",
@@ -440,8 +440,8 @@ class GameServer:
                     choices = []
                     for p in pending_list:
                         choices.append({
-                            "cards": [c.value for c in p["cards"]],
-                            "loser": p.get("loser", ""),
+                            "cards": [c.value for c in p.cards],
+                            "loser": p.loser,
                         })
                     await room.send_to(sid, create_message(MessageType.PHASE_START, {
                         "phase": "spoils_choice",

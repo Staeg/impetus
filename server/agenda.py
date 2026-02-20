@@ -391,50 +391,6 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
     return spoils_pending, auto_spoils_choices
 
 
-def resolve_spoils_choice(factions, hex_map, wars, events, spirit_id,
-                          card_index, spoils_pending, spirits,
-                          normal_trade_factions: list[str] = None):
-    """Record a spirit's spoils card choice. Does NOT resolve yet.
-
-    If the chosen card is Change, sets up a change_choice sub-stage.
-    Otherwise pops the pending entry (choice recorded for later batch resolution).
-    Returns the chosen AgendaType (or None if entering change_choice stage).
-    """
-    pending = spoils_pending[spirit_id][0]
-    cards = pending["cards"]
-    chosen = cards[card_index]
-    winner = pending["winner"]
-    loser = pending["loser"]
-    battleground = pending.get("battleground")
-
-    faction = factions[winner]
-    # Track for scoring (pool is static, no return needed)
-    faction.played_agenda_this_turn.append(
-        faction.agenda_pool[0].__class__(chosen)  # Create AgendaCard from type
-    )
-
-    events.append({
-        "type": "spoils_drawn",
-        "faction": winner,
-        "agenda": chosen.value,
-    })
-
-    if chosen == AgendaType.CHANGE:
-        spirit = spirits[spirit_id]
-        draw_count = 1 + spirit.influence
-        change_cards = random.sample(CHANGE_DECK, min(draw_count, len(CHANGE_DECK)))
-        pending["stage"] = "change_choice"
-        pending["change_cards"] = change_cards
-        return None
-    else:
-        # Store the resolved choice for batch finalization
-        pending["chosen"] = chosen
-        spoils_pending[spirit_id].pop(0)
-        if not spoils_pending[spirit_id]:
-            del spoils_pending[spirit_id]
-        return chosen
-
-
 def finalize_all_spoils(factions, hex_map, wars, events,
                         all_spoils: list[dict],
                         normal_trade_factions: list[str]):

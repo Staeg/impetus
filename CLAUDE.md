@@ -40,9 +40,11 @@ pyinstaller impetus.spec --noconfirm
 - `tests/` — pytest suite covering server logic and protocol serialization (no client rendering tests)
 
 ### Game state machine
-`LOBBY → SETUP → VAGRANT → AGENDA → WAR → SCORING → CLEANUP → (loop until 10 VP)`
+`LOBBY → VAGRANT → AGENDA → WAR → SCORING → CLEANUP → (loop until 10 VP)`
 
 Each phase: wait for input → validate → resolve → broadcast → transition. Driven by `server/game_state.py`.
+
+`Phase.SETUP` exists in the enum but the game never transitions into it. Setup (two automated turns — one all-Change, one all-random) runs during `LOBBY` before the first `VAGRANT` phase begins.
 
 ### Sub-phases
 Several phases trigger sub-phases where the server waits for a specific player choice before continuing. These are **bare strings**, not in the `Phase` enum:
@@ -57,6 +59,7 @@ Several phases trigger sub-phases where the server waits for a specific player c
 - **Agenda pool** — cards are sampled with replacement (`random.choices`), never consumed. Duplicates are possible. `replace_agenda_card()` (ejection) swaps one card type for another, keeping the pool size constant.
 - **Agenda resolution order** is always: Trade → Steal → Expand → Change (same-type resolves simultaneously)
 - **Wars** have a two-turn lifecycle: erupt → ripen → resolve. All ripe wars resolve simultaneously using snapshotted territory counts; gold changes are applied as a net batch after all wars resolve.
+- **Guidance cooldown**: if two or more spirits contest the same faction in the same vagrant phase (neither gets it), all contesting spirits are blocked from targeting that faction for the next vagrant phase. Tracked in `game_state.guidance_cooldowns` (dict of spirit_id → set of blocked faction_ids); cleared at the start of each vagrant phase.
 - **Worship** (`worship_spirit` on factions): spirits compete for faction Worship via idol counts; a spirit cannot guide a faction that Worships them
 - **Scoring**: VP from idols in faction territories where the spirit has Worship (Battle/Affluence/Spread idol types)
 - **Faction elimination**: factions with 0 territories are eliminated (guiding spirit ejected, Worship cleared, wars cancelled)
@@ -80,7 +83,7 @@ Several game moments follow the same pattern: the server sends a list of cards t
 - **Spoils Change modifiers** (spoils_change_choice): follow-up if any spoils cards are Change. Same multi-pick pattern.
 
 ### Client scene system
-Scenes implement `handle_event()`, `update(dt)`, `render(screen)`. One active at a time. `game_scene.py` is the largest file (~1385 lines) handling all gameplay phases.
+Scenes implement `handle_event()`, `update(dt)`, `render(screen)`. One active at a time. `game_scene.py` is the largest file (~2274 lines) handling all gameplay phases.
 
 ### Client animation pipeline
 When the client receives a `PHASE_RESULT` message, it doesn't immediately update the UI. Instead:
@@ -88,7 +91,8 @@ When the client receives a `PHASE_RESULT` message, it doesn't immediately update
 2. Each batch plays sequentially — the next batch starts only after the current one finishes
 3. **Effect animations** (expand arrows, war icons) play alongside or after agenda animations
 4. **Player input is deferred** until all animation batches finish — UI buttons and card pickers don't appear until animations complete
-5. Animation state lives in `client/renderer/animation.py` (`AnimationManager`, `Tween`, `AgendaAnimation`, etc.)
+5. `client/scenes/animation_orchestrator.py` translates game events into animation calls; it coordinates the pipeline and is instantiated by `game_scene.py`
+6. Low-level animation state (tweens, timers) lives in `client/renderer/animation.py` (`AnimationManager`, `Tween`, `AgendaAnimation`, etc.)
 
 ### Networking
 - Server: asyncio + websockets, supports multiple concurrent game rooms
@@ -118,11 +122,11 @@ When a `PHASE_RESULT` arrives in `game_scene.handle_network()`:
 - Display state (`_display_hex_ownership`) is a separate snapshot used only by the animation system to render hex ownership from before the state update
 
 ## Key file sizes
-- `client/scenes/game_scene.py` — ~1500 lines, the largest file; handles all gameplay phases, hover detection, UI setup, and network message processing
-- `client/renderer/ui_renderer.py` — ~650 lines; all HUD, panels, tooltips, and card rendering
-- `client/scenes/animation_orchestrator.py` — ~250 lines; translates game events into animation calls
-- `server/agenda.py` — ~300 lines; all agenda resolution logic
-- `server/game_state.py` — ~700 lines; the game state machine driving all phase transitions
+- `client/scenes/game_scene.py` — ~2274 lines, the largest file; handles all gameplay phases, hover detection, UI setup, and network message processing
+- `client/renderer/ui_renderer.py` — ~1088 lines; all HUD, panels, tooltips, and card rendering
+- `client/scenes/animation_orchestrator.py` — ~494 lines; translates game events into animation calls
+- `server/agenda.py` — ~530 lines; all agenda resolution logic
+- `server/game_state.py` — ~925 lines; the game state machine driving all phase transitions
 
 ## Testing
 - Tests live in `tests/` and cover **server logic only** (agenda resolution, war, scoring, protocol serialization)

@@ -161,11 +161,15 @@ class UIRenderer:
         self.panel_war_rect: pygame.Rect | None = None
         self.panel_faction_id: str | None = None
         self.faction_panel_rect: pygame.Rect | None = None
-        # Spirit panel rects
+        # Spirit panel rects (right pop-out panel)
         self.spirit_panel_rect: pygame.Rect | None = None
         self.spirit_panel_guidance_rect: pygame.Rect | None = None
         self.spirit_panel_influence_rect: pygame.Rect | None = None
         self.spirit_panel_worship_rects: dict[str, pygame.Rect] = {}  # faction_id -> rect
+        # Persistent spirit panel rects (bottom-left, always visible)
+        self.spirit_panel_persistent_guidance_rect: pygame.Rect | None = None
+        self.spirit_panel_persistent_influence_rect: pygame.Rect | None = None
+        self.spirit_panel_persistent_worship_rects: dict[str, pygame.Rect] = {}
 
     def _get_font(self, size=16):
         return pygame.font.SysFont("consolas", size)
@@ -760,7 +764,8 @@ class UIRenderer:
                           x: int, y: int, width: int = 230,
                           my_spirit_id: str = "",
                           circle_fills: "list[float] | None" = None,
-                          store_hover_rects: bool = True):
+                          store_hover_rects: bool = True,
+                          persistent_hover_rects: bool = False):
         """Draw spirit info panel showing guidance, influence, worship, and idol counts."""
         if not spirit_data:
             return
@@ -817,6 +822,8 @@ class UIRenderer:
             guidance_text_w = label_surf.get_width()
         if store_hover_rects:
             self.spirit_panel_guidance_rect = pygame.Rect(x + 10, guidance_line_y, guidance_text_w, 16)
+        elif persistent_hover_rects:
+            self.spirit_panel_persistent_guidance_rect = pygame.Rect(x + 10, guidance_line_y, guidance_text_w, 16)
         draw_dotted_underline(surface, x + 10, guidance_line_y + 14, guidance_text_w)
         dy += 18
 
@@ -843,12 +850,16 @@ class UIRenderer:
         total_w = inf_label.get_width() + circles_w
         if store_hover_rects:
             self.spirit_panel_influence_rect = pygame.Rect(x + 10, influence_line_y, total_w, circle_r * 2)
+        elif persistent_hover_rects:
+            self.spirit_panel_persistent_influence_rect = pygame.Rect(x + 10, influence_line_y, total_w, circle_r * 2)
         draw_dotted_underline(surface, x + 10, influence_line_y + circle_r * 2 + 2, total_w)
         dy += circle_r * 2 + 6
 
         # Worshipped by section
         if store_hover_rects:
             self.spirit_panel_worship_rects.clear()
+        elif persistent_hover_rects:
+            self.spirit_panel_persistent_worship_rects.clear()
         section_surf = self.small_font.render("Worshipped by:", True, (150, 150, 170))
         surface.blit(section_surf, (x + 10, dy))
         dy += 18
@@ -862,6 +873,8 @@ class UIRenderer:
                 fname_w = fname_surf.get_width()
                 if store_hover_rects:
                     self.spirit_panel_worship_rects[fid] = pygame.Rect(x + 14, dy, fname_w, 16)
+                elif persistent_hover_rects:
+                    self.spirit_panel_persistent_worship_rects[fid] = pygame.Rect(x + 14, dy, fname_w, 16)
                 draw_dotted_underline(surface, x + 14, dy + 14, fname_w)
                 dy += 18
 

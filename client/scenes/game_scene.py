@@ -240,6 +240,10 @@ class GameScene:
         self.hovered_spirit_panel_guidance: bool = False
         self.hovered_spirit_panel_influence: bool = False
         self.hovered_spirit_panel_worship: str | None = None  # faction_id or None
+        # Persistent spirit panel (bottom-left) hover state
+        self.hovered_persistent_spirit_guidance: bool = False
+        self.hovered_persistent_spirit_influence: bool = False
+        self.hovered_persistent_spirit_worship: str | None = None
         # Ejection title keyword hover state
         self.ejection_keyword_rects: dict[str, list[pygame.Rect]] = {}
         self.hovered_ejection_keyword: str | None = None
@@ -1030,23 +1034,23 @@ class GameScene:
                     self.hovered_card_rect = rect
                     return
 
-        if self.spoils_cards:
+        if self.spoils_entries:
             y_offset = _CHOICE_CARD_Y
-            for war_idx, cards in enumerate(self.spoils_cards):
-                for i, rect in enumerate(self._calc_left_choice_card_rects(len(cards), y=y_offset)):
+            for war_idx, entry in enumerate(self.spoils_entries):
+                for i, rect in enumerate(self._calc_left_choice_card_rects(len(entry.cards), y=y_offset)):
                     if rect.collidepoint(mx, my):
-                        atype = cards[i]
+                        atype = entry.cards[i]
                         self.hovered_card_tooltip = build_agenda_tooltip(atype, modifiers, is_spoils=True)
                         self.hovered_card_rect = rect
                         return
                 y_offset += _MULTI_CHOICE_BLOCK_STEP
 
-        if self.spoils_change_cards:
+        if self.spoils_change_entries:
             y_offset = _CHOICE_CARD_Y
-            for choice_idx, cards in enumerate(self.spoils_change_cards):
-                for i, rect in enumerate(self._calc_left_choice_card_rects(len(cards), y=y_offset)):
+            for choice_idx, entry in enumerate(self.spoils_change_entries):
+                for i, rect in enumerate(self._calc_left_choice_card_rects(len(entry.cards), y=y_offset)):
                     if rect.collidepoint(mx, my):
-                        self.hovered_card_tooltip = build_modifier_tooltip(cards[i])
+                        self.hovered_card_tooltip = build_modifier_tooltip(entry.cards[i])
                         self.hovered_card_rect = rect
                         return
                 y_offset += _MULTI_CHOICE_BLOCK_STEP
@@ -1097,20 +1101,31 @@ class GameScene:
     def _update_spirit_panel_hover(self, mouse_pos):
         """Check if mouse is hovering over elements in the spirit panel."""
         mx, my = mouse_pos
+        # Right pop-out spirit panel
         if not self.spirit_panel_spirit_id:
             self.hovered_spirit_panel_guidance = False
             self.hovered_spirit_panel_influence = False
             self.hovered_spirit_panel_worship = None
-            return
-        r = self.ui_renderer.spirit_panel_guidance_rect
-        self.hovered_spirit_panel_guidance = r is not None and r.collidepoint(mx, my)
-        r = self.ui_renderer.spirit_panel_influence_rect
-        self.hovered_spirit_panel_influence = r is not None and r.collidepoint(mx, my)
-        self.hovered_spirit_panel_worship = None
-        for fid, rect in self.ui_renderer.spirit_panel_worship_rects.items():
+        else:
+            r = self.ui_renderer.spirit_panel_guidance_rect
+            self.hovered_spirit_panel_guidance = r is not None and r.collidepoint(mx, my)
+            r = self.ui_renderer.spirit_panel_influence_rect
+            self.hovered_spirit_panel_influence = r is not None and r.collidepoint(mx, my)
+            self.hovered_spirit_panel_worship = None
+            for fid, rect in self.ui_renderer.spirit_panel_worship_rects.items():
+                if rect.collidepoint(mx, my):
+                    self.hovered_spirit_panel_worship = fid
+                    break
+        # Persistent spirit panel (always check)
+        r = self.ui_renderer.spirit_panel_persistent_guidance_rect
+        self.hovered_persistent_spirit_guidance = r is not None and r.collidepoint(mx, my)
+        r = self.ui_renderer.spirit_panel_persistent_influence_rect
+        self.hovered_persistent_spirit_influence = r is not None and r.collidepoint(mx, my)
+        self.hovered_persistent_spirit_worship = None
+        for fid, rect in self.ui_renderer.spirit_panel_persistent_worship_rects.items():
             if rect.collidepoint(mx, my):
-                self.hovered_spirit_panel_worship = fid
-                return
+                self.hovered_persistent_spirit_worship = fid
+                break
 
     def _update_ejection_title_hover(self, mouse_pos):
         """Check if mouse is hovering over keyword spans in ejection title text."""
@@ -1428,16 +1443,16 @@ class GameScene:
         if self.change_cards:
             for cr in self._calc_left_choice_card_rects(len(self.change_cards)):
                 rects.append((cr, _WEIGHT_NON_TEXT))
-        if self.spoils_cards:
+        if self.spoils_entries:
             y_offset = _CHOICE_CARD_Y
-            for cards in self.spoils_cards:
-                for cr in self._calc_left_choice_card_rects(len(cards), y=y_offset):
+            for entry in self.spoils_entries:
+                for cr in self._calc_left_choice_card_rects(len(entry.cards), y=y_offset):
                     rects.append((cr, _WEIGHT_NON_TEXT))
                 y_offset += _MULTI_CHOICE_BLOCK_STEP
-        if self.spoils_change_cards:
+        if self.spoils_change_entries:
             y_offset = _CHOICE_CARD_Y
-            for cards in self.spoils_change_cards:
-                for cr in self._calc_left_choice_card_rects(len(cards), y=y_offset):
+            for entry in self.spoils_change_entries:
+                for cr in self._calc_left_choice_card_rects(len(entry.cards), y=y_offset):
                     rects.append((cr, _WEIGHT_NON_TEXT))
                 y_offset += _MULTI_CHOICE_BLOCK_STEP
 
@@ -1593,6 +1608,7 @@ class GameScene:
                 my_spirit_id=self.app.my_spirit_id,
                 circle_fills=fills,
                 store_hover_rects=False,
+                persistent_hover_rects=True,
             )
 
         # Draw event log (bottom right)
@@ -1718,6 +1734,33 @@ class GameScene:
             self.tooltip_registry.offer(TooltipDescriptor(
                 tooltip, _GUIDANCE_HOVER_REGIONS,
                 r.centerx, r.bottom, below=True,
+            ))
+
+        # Persistent spirit panel hover tooltips (bottom-left, always visible)
+        if self.hovered_persistent_spirit_guidance:
+            spirit = self.spirits.get(self.app.my_spirit_id, {})
+            if spirit.get("guided_faction"):
+                tooltip = self._build_guidance_panel_tooltip(self.app.my_spirit_id)
+            else:
+                tooltip = self._GUIDANCE_GENERIC_TOOLTIP
+            r = self.ui_renderer.spirit_panel_persistent_guidance_rect
+            self.tooltip_registry.offer(TooltipDescriptor(
+                tooltip, _GUIDANCE_HOVER_REGIONS,
+                r.centerx, r.top, below=False,
+            ))
+        elif self.hovered_persistent_spirit_influence:
+            r = self.ui_renderer.spirit_panel_persistent_influence_rect
+            self.tooltip_registry.offer(TooltipDescriptor(
+                _INFLUENCE_TOOLTIP, _GUIDANCE_HOVER_REGIONS,
+                r.centerx, r.top, below=False,
+            ))
+        elif self.hovered_persistent_spirit_worship:
+            tooltip = self._build_spirit_worship_tooltip(
+                self.hovered_persistent_spirit_worship, self.app.my_spirit_id)
+            r = self.ui_renderer.spirit_panel_persistent_worship_rects[self.hovered_persistent_spirit_worship]
+            self.tooltip_registry.offer(TooltipDescriptor(
+                tooltip, _GUIDANCE_HOVER_REGIONS,
+                r.centerx, r.top, below=False,
             ))
 
         # Agenda pool icon hover tooltip
