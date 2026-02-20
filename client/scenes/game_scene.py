@@ -654,7 +654,10 @@ class GameScene:
 
     def _submit_action(self):
         if self.phase == Phase.VAGRANT_PHASE.value:
+            can_swell = self.phase_options.get("can_swell", False)
             payload = {}
+            if can_swell:
+                payload["swell"] = True
             if self.selected_faction:
                 payload["guide_target"] = self.selected_faction
             if self.selected_idol_type and self.selected_hex:
@@ -792,6 +795,17 @@ class GameScene:
                             delay=0.0, duration=3.0, drift_pixels=40,
                             direction=1, screen_space=True,
                         ))
+            elif event.get("type") == "swell":
+                sid = event.get("spirit", "")
+                if sid:
+                    vp_pos = self.ui_renderer.vp_positions.get(sid)
+                    if vp_pos:
+                        self.animation.add_effect_animation(TextAnimation(
+                            "+1 VP (Swell)", vp_pos[0], vp_pos[1] + 16,
+                            (220, 200, 60),
+                            delay=0.0, duration=3.0, drift_pixels=40,
+                            direction=1, screen_space=True,
+                        ))
         # Trigger agenda events immediately, but preserve turn_start segmentation
         # for bootstrap payloads so Turn 1 and Turn 2 do not animate concurrently.
         if agenda_events:
@@ -920,10 +934,18 @@ class GameScene:
             self._build_faction_buttons()
             if self.phase_options.get("can_place_idol", True):
                 self._build_idol_buttons()
-            self.submit_button = Button(
-                pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
-                "Confirm", (60, 130, 60)
-            )
+            if self.phase_options.get("can_swell"):
+                self.submit_button = Button(
+                    pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
+                    "Swell", (140, 110, 20),
+                    tooltip="No Guidance targets available.\nSwell to gain 1 VP.",
+                    tooltip_always=True,
+                )
+            else:
+                self.submit_button = Button(
+                    pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
+                    "Confirm", (60, 130, 60)
+                )
 
         elif self.phase == Phase.AGENDA_PHASE.value and action == "choose_agenda":
             hand = self.phase_options.get("hand", [])
@@ -2140,12 +2162,16 @@ class GameScene:
             has_idol = bool(self.selected_idol_type and self.selected_hex)
             can_guide = bool(self.phase_options.get("available_factions"))
             can_place_idol = bool(self.idol_buttons) and bool(self.phase_options.get("neutral_hexes"))
-            if can_guide and can_place_idol:
+            can_swell = self.phase_options.get("can_swell", False)
+            if can_swell:
+                # Swell is always available — no guidance selection required
+                self.submit_button.enabled = True
+            elif can_guide and can_place_idol:
                 self.submit_button.enabled = has_guide and has_idol
             else:
                 self.submit_button.enabled = has_guide or has_idol
 
-            # Selection info right above the Confirm button
+            # Selection info right above the Confirm/Swell button
             parts = []
             if self.selected_faction:
                 fname = faction_full_name(self.selected_faction)
@@ -2174,12 +2200,12 @@ class GameScene:
                     self.submit_button.tooltip = "Still needed: " + ", ".join(missing)
                 else:
                     self.submit_button.tooltip = None
-            else:
+            elif not can_swell:
                 self.submit_button.tooltip = None
 
             self.submit_button.draw(screen, self.font)
             if (self.submit_button.tooltip and self.submit_button.hovered
-                    and not self.submit_button.enabled):
+                    and (not self.submit_button.enabled or self.submit_button.tooltip_always)):
                 self.tooltip_registry.offer(TooltipDescriptor(
                     self.submit_button.tooltip, _GUIDANCE_HOVER_REGIONS,
                     self.submit_button.rect.centerx, self.submit_button.rect.top,

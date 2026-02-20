@@ -230,6 +230,7 @@ class GameState:
                 "neutral_hexes": neutral_hexes,
                 "idol_types": [t.value for t in IdolType],
                 "can_place_idol": not spirit.has_placed_idol_as_vagrant,
+                "can_swell": not available_factions,
             }
 
         elif self.phase == Phase.AGENDA_PHASE:
@@ -291,8 +292,9 @@ class GameState:
             return "Not vagrant"
         guide_target = action.get("guide_target")
         idol_type = action.get("idol_type")
+        is_swell = action.get("swell", False)
 
-        if not guide_target and not idol_type:
+        if not guide_target and not idol_type and not is_swell:
             return "Must choose at least one action"
 
         # If both guidance and idol placement are available, require both
@@ -315,6 +317,14 @@ class GameState:
                 for h in self.hex_map.all_hexes
             )
         )
+        if is_swell:
+            if can_guide:
+                return "Cannot Swell when Guidance targets are available"
+            if not idol_type:
+                self.pending_actions[spirit.spirit_id] = action
+                return None
+            # Swell with optional idol placement — fall through to idol validation
+
         if can_guide and can_place_idol:
             if not guide_target:
                 return "Must also choose a Faction to Guide"
@@ -405,6 +415,7 @@ class GameState:
         # Group guide attempts by target faction, and collect idol placements
         guide_attempts: dict[str, list[str]] = {}
         idol_placements = []
+        swell_spirits = []
 
         for spirit_id, action in self.pending_actions.items():
             guide_target = action.get("guide_target")
@@ -413,6 +424,8 @@ class GameState:
                 guide_attempts.setdefault(guide_target, []).append(spirit_id)
             if idol_type:
                 idol_placements.append((spirit_id, action))
+            if action.get("swell"):
+                swell_spirits.append(spirit_id)
 
         # Resolve idol placements (always succeed)
         for spirit_id, action in idol_placements:
@@ -513,6 +526,17 @@ class GameState:
                     })
                     for sid in contested:
                         self.guidance_cooldowns.setdefault(sid, set()).add(target_faction)
+
+        # Resolve swell actions
+        for spirit_id in swell_spirits:
+            spirit = self.spirits[spirit_id]
+            spirit.victory_points += 1
+            events.append({
+                "type": "swell",
+                "spirit": spirit_id,
+                "vp_gained": 1,
+                "total_vp": spirit.victory_points,
+            })
 
         self.pending_actions.clear()
         self.phase = Phase.AGENDA_PHASE
