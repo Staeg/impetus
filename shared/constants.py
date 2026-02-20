@@ -133,6 +133,9 @@ class MessageType(str, Enum):
     # Client -> Server
     JOIN_GAME = "join_game"
     READY = "ready"
+    START_GAME = "start_game"
+    SET_LOBBY_OPTIONS = "set_lobby_options"
+    TOGGLE_SPECTATOR = "toggle_spectator"
     SUBMIT_VAGRANT_ACTION = "submit_vagrant_action"
     SUBMIT_AGENDA_CHOICE = "submit_agenda_choice"
     SUBMIT_CHANGE_CHOICE = "submit_change_choice"

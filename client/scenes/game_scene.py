@@ -171,6 +171,7 @@ class GameScene:
         self._display_wars: list | None = None
         self.waiting_for: list[str] = []
         self.has_submitted: bool = False
+        self.spectator_mode: bool = False
         self.event_log: list[str] = []
         self.event_log_scroll_offset: int = 0
         self.event_log_h_scroll_offset: int = 0
@@ -451,6 +452,8 @@ class GameScene:
             self.popup_manager.update_hover(event.pos)
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.spectator_mode:
+                return
             # Check submit button
             if self.submit_button and self.submit_button.clicked(event.pos):
                 self._submit_action()
@@ -709,6 +712,7 @@ class GameScene:
         self._update_state_from_snapshot(payload)
         self.change_tracker.snapshot_and_reset(self.factions, self.spirits)
         self.event_log.append("Game started.")
+        self.spectator_mode = self.app.my_spirit_id not in self.spirits
 
     def _handle_phase_start(self, payload):
         phase = payload.get("phase", "")
@@ -1728,7 +1732,7 @@ class GameScene:
         )
 
         # Draw waiting indicator near confirm button area, only after player has submitted
-        if self.has_submitted and self.waiting_for and not self.orchestrator.deferred_phase_start:
+        if (self.has_submitted or self.spectator_mode) and self.waiting_for and not self.orchestrator.deferred_phase_start:
             self.ui_renderer.draw_waiting_overlay(
                 screen, self.waiting_for, self.spirits,
                 x=20, y=SCREEN_HEIGHT - 90,

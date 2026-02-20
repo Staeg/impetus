@@ -10,9 +10,10 @@ from typing import Optional
 import websockets
 from websockets.asyncio.server import serve, ServerConnection
 
-from shared.constants import MessageType, Phase, AgendaType
+from shared.constants import MessageType, Phase, SubPhase, AgendaType, VP_TO_WIN
 from shared.protocol import create_message, parse_message
 from server.game_state import GameState
+from server import ai
 
 
 class PlayerSession:
@@ -22,6 +23,7 @@ class PlayerSession:
         self.spirit_id = spirit_id
         self.ready = False
         self.connected = True
+        self.is_spectator = False
 
 
 class GameRoom:
@@ -30,6 +32,10 @@ class GameRoom:
         self.players: dict[str, PlayerSession] = {}  # spirit_id -> session
         self.game_state: Optional[GameState] = None
         self.started = False
+        self.host_spirit_id: str = ""
+        self.vp_to_win: int = VP_TO_WIN
+        self.ai_player_count: int = 0
+        self.ai_spirit_ids: set[str] = set()
 
     def add_player(self, session: PlayerSession):
         self.players[session.spirit_id] = session
@@ -42,15 +48,26 @@ class GameRoom:
             else:
                 # Pre-game: fully remove from lobby
                 del self.players[spirit_id]
+                # Transfer host if needed
+                if self.host_spirit_id == spirit_id:
+                    remaining = [p.spirit_id for p in self.players.values()
+                                 if not p.is_spectator]
+                    self.host_spirit_id = remaining[0] if remaining else ""
 
     def reconnect_player(self, spirit_id: str, ws: ServerConnection):
         if spirit_id in self.players:
             self.players[spirit_id].ws = ws
             self.players[spirit_id].connected = True
 
-    def all_ready(self) -> bool:
-        return (len(self.players) >= 2 and
-                all(p.ready for p in self.players.values()))
+    def can_start(self) -> bool:
+        human = [p for p in self.players.values() if not p.is_spectator]
+        return all(p.ready for p in human) and (len(human) + self.ai_player_count) >= 1
+
+    def human_player_count(self) -> int:
+        return sum(1 for p in self.players.values() if not p.is_spectator)
+
+    def spectator_count(self) -> int:
+        return sum(1 for p in self.players.values() if p.is_spectator)
 
     def connected_players(self) -> list[PlayerSession]:
         return [p for p in self.players.values() if p.connected]
@@ -153,6 +170,10 @@ class GameServer:
                         return room_code, sid
                 await ws.send(create_message(MessageType.ERROR, {"message": "Game already started"}))
                 return None, None
+            # Reject if at human player cap (spectators don't count toward cap)
+            if room.human_player_count() >= 5:
+                await ws.send(create_message(MessageType.ERROR, {"message": "Room full."}))
+                return None, None
         else:
             # Create new room with requested code or random
             if create_room:
@@ -176,6 +197,10 @@ class GameServer:
         session = PlayerSession(ws, player_name, spirit_id)
         room.add_player(session)
 
+        # First player becomes host
+        if not room.host_spirit_id:
+            room.host_spirit_id = spirit_id
+
         await ws.send(create_message(MessageType.LOBBY_STATE, {
             "room_code": room_code,
             "spirit_id": spirit_id,
@@ -187,11 +212,20 @@ class GameServer:
     async def _broadcast_lobby_state(self, room: GameRoom):
         players = [
             {"spirit_id": s.spirit_id, "name": s.player_name, "ready": s.ready, "connected": s.connected}
-            for s in room.players.values()
+            for s in room.players.values() if not s.is_spectator
+        ]
+        spectators = [
+            {"spirit_id": s.spirit_id, "name": s.player_name, "connected": s.connected}
+            for s in room.players.values() if s.is_spectator
         ]
         await room.broadcast(create_message(MessageType.LOBBY_STATE, {
             "room_code": room.room_code,
             "players": players,
+            "spectators": spectators,
+            "host_spirit_id": room.host_spirit_id,
+            "vp_to_win": room.vp_to_win,
+            "ai_player_count": room.ai_player_count,
+            "all_ready": room.can_start(),
         }))
 
     async def _handle_game_message(self, room_code: str, spirit_id: str,
@@ -202,11 +236,65 @@ class GameServer:
 
         if msg_type == MessageType.READY:
             session = room.players.get(spirit_id)
-            if session:
+            if session and not session.is_spectator:
                 session.ready = not session.ready
                 await self._broadcast_lobby_state(room)
-                if room.all_ready() and not room.started:
-                    await self._start_game(room)
+
+        elif msg_type == MessageType.START_GAME:
+            if spirit_id != room.host_spirit_id:
+                await room.send_to(spirit_id, create_message(MessageType.ERROR,
+                    {"message": "Only the host can start the game"}))
+                return
+            if not room.can_start():
+                await room.send_to(spirit_id, create_message(MessageType.ERROR,
+                    {"message": "Not all players are ready"}))
+                return
+            if not room.started:
+                await self._start_game(room)
+
+        elif msg_type == MessageType.SET_LOBBY_OPTIONS:
+            if spirit_id != room.host_spirit_id:
+                await room.send_to(spirit_id, create_message(MessageType.ERROR,
+                    {"message": "Only the host can change lobby options"}))
+                return
+            if "vp_to_win" in payload:
+                room.vp_to_win = max(5, min(25, int(payload["vp_to_win"])))
+            if "ai_count" in payload:
+                ai_count = max(0, min(5, int(payload["ai_count"])))
+                # Total human + AI must not exceed 5
+                if room.human_player_count() + ai_count > 5:
+                    ai_count = max(0, 5 - room.human_player_count())
+                room.ai_player_count = ai_count
+            await self._broadcast_lobby_state(room)
+
+        elif msg_type == MessageType.TOGGLE_SPECTATOR:
+            session = room.players.get(spirit_id)
+            if not session:
+                return
+            if session.is_spectator:
+                # Become player — check capacity
+                if room.human_player_count() >= 5:
+                    await room.send_to(spirit_id, create_message(MessageType.ERROR,
+                        {"message": "Room full."}))
+                    return
+                session.is_spectator = False
+                # Ensure room has a host if host slot was empty
+                if not room.host_spirit_id:
+                    room.host_spirit_id = spirit_id
+            else:
+                # Become spectator — check spectator cap
+                if room.spectator_count() >= 10:
+                    await room.send_to(spirit_id, create_message(MessageType.ERROR,
+                        {"message": "Spectator slots full."}))
+                    return
+                session.is_spectator = True
+                session.ready = False
+                # Transfer host if this player was the host
+                if room.host_spirit_id == spirit_id:
+                    remaining = [p.spirit_id for p in room.players.values()
+                                 if not p.is_spectator and p.spirit_id != spirit_id]
+                    room.host_spirit_id = remaining[0] if remaining else ""
+            await self._broadcast_lobby_state(room)
 
         elif msg_type == MessageType.SUBMIT_VAGRANT_ACTION:
             if room.game_state and room.game_state.phase == Phase.VAGRANT_PHASE:
@@ -334,12 +422,23 @@ class GameServer:
 
     async def _start_game(self, room: GameRoom):
         room.started = True
+        # Only non-spectator humans participate as spirits
         player_info = [
             {"spirit_id": s.spirit_id, "name": s.player_name}
             for s in room.players.values()
+            if not s.is_spectator
         ]
+        # Add AI players
+        if room.ai_player_count > 0:
+            ai_names = ai.assign_ai_names(room.ai_player_count)
+            for name in ai_names:
+                ai_sid = str(uuid.uuid4())[:8]
+                room.ai_spirit_ids.add(ai_sid)
+                player_info.append({"spirit_id": ai_sid, "name": name})
+
         room.game_state = GameState()
-        initial_snapshot, turn_results = room.game_state.setup_game(player_info)
+        initial_snapshot, turn_results = room.game_state.setup_game(
+            player_info, vp_to_win=room.vp_to_win)
 
         # Send initial state (pre-setup) so client starts with just starting hexes
         await room.broadcast(create_message(MessageType.GAME_START, initial_snapshot.to_dict()))
@@ -366,6 +465,28 @@ class GameServer:
                 "options": options,
             }))
         await self._broadcast_waiting(room)
+        # Auto-resolve AI inputs
+        await self._resolve_ai_inputs(room)
+
+    async def _resolve_ai_inputs(self, room: GameRoom):
+        """Submit actions on behalf of AI spirits and trigger resolution if complete."""
+        gs = room.game_state
+        for sid in list(room.ai_spirit_ids):
+            if gs.needs_input(sid) and sid not in gs.pending_actions:
+                if gs.phase == Phase.VAGRANT_PHASE:
+                    action = ai.get_ai_vagrant_action(gs, sid)
+                elif gs.phase == Phase.AGENDA_PHASE:
+                    action = ai.get_ai_agenda_choice(gs, sid)
+                else:
+                    continue
+                if action:
+                    gs.submit_action(sid, action)
+        await self._broadcast_waiting(room)
+        if gs.all_inputs_received():
+            if gs.phase == Phase.VAGRANT_PHASE:
+                await self._resolve_and_advance(room)
+            elif gs.phase == Phase.AGENDA_PHASE:
+                await self._handle_agenda_resolution(room)
 
     async def _broadcast_waiting(self, room: GameRoom):
         gs = room.game_state
@@ -380,8 +501,20 @@ class GameServer:
         change_events = gs.prepare_change_choices()
         await self._broadcast_phase_result(room, change_events)
 
+        if not hasattr(room, '_pending_change_events'):
+            room._pending_change_events = []
+
+        # Auto-submit change choices for AI spirits
+        for sid in list(room.ai_spirit_ids):
+            if sid in gs.change_pending:
+                cards = gs.change_pending[sid]
+                idx = ai.get_ai_change_choice(cards)
+                err, evts = gs.submit_change_choice(sid, idx)
+                if not err:
+                    room._pending_change_events.extend(evts)
+
         if gs.has_pending_change_choices():
-            # Send change_choice to each pending spirit
+            # Send change_choice to each remaining human spirit
             for spirit_id, cards in gs.change_pending.items():
                 await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
                     "phase": "change_choice",
@@ -394,7 +527,13 @@ class GameServer:
             }))
             return
 
-        # No change choices needed - resolve immediately
+        # All change choices done (AI-only or none) — broadcast modifier events if any
+        if room._pending_change_events:
+            all_change_events = room._pending_change_events
+            room._pending_change_events = []
+            await self._broadcast_phase_result(room, all_change_events)
+
+        # Resolve immediately
         events = gs.resolve_agenda_phase_after_changes()
         await self._broadcast_phase_result(room, events)
         await self._auto_resolve_phases(room)
@@ -402,6 +541,25 @@ class GameServer:
     async def _send_ejection_options(self, room: GameRoom):
         """Send ejection choice options to spirits that need them."""
         gs = room.game_state
+
+        # Auto-submit ejection choices for AI spirits
+        for sid in list(room.ai_spirit_ids):
+            if sid in gs.ejection_pending:
+                faction_id = gs.ejection_pending[sid]
+                faction = gs.factions[faction_id]
+                agenda_pool = [c.agenda_type.value for c in faction.agenda_pool]
+                agenda_types = [at.value for at in AgendaType]
+                remove_type, add_type = ai.get_ai_ejection_choice(agenda_pool, agenda_types)
+                gs.submit_ejection_choice(sid, remove_type, add_type)
+
+        if not gs.ejection_pending:
+            # All ejections were AI — finalize immediately
+            events = gs.finalize_sub_choices()
+            await self._broadcast_phase_result(room, events)
+            await self._auto_resolve_phases(room)
+            return
+
+        # Send to remaining human spirits
         for spirit_id, faction_id in gs.ejection_pending.items():
             faction = gs.factions[faction_id]
             agenda_pool = [c.agenda_type.value for c in faction.agenda_pool]
@@ -434,8 +592,34 @@ class GameServer:
             await self._broadcast_phase_result(room, events)
             if gs.phase == Phase.GAME_OVER:
                 return
-            # If spoils choices are pending, send ALL options to each spirit
+            # If spoils choices are pending, auto-submit for AI then send to humans
             if gs.spoils_pending:
+                ai_spoils_events = []
+                # Auto-submit spoils for AI spirits
+                for sid in list(room.ai_spirit_ids):
+                    if sid in gs.spoils_pending:
+                        pending_list = gs.spoils_pending[sid]
+                        err, evts = gs.submit_spoils_choice(
+                            sid, ai.get_ai_spoils_choice(pending_list))
+                        if not err:
+                            ai_spoils_events.extend(evts)
+                # Auto-submit spoils change choices for AI spirits
+                for sid in list(room.ai_spirit_ids):
+                    if sid in gs.spoils_pending:
+                        pending_list = gs.spoils_pending[sid]
+                        change_pendings = [p for p in pending_list
+                                           if p.stage == SubPhase.CHANGE_CHOICE]
+                        if change_pendings:
+                            err, evts = gs.submit_spoils_change_choice(
+                                sid, ai.get_ai_spoils_change_choice(change_pendings))
+                            if not err:
+                                ai_spoils_events.extend(evts)
+                if ai_spoils_events:
+                    await self._broadcast_phase_result(room, ai_spoils_events)
+                if not gs.spoils_pending:
+                    # All spoils were AI — phase advanced to SCORING, continue loop
+                    continue
+                # Human spirits still have pending spoils — send options
                 for sid, pending_list in gs.spoils_pending.items():
                     choices = []
                     for p in pending_list:
