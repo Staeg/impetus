@@ -462,7 +462,10 @@ class GameScene:
             # Check ejection remove buttons
             for btn in self.remove_buttons:
                 if btn.clicked(event.pos):
-                    self.selected_ejection_remove_type = btn.text.lower()
+                    chosen_remove = btn.text.lower()
+                    if self.selected_ejection_add_type == chosen_remove:
+                        return
+                    self.selected_ejection_remove_type = chosen_remove
                     return
 
             # Check action buttons
@@ -601,7 +604,10 @@ class GameScene:
 
     def _handle_action_button(self, text: str):
         if self.ejection_pending:
-            self.selected_ejection_add_type = text.lower()
+            chosen_add = text.lower()
+            if self.selected_ejection_remove_type == chosen_add:
+                return
+            self.selected_ejection_add_type = chosen_add
             return
 
     def _handle_faction_select(self, faction_id: str):
@@ -667,7 +673,11 @@ class GameScene:
                 self._clear_selection()
                 self.has_submitted = True
         elif self.phase == SubPhase.EJECTION_CHOICE:
-            if self.selected_ejection_remove_type and self.selected_ejection_add_type:
+            if (
+                self.selected_ejection_remove_type
+                and self.selected_ejection_add_type
+                and self.selected_ejection_remove_type != self.selected_ejection_add_type
+            ):
                 self.app.network.send(MessageType.SUBMIT_EJECTION_AGENDA, {
                     "remove_type": self.selected_ejection_remove_type,
                     "add_type": self.selected_ejection_add_type,
@@ -938,7 +948,7 @@ class GameScene:
             lines.append("you cannot Guide them.")
         elif worship_id:
             name = self.spirits.get(worship_id, {}).get("name", worship_id[:6])
-            lines.append(f"Worshipped by: {name}")
+            lines.append(f"Worshipping: {name}")
             my_id = self.app.my_spirit_id
             my_idols = self._count_spirit_idols_in_faction(my_id, faction_id)
             their_idols = self._count_spirit_idols_in_faction(worship_id, faction_id)
@@ -2237,6 +2247,7 @@ class GameScene:
 
         # Highlight and draw remove buttons
         for btn in self.remove_buttons:
+            btn.enabled = btn.text.lower() != self.selected_ejection_add_type
             if self.selected_ejection_remove_type and btn.text.lower() == self.selected_ejection_remove_type:
                 btn.color = (160, 60, 60)
             else:
@@ -2245,6 +2256,7 @@ class GameScene:
 
         # Highlight and draw add buttons
         for btn in self.action_buttons:
+            btn.enabled = btn.text.lower() != self.selected_ejection_remove_type
             if self.selected_ejection_add_type and btn.text.lower() == self.selected_ejection_add_type:
                 btn.color = (80, 150, 80)
             else:
@@ -2276,9 +2288,19 @@ class GameScene:
 
         # Confirm button
         if self.submit_button:
+            same_type = (
+                self.selected_ejection_remove_type is not None
+                and self.selected_ejection_add_type is not None
+                and self.selected_ejection_remove_type == self.selected_ejection_add_type
+            )
             self.submit_button.enabled = (
                 self.selected_ejection_remove_type is not None
                 and self.selected_ejection_add_type is not None
+                and not same_type
+            )
+            self.submit_button.tooltip = (
+                "Choose a different Agenda to add."
+                if same_type else None
             )
             self.submit_button.draw(screen, self.font)
 
