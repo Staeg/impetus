@@ -34,7 +34,7 @@ class TestGameStateSetup:
 
     def test_initial_turn(self):
         gs = make_game()
-        assert gs.turn == 3
+        assert gs.turn == 2
 
     def test_factions_created(self):
         gs = make_game()
@@ -58,35 +58,37 @@ class TestGameStateSetup:
                     # due to opening automated turns resolving Trade/Steal)
                     assert other_fid in faction.regard
 
-    def test_turn2_declared_wars_are_ripe_by_turn3(self, monkeypatch):
-        # Force Turn 1 mountain modifier to Steal (+1 penalty), then force
-        # mountain's Turn 2 random agenda to Steal so wars are declared.
-        change_calls = {"n": 0}
+    def test_habitat_starting_modifiers(self):
+        from shared.constants import HABITAT_STARTING_MODIFIERS
+        gs = GameState()
+        players = [{"spirit_id": f"s{i}", "name": f"P{i}"} for i in range(3)]
+        initial_snapshot, _ = gs.setup_game(players)
+        for fid, expected in HABITAT_STARTING_MODIFIERS.items():
+            faction_state = initial_snapshot.factions[fid]
+            for modifier, count in expected.items():
+                actual = faction_state.change_modifiers.get(modifier.value, 0)
+                assert actual == count, f"{fid} {modifier}: expected {count}, got {actual}"
+
+    def test_automated_turn_wars_erupt(self, monkeypatch):
+        # Mountain's habitat gives it Steal ×1; force its automated Turn 1
+        # agenda to Steal so a war is declared.
         agenda_calls = {"n": 0}
 
         def fake_choice(seq):
-            # Agenda pool draw (list[AgendaCard])
             if seq and hasattr(seq[0], "agenda_type"):
                 agenda_calls["n"] += 1
-                # First agenda draw belongs to mountain in setup_game order.
                 if agenda_calls["n"] == 1:
                     for card in seq:
                         if card.agenda_type == AgendaType.STEAL:
                             return card
-                return seq[0]
-
-            # Change deck draw (list[ChangeModifierTarget])
-            change_calls["n"] += 1
-            # First change draw belongs to mountain in setup_game order.
-            if change_calls["n"] == 1:
-                return ChangeModifierTarget.STEAL
             return seq[0]
 
         monkeypatch.setattr("random.choice", fake_choice)
 
         gs = make_game()
-        assert gs.turn == 3
+        assert gs.turn == 2
         assert len(gs.wars) > 0
+        # Wars erupt and ripen within the same automated turn's war phase.
         assert all(w.is_ripe for w in gs.wars)
 
 

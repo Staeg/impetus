@@ -44,7 +44,7 @@ pyinstaller impetus.spec --noconfirm
 
 Each phase: wait for input → validate → resolve → broadcast → transition. Driven by `server/game_state.py`.
 
-`Phase.SETUP` exists in the enum but the game never transitions into it. Setup (two automated turns — one all-Change, one all-random) runs during `LOBBY` before the first `VAGRANT` phase begins.
+`Phase.SETUP` exists in the enum but the game never transitions into it. Setup (one automated turn — all-random) runs during `LOBBY` before the first `VAGRANT` phase begins. Each faction's starting Change modifiers are determined by its habitat (see `HABITAT_STARTING_MODIFIERS` in `shared/constants.py`), set before the automated turn.
 
 ### Sub-phases
 Several phases trigger sub-phases where the server waits for a specific player choice before continuing. These are **bare strings**, not in the `Phase` enum:

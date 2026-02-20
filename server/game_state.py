@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from shared.constants import (
     Phase, SubPhase, AgendaType, IdolType, FACTION_NAMES, RACES, VP_TO_WIN,
-    STARTING_INFLUENCE, CHANGE_DECK, FACTION_START_HEXES,
+    STARTING_INFLUENCE, CHANGE_DECK, FACTION_START_HEXES, HABITAT_STARTING_MODIFIERS,
 )
 
 # Left-to-right ribbon order: sorted by x then y of flat-top axial hex positions
@@ -152,37 +152,35 @@ class GameState:
 
             turn_results.append((events, self.get_snapshot()))
 
-        # Capture initial snapshot before any automated turns
+        # Apply habitat-based starting Change modifiers before any automated turns
+        for fid, faction in self.factions.items():
+            for modifier, count in HABITAT_STARTING_MODIFIERS.get(fid, {}).items():
+                faction.change_modifiers[modifier] = count
+
+        # Capture initial snapshot before the automated turn
         initial_snapshot = self.get_snapshot()
 
-        # Turn 1: all factions play Change.
-        _run_automated_turn(
-            turn_number=1,
-            agenda_choices={fid: AgendaType.CHANGE for fid in self.factions},
-            agenda_event_type="agenda_chosen",
-        )
-
-        # Turn 2: normal unguided turn (all factions play random agendas).
-        turn_two_choices: dict[str, AgendaType] = {}
+        # Turn 1: normal unguided turn (all factions play random agendas).
+        turn_one_choices: dict[str, AgendaType] = {}
         for fid, faction in self.factions.items():
             if faction.eliminated:
                 continue
             card = faction.draw_random_agenda()
             faction.played_agenda_this_turn.append(card)
-            turn_two_choices[fid] = card.agenda_type
+            turn_one_choices[fid] = card.agenda_type
         _run_automated_turn(
-            turn_number=2,
-            agenda_choices=turn_two_choices,
+            turn_number=1,
+            agenda_choices=turn_one_choices,
             agenda_event_type="agenda_random",
         )
 
-        # Players begin taking actions on Turn 3.
-        self.turn = 3
+        # Players begin taking actions on Turn 2.
+        self.turn = 2
         self.phase = Phase.VAGRANT_PHASE
-        # Append turn 3 marker to the last automated turn so the client
+        # Append turn 2 marker to the last automated turn so the client
         # resets its change tracker and logs the turn boundary.
         if turn_results:
-            turn_results[-1][0].append({"type": "turn_start", "turn": 3})
+            turn_results[-1][0].append({"type": "turn_start", "turn": 2})
         return initial_snapshot, turn_results
 
     def get_snapshot(self) -> GameStateSnapshot:

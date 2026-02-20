@@ -118,6 +118,16 @@ CHANGE_DECK = [
     ChangeModifierTarget.EXPAND,
 ]
 
+# Starting Change modifiers per faction habitat
+HABITAT_STARTING_MODIFIERS: dict[str, dict[ChangeModifierTarget, int]] = {
+    "mountain": {ChangeModifierTarget.TRADE: 1, ChangeModifierTarget.STEAL: 1},
+    "mesa":     {ChangeModifierTarget.TRADE: 2},
+    "sand":     {ChangeModifierTarget.STEAL: 1, ChangeModifierTarget.EXPAND: 1},
+    "plains":   {ChangeModifierTarget.EXPAND: 2},
+    "river":    {ChangeModifierTarget.TRADE: 1, ChangeModifierTarget.EXPAND: 1},
+    "jungle":   {ChangeModifierTarget.STEAL: 2},
+}
+
 
 class MessageType(str, Enum):
     # Client -> Server
