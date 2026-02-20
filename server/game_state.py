@@ -37,6 +37,7 @@ class GameState:
     def __init__(self):
         self.turn: int = 0
         self.phase: Phase = Phase.LOBBY
+        self.vp_to_win: int = VP_TO_WIN
         self.hex_map = HexMap()
         self.factions: dict[str, Faction] = {}
         self.spirits: dict[str, Spirit] = {}
@@ -63,7 +64,7 @@ class GameState:
         # Faction display order (left-to-right by starting hex x-position)
         self.faction_order: list[str] = list(FACTION_NAMES)
 
-    def setup_game(self, player_info: list[dict]) -> tuple[GameStateSnapshot, list[tuple[list[dict], GameStateSnapshot]]]:
+    def setup_game(self, player_info: list[dict], vp_to_win: int = VP_TO_WIN) -> tuple[GameStateSnapshot, list[tuple[list[dict], GameStateSnapshot]]]:
         """Initialize the game with the given players.
 
         Returns (initial_snapshot, turn_results) where:
@@ -72,6 +73,7 @@ class GameState:
 
         player_info: list of {spirit_id, name}
         """
+        self.vp_to_win = vp_to_win
         # Create factions
         for faction_id in FACTION_NAMES:
             faction = Faction(faction_id)
@@ -862,7 +864,7 @@ class GameState:
         winner = None
         max_vp = 0
         for spirit in self.spirits.values():
-            if spirit.victory_points >= VP_TO_WIN:
+            if spirit.victory_points >= self.vp_to_win:
                 if spirit.victory_points > max_vp:
                     max_vp = spirit.victory_points
                     winner = spirit.spirit_id
