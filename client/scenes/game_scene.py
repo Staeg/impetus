@@ -195,6 +195,10 @@ class GameScene:
         self.preview_guidance: str | None = None
         self.preview_idol: tuple | None = None  # (idol_type, q, r)
 
+        # Fading error message (e.g. invalid hex click)
+        self._hex_error_message: str = ""
+        self._hex_error_timer: float = 0.0
+
         # Agenda state
         self.agenda_hand: list[dict] = []
         self.selected_agenda_index: int = -1
@@ -608,6 +612,18 @@ class GameScene:
     def _handle_hex_click(self, hex_coord: tuple[int, int]):
         if self.phase == Phase.VAGRANT_PHASE.value and self.hex_ownership.get(hex_coord) is None:
             # Neutral hex during vagrant phase: select for idol placement
+            my_id = self.app.my_spirit_id
+            q, r = hex_coord
+            if any(
+                isinstance(idol, dict)
+                and idol.get("owner_spirit") == my_id
+                and idol.get("position", {}).get("q") == q
+                and idol.get("position", {}).get("r") == r
+                for idol in self.all_idols
+            ):
+                self._hex_error_message = "Hex already contains one of your Idols!"
+                self._hex_error_timer = 2.0
+                return
             self.selected_hex = hex_coord
         else:
             owner = self.hex_ownership.get(hex_coord)
@@ -942,6 +958,7 @@ class GameScene:
         self.faction_buttons = []
         self.faction_button_ids = []
         all_factions = available + blocked + contested_blocked
+        all_factions.sort(key=lambda fid: self.faction_order.index(fid) if fid in self.faction_order else 999)
         for i, fid in enumerate(all_factions):
             color = FACTION_COLORS.get(fid, (100, 100, 100))
             is_blocked = fid in blocked
@@ -1479,6 +1496,8 @@ class GameScene:
 
     def update(self, dt):
         self.animation.update(dt)
+        if self._hex_error_timer > 0:
+            self._hex_error_timer = max(0.0, self._hex_error_timer - dt)
         # Incrementally reveal hexes, gold, and wars as animations become active
         if self._display_hex_ownership is not None:
             self.orchestrator.apply_hex_reveals(self._display_hex_ownership)
@@ -1678,6 +1697,7 @@ class GameScene:
                     change_rects=self.panel_change_rects,
                     wars=render_wars,
                     all_factions=self.factions,
+                    faction_order=self.faction_order,
                 )
             else:
                 self.ui_renderer.faction_panel_rect = None
@@ -1852,6 +1872,14 @@ class GameScene:
                     tooltip_text, _RIBBON_WAR_HOVER_REGIONS,
                     war_rect.centerx, war_rect.bottom, below=True,
                 ))
+
+        # Fading error message (hex click errors, etc.)
+        if self._hex_error_timer > 0 and self._hex_error_message:
+            _ERR_FADE_DURATION = 0.5
+            alpha = min(1.0, self._hex_error_timer / _ERR_FADE_DURATION) * 255
+            surf = self.small_font.render(self._hex_error_message, True, (255, 90, 70))
+            surf.set_alpha(int(alpha))
+            screen.blit(surf, surf.get_rect(center=(SCREEN_WIDTH // 2, 108)))
 
         # Render the single active tooltip (suppressed when popups are open)
         self.tooltip_registry.render(screen, self.small_font, self.popup_manager)

@@ -328,6 +328,12 @@ class GameState:
                 return "Invalid hex"
             if self.hex_map.ownership.get((hex_q, hex_r)) is not None:
                 return "Hex is not neutral"
+            if any(
+                i.owner_spirit == spirit.spirit_id
+                and i.position.q == hex_q and i.position.r == hex_r
+                for i in self.hex_map.idols
+            ):
+                return "Hex already contains one of your Idols!"
 
         self.pending_actions[spirit.spirit_id] = action
         return None
