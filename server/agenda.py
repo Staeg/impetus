@@ -430,7 +430,9 @@ def finalize_all_spoils(factions, hex_map, wars, events,
                     loser_hex = coord
                     break
             if loser_hex:
-                expand_targets.setdefault(loser_hex, []).append(winner)
+                claimants = expand_targets.setdefault(loser_hex, [])
+                if winner not in claimants:
+                    claimants.append(winner)
 
     # Resolve contested spoils expand
     contested_expand_counts = Counter()  # faction_id -> number of contested expands
