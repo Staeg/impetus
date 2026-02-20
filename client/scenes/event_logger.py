@@ -34,6 +34,10 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
         names = [spirits.get(sid, {}).get("name", sid[:6]) for sid in spirit_ids]
         event_log.append(f"Contested guidance of {fname}! ({', '.join(names)})")
 
+    elif etype == "swell":
+        name = spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
+        event_log.append(f"{name} Swelled (+1 VP, total: {event.get('total_vp', 0)})")
+
     elif etype == "agenda_chosen":
         fname = faction_full_name(event["faction"])
         event_log.append(f"{fname} plays {event['agenda']}")
