@@ -2,8 +2,9 @@
 
 import pygame
 from shared.constants import (
-    SCREEN_WIDTH, SCREEN_HEIGHT, HEX_SIZE, FACTION_NAMES, FACTION_DISPLAY_NAMES,
+    SCREEN_WIDTH, SCREEN_HEIGHT, HEX_SIZE, FACTION_NAMES,
 )
+from client.faction_names import faction_full_name
 from shared.hex_utils import axial_to_pixel, hex_neighbors
 from client.renderer.animation import (
     AnimationManager, AgendaSlideAnimation, TextAnimation, ArrowAnimation,
@@ -43,7 +44,7 @@ class AnimationOrchestrator:
             return (SCREEN_WIDTH // 2, 97)
         cell_w = SCREEN_WIDTH // len(FACTION_NAMES)
         cx = idx * cell_w
-        abbr = FACTION_DISPLAY_NAMES.get(faction_id, faction_id)
+        abbr = faction_full_name(faction_id)
         abbr_w = small_font.size(abbr)[0]
         gold_x = cx + 6 + abbr_w + 6
         return (gold_x, 97)

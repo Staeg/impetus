@@ -15,6 +15,13 @@ def make_game(num_players=3):
     return gs
 
 
+def clear_affinities(gs):
+    """Remove all spirit affinities so contested guidance resolves via normal rules."""
+    for spirit in gs.spirits.values():
+        spirit.habitat_affinity = ""
+        spirit.race_affinity = ""
+
+
 def neutral_hexes(gs, n=2):
     """Get n guaranteed-neutral hex coordinates from the game state."""
     return list(gs.hex_map.get_neutral_hexes())[:n]
@@ -135,6 +142,11 @@ class TestVagrantPhase:
 
     def test_contested_guide(self):
         gs = make_game(2)
+        # Clear affinities so no spirit has an advantage — normal contest applies
+        gs.spirits["spirit_0"].habitat_affinity = ""
+        gs.spirits["spirit_0"].race_affinity = ""
+        gs.spirits["spirit_1"].habitat_affinity = ""
+        gs.spirits["spirit_1"].race_affinity = ""
         h = neutral_hexes(gs)
         gs.submit_action("spirit_0", {
             "guide_target": "mountain",
@@ -187,6 +199,7 @@ class TestVagrantPhase:
 
     def test_contested_single_event(self):
         gs = make_game(2)
+        clear_affinities(gs)
         h = neutral_hexes(gs)
         gs.submit_action("spirit_0", {
             "guide_target": "mountain",
@@ -205,6 +218,7 @@ class TestVagrantPhase:
     def test_contested_guidance_cooldown(self):
         """Contested guidance blocks the faction for 1 turn, then expires."""
         gs = make_game(2)
+        clear_affinities(gs)
         h = neutral_hexes(gs)
         gs.submit_action("spirit_0", {
             "guide_target": "mountain",
@@ -266,6 +280,7 @@ class TestVagrantPhase:
 
     def test_idol_limit_per_vagrant_stint(self):
         gs = make_game(2)
+        clear_affinities(gs)
         # Both contest same faction so both stay vagrant, but place idols
         neutral = list(gs.hex_map.get_neutral_hexes())
         h0, h1 = neutral[0], neutral[1]
@@ -303,6 +318,100 @@ class TestVagrantPhase:
         gs = make_game(2)
         options = gs.get_phase_options("spirit_0")
         assert options["can_place_idol"] is True
+
+    def test_habitat_affinity_wins_contest(self):
+        """A spirit with habitat affinity guides the faction; others waste their turn."""
+        gs = make_game(2)
+        clear_affinities(gs)
+        gs.spirits["spirit_0"].habitat_affinity = "mountain"  # matches mountain faction
+        h = neutral_hexes(gs)
+        gs.submit_action("spirit_0", {
+            "guide_target": "mountain",
+            "idol_type": "battle", "idol_q": h[0][0], "idol_r": h[0][1],
+        })
+        gs.submit_action("spirit_1", {
+            "guide_target": "mountain",
+            "idol_type": "affluence", "idol_q": h[1][0], "idol_r": h[1][1],
+        })
+        events = gs.resolve_current_phase()
+        # spirit_0 has habitat affinity → wins
+        assert gs.spirits["spirit_0"].is_vagrant is False
+        assert gs.spirits["spirit_0"].guided_faction == "mountain"
+        assert gs.spirits["spirit_1"].is_vagrant is True
+        # No cooldown for either (affinity resolved the contest)
+        assert "mountain" not in gs.guidance_cooldowns.get("spirit_0", set())
+        assert "mountain" not in gs.guidance_cooldowns.get("spirit_1", set())
+        # Loser gets a guide_contested event, winner gets guided event
+        guided = [e for e in events if e["type"] == "guided"]
+        assert len(guided) == 1 and guided[0]["spirit"] == "spirit_0"
+        contested = [e for e in events if e["type"] == "guide_contested"]
+        assert len(contested) == 1
+        assert contested[0]["spirits"] == ["spirit_1"]
+        assert contested[0].get("won_by_affinity") == "spirit_0"
+
+    def test_race_affinity_wins_contest(self):
+        """A spirit with race affinity wins when no habitat affinity is present."""
+        gs = make_game(2)
+        clear_affinities(gs)
+        mountain_race = gs.factions["mountain"].race
+        gs.spirits["spirit_0"].race_affinity = mountain_race
+        h = neutral_hexes(gs)
+        gs.submit_action("spirit_0", {
+            "guide_target": "mountain",
+            "idol_type": "battle", "idol_q": h[0][0], "idol_r": h[0][1],
+        })
+        gs.submit_action("spirit_1", {
+            "guide_target": "mountain",
+            "idol_type": "affluence", "idol_q": h[1][0], "idol_r": h[1][1],
+        })
+        events = gs.resolve_current_phase()
+        assert gs.spirits["spirit_0"].guided_faction == "mountain"
+        assert gs.spirits["spirit_1"].is_vagrant is True
+        assert "mountain" not in gs.guidance_cooldowns.get("spirit_0", set())
+        assert "mountain" not in gs.guidance_cooldowns.get("spirit_1", set())
+
+    def test_habitat_beats_race_affinity(self):
+        """Habitat affinity beats race affinity when both spirits have different affinities."""
+        gs = make_game(2)
+        clear_affinities(gs)
+        mountain_race = gs.factions["mountain"].race
+        gs.spirits["spirit_0"].habitat_affinity = "mountain"  # habitat match
+        gs.spirits["spirit_1"].race_affinity = mountain_race   # race match
+        h = neutral_hexes(gs)
+        gs.submit_action("spirit_0", {
+            "guide_target": "mountain",
+            "idol_type": "battle", "idol_q": h[0][0], "idol_r": h[0][1],
+        })
+        gs.submit_action("spirit_1", {
+            "guide_target": "mountain",
+            "idol_type": "affluence", "idol_q": h[1][0], "idol_r": h[1][1],
+        })
+        gs.resolve_current_phase()
+        # Habitat wins over race
+        assert gs.spirits["spirit_0"].guided_faction == "mountain"
+        assert gs.spirits["spirit_1"].is_vagrant is True
+
+    def test_tied_habitat_affinities_normal_contest(self):
+        """Two spirits with habitat affinity tie — normal contest applies (cooldown set)."""
+        gs = make_game(2)
+        clear_affinities(gs)
+        gs.spirits["spirit_0"].habitat_affinity = "mountain"
+        gs.spirits["spirit_1"].habitat_affinity = "mountain"
+        h = neutral_hexes(gs)
+        gs.submit_action("spirit_0", {
+            "guide_target": "mountain",
+            "idol_type": "battle", "idol_q": h[0][0], "idol_r": h[0][1],
+        })
+        gs.submit_action("spirit_1", {
+            "guide_target": "mountain",
+            "idol_type": "affluence", "idol_q": h[1][0], "idol_r": h[1][1],
+        })
+        gs.resolve_current_phase()
+        # Both fail — normal contest
+        assert gs.spirits["spirit_0"].is_vagrant is True
+        assert gs.spirits["spirit_1"].is_vagrant is True
+        assert "mountain" in gs.guidance_cooldowns.get("spirit_0", set())
+        assert "mountain" in gs.guidance_cooldowns.get("spirit_1", set())
 
 
 class TestAgendaPhase:

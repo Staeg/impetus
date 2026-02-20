@@ -2,7 +2,7 @@
 
 import copy
 from dataclasses import dataclass, field
-from shared.constants import FACTION_DISPLAY_NAMES
+from client.faction_names import faction_full_name
 
 
 @dataclass
@@ -97,7 +97,7 @@ class FactionChangeTracker:
                     ))
                     self._add(nb, ChangeEntry(
                         field="regard", delta=regard_gain,
-                        label=f"Trade ({FACTION_DISPLAY_NAMES.get(faction_id, faction_id)})",
+                        label=f"Trade ({faction_full_name(faction_id)})",
                         log_index=log_index,
                         target=faction_id,
                     ))
@@ -120,7 +120,7 @@ class FactionChangeTracker:
                     ))
                     self._add(nb, ChangeEntry(
                         field="regard", delta=regard_gain,
-                        label=f"Spoils Trade ({FACTION_DISPLAY_NAMES.get(faction_id, faction_id)})",
+                        label=f"Spoils Trade ({faction_full_name(faction_id)})",
                         log_index=log_index,
                         target=faction_id,
                     ))
@@ -148,7 +148,7 @@ class FactionChangeTracker:
                     if victim_loss > 0:
                         self._add(nb, ChangeEntry(
                             field="gold", delta=-victim_loss,
-                            label=f"Steal ({FACTION_DISPLAY_NAMES.get(faction_id, faction_id)})",
+                            label=f"Steal ({faction_full_name(faction_id)})",
                             log_index=log_index,
                         ))
                 # Neighbor loses gold (we don't know exact per-neighbor amounts from the event)
@@ -161,7 +161,7 @@ class FactionChangeTracker:
                     ))
                     self._add(nb, ChangeEntry(
                         field="regard", delta=-penalty,
-                        label=f"Steal ({FACTION_DISPLAY_NAMES.get(faction_id, faction_id)})",
+                        label=f"Steal ({faction_full_name(faction_id)})",
                         log_index=log_index,
                         target=faction_id,
                     ))

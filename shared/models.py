@@ -83,6 +83,7 @@ class FactionState:
     guiding_spirit: Optional[str] = None
     worship_spirit: Optional[str] = None
     eliminated: bool = False
+    race: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -99,6 +100,7 @@ class FactionState:
             "guiding_spirit": self.guiding_spirit,
             "worship_spirit": self.worship_spirit,
             "eliminated": self.eliminated,
+            "race": self.race,
         }
 
     @staticmethod
@@ -113,6 +115,7 @@ class FactionState:
             guiding_spirit=d.get("guiding_spirit"),
             worship_spirit=d.get("worship_spirit"),
             eliminated=d.get("eliminated", False),
+            race=d.get("race", ""),
         )
 
 
@@ -125,6 +128,8 @@ class SpiritState:
     guided_faction: Optional[str] = None
     idols: list[Idol] = field(default_factory=list)
     victory_points: int = 0
+    habitat_affinity: str = ""
+    race_affinity: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -135,6 +140,8 @@ class SpiritState:
             "guided_faction": self.guided_faction,
             "idols": [i.to_dict() for i in self.idols],
             "victory_points": self.victory_points,
+            "habitat_affinity": self.habitat_affinity,
+            "race_affinity": self.race_affinity,
         }
 
     @staticmethod
@@ -147,6 +154,8 @@ class SpiritState:
             guided_faction=d.get("guided_faction"),
             idols=[Idol.from_dict(i) for i in d.get("idols", [])],
             victory_points=d.get("victory_points", 0),
+            habitat_affinity=d.get("habitat_affinity", ""),
+            race_affinity=d.get("race_affinity", ""),
         )
 
 
