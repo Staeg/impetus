@@ -464,7 +464,8 @@ class UIRenderer:
                            highlight_log_idx: int = None,
                            change_rects: list = None,
                            wars: list = None,
-                           all_factions: dict = None):
+                           all_factions: dict = None,
+                           faction_order: list = None):
         """Draw faction info panel."""
         if not faction_data:
             return
@@ -480,6 +481,9 @@ class UIRenderer:
                 for other_fid, val in regard.items()
                 if not all_factions.get(other_fid, {}).get("eliminated", False)
             }
+        if faction_order:
+            regard = dict(sorted(regard.items(),
+                                 key=lambda kv: faction_order.index(kv[0]) if kv[0] in faction_order else 999))
         modifiers = faction_data.get("change_modifiers", {})
         guiding = faction_data.get("guiding_spirit")
         worship = faction_data.get("worship_spirit")
