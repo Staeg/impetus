@@ -52,15 +52,6 @@ class HexRenderer:
         """
         font = self._get_font()
 
-        # Collect battleground hexes for highlighting
-        battleground_hexes = set()
-        if wars:
-            for war in wars:
-                if war.battleground:
-                    bg = war.battleground
-                    battleground_hexes.add((bg[0].q, bg[0].r))
-                    battleground_hexes.add((bg[1].q, bg[1].r))
-
         for (q, r), owner in hex_ownership.items():
             # Get screen coordinates
             wx, wy = axial_to_pixel(q, r, self.hex_size)
@@ -95,9 +86,6 @@ class HexRenderer:
             elif highlight_hexes and (q, r) in highlight_hexes:
                 border_color = (200, 200, 255)
                 pygame.draw.polygon(surface, border_color, screen_verts, 2)
-            elif (q, r) in battleground_hexes:
-                border_color = (255, 100, 100)
-                pygame.draw.polygon(surface, border_color, screen_verts, 3)
             else:
                 pygame.draw.polygon(surface, border_color, screen_verts, 1)
 
