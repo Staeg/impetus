@@ -12,7 +12,7 @@ from server.hex_map import HexMap
 from server.faction import Faction
 from server.spirit import Spirit
 from server.war import War
-from server.agenda import resolve_agendas, resolve_spoils, resolve_spoils_choice, finalize_all_spoils
+from server.agenda import resolve_agendas, resolve_spoils, finalize_all_spoils
 from server.scoring import calculate_scoring
 
 
