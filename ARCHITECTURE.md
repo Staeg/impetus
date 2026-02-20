@@ -95,7 +95,18 @@ Axial coordinate system (flat-top hexagons):
 - `shared/hex_utils.py` - Pure math: coordinate conversions (axial ↔ pixel ↔ cube), neighbor directions, distance, line drawing, ring/spiral iteration. Used by both client (for click-to-hex picking) and server.
 - `server/hex_map.py` - Game-specific map state: generates the side-5 hex grid, tracks ownership (faction or neutral), idol placement per hex, and provides queries like "neutral hexes reachable by faction X" or "border hexes between factions X and Y."
 
-The six factions start on the six hexes surrounding center (0,0). Center is empty/neutral. All other hexes start neutral. During setup, each faction draws and resolves a random Change modifier, then a single autopilot turn is played where all factions draw and resolve a random agenda card without player input.
+The six factions start on the six hexes surrounding center (0,0). Center is empty/neutral. All other hexes start neutral. Starting positions are randomized each game. During setup, each faction receives habitat-based starting Change modifiers (see table below), then a single autopilot turn is played where all factions draw and resolve a random agenda card without player input.
+
+**Habitat starting Change modifiers:**
+
+| Habitat  | Starting Modifiers        |
+|----------|---------------------------|
+| Mountain | Trade ×1, Steal ×1        |
+| Mesa     | Trade ×2                  |
+| Sand     | Steal ×1, Expand ×1       |
+| Plains   | Expand ×2                 |
+| River    | Trade ×1, Expand ×1       |
+| Jungle   | Steal ×2                  |
 
 ### 2. Game State Machine (`server/game_state.py`)
 
@@ -134,7 +145,7 @@ Each faction tracks:
 - `gold: int` (starts at 0, minimum 0 - gold cannot go negative)
 - `territories: set[HexCoord]` (starts with 1 hex)
 - `agenda_pool: list[AgendaCard]` (starts with 1 of each: Steal, Trade, Expand, Change; cards are sampled with replacement via `random.choices`, never consumed, so drawn hands can contain duplicates; ejection replaces one card type with another, keeping pool size constant)
-- `change_modifiers: dict[AgendaType, int]` (accumulated Change upgrades per agenda type)
+- `change_modifiers: dict[ChangeModifierTarget, int]` (accumulated Change upgrades per agenda type)
 - `regard: dict[FactionId, int]` (bilateral regard with other factions, starts at 0)
 - `guiding_spirit: Optional[SpiritId]`
 - `worship_spirit: Optional[SpiritId]` (the spirit whose Worship this faction holds)

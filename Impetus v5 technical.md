@@ -4,17 +4,17 @@
   * A hexagonal map of side length 5 is generated
   * The map itself is made of hexes
   * The middle hex of the map is empty
-  * All the hexes surrounding the middle hex are each controlled by a different Faction
-    * Color coded red: Mountain Faction
-    * Color coded orange: Mesa Faction
-    * Color coded yellow: Sand Faction
-    * Color coded green: Plains Faction
-    * Color coded blue: River Faction
-    * Color coded purple: Jungle Faction
+  * All the hexes surrounding the middle hex are each controlled by a different Faction (starting positions are randomized each game)
   * All the other hexes start empty
   * Empty hexes are considered Neutral
-  * Each Faction draws and resolves a random Change modifier
-  * A single setup turn is played where each Faction draws and resolves a random Agenda card (players have no input during this turn)  
+  * Each Faction begins with habitat-based Change modifiers:
+    * Mountain: Trade ×1, Steal ×1
+    * Mesa: Trade ×2
+    * Sand: Steal ×1, Expand ×1
+    * Plains: Expand ×2
+    * River: Trade ×1, Expand ×1
+    * Jungle: Steal ×2
+  * A single setup turn is played where each Faction draws and resolves a random Agenda card (players have no input during this turn)
 * Vagrant Phase
   * Spirits choose their actions: if both Guidance and Idol placement are available, they must do both; otherwise they do whichever is available
     * A Spirit cannot Guide a Faction that Worships them

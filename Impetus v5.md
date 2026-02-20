@@ -64,6 +64,19 @@ Each card modifies one of the other 3 Agendas of this Faction permanently.
 * Steal: \+1 gold stolen and \-1 regard to affected neighbors
 * Expand: \-1 cost on successful Expands, \+1 gold on failed Expands
 
+### Habitat starting modifiers
+
+Each Faction begins the game with Change modifiers determined by its habitat:
+
+| Habitat  | Starting Modifiers        |
+|----------|---------------------------|
+| Mountain | Trade ×1, Steal ×1        |
+| Mesa     | Trade ×2                  |
+| Sand     | Steal ×1, Expand ×1       |
+| Plains   | Expand ×2                 |
+| River    | Trade ×1, Expand ×1       |
+| Jungle   | Steal ×2                  |
+
 ## Idols and Victory Points
 
 Three kinds of Idols exist: Battle Idols that reward winning Wars, Affluence Idols that reward getting gold and Spread Idols that reward gaining territory. Having a Faction's Worship matters for scoring Victory Points \- so long as a Spirit has a Faction's Worship, they benefit from *all* Idols in that Faction's territory, not just their own.
