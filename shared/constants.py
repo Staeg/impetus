@@ -26,6 +26,8 @@ FACTION_DISPLAY_NAMES = {
     "jungle": "Jungle",
 }
 
+RACES = ["Elves", "Orcs", "Fae", "Dwarves", "Goblins", "Elementals"]
+
 # Starting hex positions for the 6 factions (axial coords around center 0,0)
 FACTION_START_HEXES = {
     "mountain": (1, -1),

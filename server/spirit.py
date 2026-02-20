@@ -17,6 +17,8 @@ class Spirit:
         self.has_placed_idol_as_vagrant: bool = False
         self.idols: list[Idol] = []
         self.victory_points: int = 0
+        self.habitat_affinity: str = ""
+        self.race_affinity: str = ""
 
     def guide_faction(self, faction_id: str):
         self.is_vagrant = False
@@ -50,4 +52,6 @@ class Spirit:
             guided_faction=self.guided_faction,
             idols=list(self.idols),
             victory_points=self.victory_points,
+            habitat_affinity=self.habitat_affinity,
+            race_affinity=self.race_affinity,
         )

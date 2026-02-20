@@ -4,9 +4,10 @@ import pygame
 from dataclasses import dataclass
 from shared.constants import (
     MessageType, Phase, SubPhase, AgendaType, IdolType, MAP_SIDE_LENGTH,
-    SCREEN_WIDTH, SCREEN_HEIGHT, HEX_SIZE, FACTION_NAMES, FACTION_DISPLAY_NAMES, FACTION_COLORS,
+    SCREEN_WIDTH, SCREEN_HEIGHT, HEX_SIZE, FACTION_NAMES, FACTION_COLORS,
     BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPREAD_IDOL_VP,
 )
+from client.faction_names import faction_full_name, update_faction_races
 from client.renderer.hex_renderer import HexRenderer
 from client.renderer.ui_renderer import UIRenderer, Button, build_agenda_tooltip, build_modifier_tooltip, draw_dotted_underline
 from client.renderer.animation import AnimationManager, TextAnimation
@@ -28,7 +29,7 @@ _FACTION_PANEL_X = SCREEN_WIDTH - 240
 # Centering positions for button columns
 _GUIDANCE_CENTER_X = _HEX_MAP_LEFT_X // 2
 _IDOL_CENTER_X = (_HEX_MAP_RIGHT_X + _FACTION_PANEL_X) // 2
-_BTN_W = 130
+_BTN_W = 143
 _GUIDANCE_BTN_X = _GUIDANCE_CENTER_X - _BTN_W // 2
 _IDOL_BTN_X = _IDOL_CENTER_X - _BTN_W // 2
 
@@ -41,6 +42,13 @@ _INFLUENCE_TOOLTIP = (
     "choosing for their Guided Faction. Set to 3 when Guidance "
     "begins, it decreases by 1 each turn. The Spirit is ejected "
     "when it reaches 0."
+)
+
+_AFFINITY_TOOLTIP = (
+    "When two Spirits contest the same Faction, Affinity determines who succeeds. "
+    "A matching Habitat Affinity wins outright. A matching Race Affinity wins if no "
+    "one has the Habitat. If both Spirits tie at the same priority, both fail and "
+    "cannot Guide that Faction next turn."
 )
 
 _AGENDA_POOL_TOOLTIP = (
@@ -200,6 +208,7 @@ class GameScene:
         self.remove_buttons: list[Button] = []
         self.submit_button: Button | None = None
         self.faction_buttons: list[Button] = []
+        self.faction_button_ids: list[str] = []
         self.idol_buttons: list[Button] = []
 
         # Title labels (rects + tooltip text)
@@ -240,10 +249,14 @@ class GameScene:
         self.hovered_spirit_panel_guidance: bool = False
         self.hovered_spirit_panel_influence: bool = False
         self.hovered_spirit_panel_worship: str | None = None  # faction_id or None
+        self.hovered_spirit_panel_affinity: bool = False
+        self._spirit_panel_rects: dict = {}          # rects returned from draw_spirit_panel (right pop-out)
         # Persistent spirit panel (bottom-left) hover state
         self.hovered_persistent_spirit_guidance: bool = False
         self.hovered_persistent_spirit_influence: bool = False
         self.hovered_persistent_spirit_worship: str | None = None
+        self.hovered_persistent_spirit_affinity: bool = False
+        self._persistent_spirit_panel_rects: dict = {}  # rects returned from draw_spirit_panel (bottom-left)
         # Ejection title keyword hover state
         self.ejection_keyword_rects: dict[str, list[pygame.Rect]] = {}
         self.hovered_ejection_keyword: str | None = None
@@ -285,6 +298,10 @@ class GameScene:
         self.turn = data.get("turn", self.turn)
         self.phase = data.get("phase", self.phase)
         self.factions = data.get("factions", self.factions)
+        update_faction_races({
+            fid: fdata.get("race", "") if isinstance(fdata, dict) else ""
+            for fid, fdata in self.factions.items()
+        })
         # Snapshot old influence before overwriting spirits, so we can detect decreases
         old_influences = {sid: s.get("influence", 0) for sid, s in self.spirits.items()}
         self.spirits = data.get("spirits", self.spirits)
@@ -433,9 +450,9 @@ class GameScene:
                     return
 
             # Check faction buttons
-            for btn in self.faction_buttons:
+            for btn, fid in zip(self.faction_buttons, self.faction_button_ids):
                 if btn.clicked(event.pos):
-                    self._handle_faction_select(btn.text.lower())
+                    self._handle_faction_select(fid)
                     return
 
             # Check idol type buttons
@@ -525,7 +542,7 @@ class GameScene:
                     return
 
             # Click on spirit panel itself should not close it
-            sp_rect = self.ui_renderer.spirit_panel_rect
+            sp_rect = self._spirit_panel_rects.get("panel")
             if self.spirit_panel_spirit_id and sp_rect and sp_rect.collidepoint(event.pos):
                 return
 
@@ -896,6 +913,7 @@ class GameScene:
         blocked = self.phase_options.get("worship_blocked", [])
         contested_blocked = self.phase_options.get("contested_blocked", [])
         self.faction_buttons = []
+        self.faction_button_ids = []
         all_factions = available + blocked + contested_blocked
         for i, fid in enumerate(all_factions):
             color = FACTION_COLORS.get(fid, (100, 100, 100))
@@ -904,7 +922,7 @@ class GameScene:
             tooltip = self._build_guidance_tooltip(fid, is_blocked, is_contested_blocked)
             btn = Button(
                 pygame.Rect(_GUIDANCE_BTN_X, _BTN_START_Y + i * 40, _BTN_W, 34),
-                FACTION_DISPLAY_NAMES.get(fid, fid),
+                faction_full_name(fid),
                 color=tuple(max(c // 2, 30) for c in color),
                 text_color=(255, 255, 255),
                 tooltip=tooltip,
@@ -913,6 +931,7 @@ class GameScene:
             if is_blocked or is_contested_blocked:
                 btn.enabled = False
             self.faction_buttons.append(btn)
+            self.faction_button_ids.append(fid)
         # Set up guidance title rect
         title_w = 100
         self.guidance_title_rect = pygame.Rect(
@@ -1098,34 +1117,38 @@ class GameScene:
                 self.hovered_vp_spirit_id = sid
                 return
 
+    def _check_spirit_panel_hover(self, rects: dict, mx: int, my: int):
+        """Return (guidance_hov, influence_hov, worship_hov, affinity_hov) for a spirit panel's rects dict."""
+        r = rects.get("guidance")
+        guidance = r is not None and r.collidepoint(mx, my)
+        r = rects.get("influence")
+        influence = r is not None and r.collidepoint(mx, my)
+        worship = None
+        for fid, rect in rects.get("worship", {}).items():
+            if rect.collidepoint(mx, my):
+                worship = fid
+                break
+        r = rects.get("affinity")
+        affinity = r is not None and r.collidepoint(mx, my)
+        return guidance, influence, worship, affinity
+
     def _update_spirit_panel_hover(self, mouse_pos):
-        """Check if mouse is hovering over elements in the spirit panel."""
+        """Check if mouse is hovering over elements in either spirit panel."""
         mx, my = mouse_pos
-        # Right pop-out spirit panel
         if not self.spirit_panel_spirit_id:
             self.hovered_spirit_panel_guidance = False
             self.hovered_spirit_panel_influence = False
             self.hovered_spirit_panel_worship = None
+            self.hovered_spirit_panel_affinity = False
         else:
-            r = self.ui_renderer.spirit_panel_guidance_rect
-            self.hovered_spirit_panel_guidance = r is not None and r.collidepoint(mx, my)
-            r = self.ui_renderer.spirit_panel_influence_rect
-            self.hovered_spirit_panel_influence = r is not None and r.collidepoint(mx, my)
-            self.hovered_spirit_panel_worship = None
-            for fid, rect in self.ui_renderer.spirit_panel_worship_rects.items():
-                if rect.collidepoint(mx, my):
-                    self.hovered_spirit_panel_worship = fid
-                    break
-        # Persistent spirit panel (always check)
-        r = self.ui_renderer.spirit_panel_persistent_guidance_rect
-        self.hovered_persistent_spirit_guidance = r is not None and r.collidepoint(mx, my)
-        r = self.ui_renderer.spirit_panel_persistent_influence_rect
-        self.hovered_persistent_spirit_influence = r is not None and r.collidepoint(mx, my)
-        self.hovered_persistent_spirit_worship = None
-        for fid, rect in self.ui_renderer.spirit_panel_persistent_worship_rects.items():
-            if rect.collidepoint(mx, my):
-                self.hovered_persistent_spirit_worship = fid
-                break
+            (self.hovered_spirit_panel_guidance,
+             self.hovered_spirit_panel_influence,
+             self.hovered_spirit_panel_worship,
+             self.hovered_spirit_panel_affinity) = self._check_spirit_panel_hover(self._spirit_panel_rects, mx, my)
+        (self.hovered_persistent_spirit_guidance,
+         self.hovered_persistent_spirit_influence,
+         self.hovered_persistent_spirit_worship,
+         self.hovered_persistent_spirit_affinity) = self._check_spirit_panel_hover(self._persistent_spirit_panel_rects, mx, my)
 
     def _update_ejection_title_hover(self, mouse_pos):
         """Check if mouse is hovering over keyword spans in ejection title text."""
@@ -1206,9 +1229,9 @@ class GameScene:
             fa = w.get('faction_a') if isinstance(w, dict) else getattr(w, 'faction_a', None)
             fb = w.get('faction_b') if isinstance(w, dict) else getattr(w, 'faction_b', None)
             if fa == fid:
-                war_names.append(FACTION_DISPLAY_NAMES.get(fb, fb))
+                war_names.append(faction_full_name(fb))
             elif fb == fid:
-                war_names.append(FACTION_DISPLAY_NAMES.get(fa, fa))
+                war_names.append(faction_full_name(fa))
         if not war_names:
             return "At War with: (none)"
         return f"At War with: {', '.join(war_names)}"
@@ -1241,7 +1264,7 @@ class GameScene:
     def _build_spirit_worship_tooltip(self, faction_id: str, spirit_id: str) -> str:
         """Build tooltip for a faction worshipping a spirit in the spirit panel."""
         battle_vp, spread_vp, affluence_vp = self._count_idol_vp_for_faction(faction_id)
-        faction_name = FACTION_DISPLAY_NAMES.get(faction_id, faction_id)
+        faction_name = faction_full_name(faction_id)
 
         def _fmt(v):
             return f"{v:g}"
@@ -1261,6 +1284,40 @@ class GameScene:
                 f"{_fmt(spread_vp)} VP per territory gained, and "
                 f"{_fmt(affluence_vp)} VP per gold earned."
             )
+
+    def _offer_spirit_panel_tooltip(self, spirit_id: str, rects: dict,
+                                     guidance_hov: bool, influence_hov: bool,
+                                     worship_hov: "str | None", below: bool,
+                                     affinity_hov: bool = False):
+        """Offer the appropriate tooltip for whichever element of a spirit panel is hovered."""
+        if guidance_hov:
+            spirit = self.spirits.get(spirit_id, {})
+            tooltip = (self._build_guidance_panel_tooltip(spirit_id)
+                       if spirit.get("guided_faction") else self._GUIDANCE_GENERIC_TOOLTIP)
+            r = rects["guidance"]
+            anchor = r.bottom if below else r.top
+            self.tooltip_registry.offer(TooltipDescriptor(
+                tooltip, _GUIDANCE_HOVER_REGIONS, r.centerx, anchor, below=below,
+            ))
+        elif influence_hov:
+            r = rects["influence"]
+            anchor = r.bottom if below else r.top
+            self.tooltip_registry.offer(TooltipDescriptor(
+                _INFLUENCE_TOOLTIP, _GUIDANCE_HOVER_REGIONS, r.centerx, anchor, below=below,
+            ))
+        elif worship_hov:
+            tooltip = self._build_spirit_worship_tooltip(worship_hov, spirit_id)
+            r = rects["worship"][worship_hov]
+            anchor = r.bottom if below else r.top
+            self.tooltip_registry.offer(TooltipDescriptor(
+                tooltip, _GUIDANCE_HOVER_REGIONS, r.centerx, anchor, below=below,
+            ))
+        elif affinity_hov and rects.get("affinity"):
+            r = rects["affinity"]
+            anchor = r.bottom if below else r.top
+            self.tooltip_registry.offer(TooltipDescriptor(
+                _AFFINITY_TOOLTIP, _GUIDANCE_HOVER_REGIONS, r.centerx, anchor, below=below,
+            ))
 
     def _log_event(self, event: dict):
         from client.scenes.event_logger import log_event
@@ -1282,7 +1339,7 @@ class GameScene:
     def _format_faction_list(factions: list[str]) -> str:
         if not factions:
             return ""
-        names = [FACTION_DISPLAY_NAMES.get(fid, fid) for fid in factions]
+        names = [faction_full_name(fid) for fid in factions]
         if len(names) == 1:
             return names[0]
         if len(names) == 2:
@@ -1291,7 +1348,7 @@ class GameScene:
 
     def _build_consolidated_agenda_line(self, play_info: dict, resolution_event: dict) -> str:
         faction_id = play_info["faction"]
-        fname = FACTION_DISPLAY_NAMES.get(faction_id, faction_id)
+        fname = faction_full_name(faction_id)
         agenda = play_info["agenda"].title()
         verb = "randomly plays" if play_info["source"] == "random" else "plays"
         guided_part = ""
@@ -1424,7 +1481,7 @@ class GameScene:
         if fp:
             rects.append((fp, _WEIGHT_TEXT))
         # Spirit panel
-        sp = self.ui_renderer.spirit_panel_rect
+        sp = self._spirit_panel_rects.get("panel")
         if sp:
             rects.append((sp, _WEIGHT_TEXT))
         # Pinned popup rects
@@ -1557,7 +1614,7 @@ class GameScene:
             # Spirit panel
             spirit = self.spirits.get(self.spirit_panel_spirit_id, {})
             fills = self._get_influence_fills(self.spirit_panel_spirit_id)
-            self.ui_renderer.draw_spirit_panel(
+            self._spirit_panel_rects = self.ui_renderer.draw_spirit_panel(
                 screen, spirit, self.factions, self.all_idols,
                 self.hex_ownership, SCREEN_WIDTH - 240, 102, 230,
                 my_spirit_id=self.spirit_panel_spirit_id,
@@ -1593,22 +1650,17 @@ class GameScene:
                 self.ui_renderer.panel_worship_rect = None
                 self.ui_renderer.panel_war_rect = None
             # Clear spirit panel rects
-            self.ui_renderer.spirit_panel_rect = None
-            self.ui_renderer.spirit_panel_guidance_rect = None
-            self.ui_renderer.spirit_panel_influence_rect = None
-            self.ui_renderer.spirit_panel_worship_rects.clear()
+            self._spirit_panel_rects = {}
 
         # Draw persistent spirit stats panel (bottom, left of event log)
         my_spirit = self.spirits.get(self.app.my_spirit_id, {})
         if my_spirit:
             fills = self._get_influence_fills(self.app.my_spirit_id)
-            self.ui_renderer.draw_spirit_panel(
+            self._persistent_spirit_panel_rects = self.ui_renderer.draw_spirit_panel(
                 screen, my_spirit, self.factions, self.all_idols,
                 self.hex_ownership, SCREEN_WIDTH - 540, SCREEN_HEIGHT - 200, 230,
                 my_spirit_id=self.app.my_spirit_id,
                 circle_fills=fills,
-                store_hover_rects=False,
-                persistent_hover_rects=True,
             )
 
         # Draw event log (bottom right)
@@ -1709,59 +1761,21 @@ class GameScene:
                 r.centerx, r.bottom, below=True,
             ))
 
-        # Spirit panel hover tooltips
-        if self.hovered_spirit_panel_guidance and self.spirit_panel_spirit_id:
-            spirit = self.spirits.get(self.spirit_panel_spirit_id, {})
-            if spirit.get("guided_faction"):
-                tooltip = self._build_guidance_panel_tooltip(self.spirit_panel_spirit_id)
-            else:
-                tooltip = self._GUIDANCE_GENERIC_TOOLTIP
-            r = self.ui_renderer.spirit_panel_guidance_rect
-            self.tooltip_registry.offer(TooltipDescriptor(
-                tooltip, _GUIDANCE_HOVER_REGIONS,
-                r.centerx, r.bottom, below=True,
-            ))
-        elif self.hovered_spirit_panel_influence:
-            r = self.ui_renderer.spirit_panel_influence_rect
-            self.tooltip_registry.offer(TooltipDescriptor(
-                _INFLUENCE_TOOLTIP, _GUIDANCE_HOVER_REGIONS,
-                r.centerx, r.bottom, below=True,
-            ))
-        elif self.hovered_spirit_panel_worship and self.spirit_panel_spirit_id:
-            tooltip = self._build_spirit_worship_tooltip(
-                self.hovered_spirit_panel_worship, self.spirit_panel_spirit_id)
-            r = self.ui_renderer.spirit_panel_worship_rects[self.hovered_spirit_panel_worship]
-            self.tooltip_registry.offer(TooltipDescriptor(
-                tooltip, _GUIDANCE_HOVER_REGIONS,
-                r.centerx, r.bottom, below=True,
-            ))
-
+        # Spirit panel hover tooltips (right pop-out)
+        if self.spirit_panel_spirit_id:
+            self._offer_spirit_panel_tooltip(
+                self.spirit_panel_spirit_id, self._spirit_panel_rects,
+                self.hovered_spirit_panel_guidance, self.hovered_spirit_panel_influence,
+                self.hovered_spirit_panel_worship, below=True,
+                affinity_hov=self.hovered_spirit_panel_affinity,
+            )
         # Persistent spirit panel hover tooltips (bottom-left, always visible)
-        if self.hovered_persistent_spirit_guidance:
-            spirit = self.spirits.get(self.app.my_spirit_id, {})
-            if spirit.get("guided_faction"):
-                tooltip = self._build_guidance_panel_tooltip(self.app.my_spirit_id)
-            else:
-                tooltip = self._GUIDANCE_GENERIC_TOOLTIP
-            r = self.ui_renderer.spirit_panel_persistent_guidance_rect
-            self.tooltip_registry.offer(TooltipDescriptor(
-                tooltip, _GUIDANCE_HOVER_REGIONS,
-                r.centerx, r.top, below=False,
-            ))
-        elif self.hovered_persistent_spirit_influence:
-            r = self.ui_renderer.spirit_panel_persistent_influence_rect
-            self.tooltip_registry.offer(TooltipDescriptor(
-                _INFLUENCE_TOOLTIP, _GUIDANCE_HOVER_REGIONS,
-                r.centerx, r.top, below=False,
-            ))
-        elif self.hovered_persistent_spirit_worship:
-            tooltip = self._build_spirit_worship_tooltip(
-                self.hovered_persistent_spirit_worship, self.app.my_spirit_id)
-            r = self.ui_renderer.spirit_panel_persistent_worship_rects[self.hovered_persistent_spirit_worship]
-            self.tooltip_registry.offer(TooltipDescriptor(
-                tooltip, _GUIDANCE_HOVER_REGIONS,
-                r.centerx, r.top, below=False,
-            ))
+        self._offer_spirit_panel_tooltip(
+            self.app.my_spirit_id, self._persistent_spirit_panel_rects,
+            self.hovered_persistent_spirit_guidance, self.hovered_persistent_spirit_influence,
+            self.hovered_persistent_spirit_worship, below=False,
+            affinity_hov=self.hovered_persistent_spirit_affinity,
+        )
 
         # Agenda pool icon hover tooltip
         if self.hovered_pool_faction:
@@ -1774,7 +1788,7 @@ class GameScene:
                     counts: dict[str, int] = {}
                     for pt in pool_types:
                         counts[pt] = counts.get(pt, 0) + 1
-                    fname = FACTION_DISPLAY_NAMES.get(self.hovered_pool_faction, self.hovered_pool_faction)
+                    fname = faction_full_name(self.hovered_pool_faction)
                     lines = [f"{fname} Agenda Pool"]
                     for at_str in ["steal", "trade", "expand", "change"]:
                         c = counts.get(at_str, 0)
@@ -1822,7 +1836,7 @@ class GameScene:
         # Determine territory ownership
         q, r = idol.position.q, idol.position.r
         faction_id = self.hex_ownership.get((q, r))
-        faction_name = FACTION_DISPLAY_NAMES.get(faction_id, faction_id) if faction_id else None
+        faction_name = faction_full_name(faction_id) if faction_id else None
 
         if faction_id:
             # Idol is in a faction's territory
@@ -1966,7 +1980,7 @@ class GameScene:
 
         # Draw faction buttons (left) with selection highlight
         for btn in self.faction_buttons:
-            if self.selected_faction and btn.text == FACTION_DISPLAY_NAMES.get(self.selected_faction):
+            if self.selected_faction and btn.text == faction_full_name(self.selected_faction):
                 pygame.draw.rect(screen, (255, 255, 255), btn.rect.inflate(4, 4), 2, border_radius=8)
             btn.draw(screen, self.font)
 
@@ -2018,7 +2032,7 @@ class GameScene:
             # Selection info right above the Confirm button
             parts = []
             if self.selected_faction:
-                fname = FACTION_DISPLAY_NAMES.get(self.selected_faction, self.selected_faction)
+                fname = faction_full_name(self.selected_faction)
                 parts.append(f"Guide: {fname}")
             if self.selected_idol_type:
                 parts.append(f"Idol: {self.selected_idol_type}")
@@ -2067,7 +2081,7 @@ class GameScene:
         if self.agenda_hand:
             my_spirit = self.spirits.get(self.app.my_spirit_id, {})
             faction_id = my_spirit.get("guided_faction", "")
-            faction_name = FACTION_DISPLAY_NAMES.get(faction_id, faction_id) if faction_id else "your Faction"
+            faction_name = faction_full_name(faction_id) if faction_id else "your Faction"
             title = self.font.render(f"Choose an Agenda for {faction_name} to play.", True, (200, 200, 220))
             title_x = max(20, (_HEX_MAP_LEFT_X - title.get_width()) // 2)
             screen.blit(title, (title_x, 106))
@@ -2092,7 +2106,7 @@ class GameScene:
             return
         my_spirit = self.spirits.get(self.app.my_spirit_id, {})
         fid = my_spirit.get("guided_faction", "")
-        faction_name = FACTION_DISPLAY_NAMES.get(fid, fid) if fid else "your Faction"
+        faction_name = faction_full_name(fid) if fid else "your Faction"
         title = self.font.render(f"Choose a modifier for {faction_name}:", True, (200, 200, 220))
         title_x = max(20, (_HEX_MAP_LEFT_X - title.get_width()) // 2)
         screen.blit(title, (title_x, 106))
@@ -2114,7 +2128,7 @@ class GameScene:
         )
 
     def _render_ejection_ui(self, screen):
-        faction_name = FACTION_DISPLAY_NAMES.get(self.ejection_faction, self.ejection_faction)
+        faction_name = faction_full_name(self.ejection_faction)
         title_text = (
             f"As the last remnants of your Influence leave the {faction_name} faction, "
             f"you nudge their future. Choose one card to remove from {faction_name}'s Agenda pool "
@@ -2294,7 +2308,7 @@ class GameScene:
         modifiers = self._get_current_faction_modifiers()
         y_offset = 106
         for entry in self.spoils_entries:
-            opponent_name = FACTION_DISPLAY_NAMES.get(entry.loser, entry.loser)
+            opponent_name = faction_full_name(entry.loser) if entry.loser else ""
             title_text = f"Spoils of War vs {opponent_name} - Choose an agenda:" if opponent_name else "Spoils of War - Choose an agenda:"
             title = self.font.render(title_text, True, (255, 200, 100))
             title_x = max(20, (_HEX_MAP_LEFT_X - title.get_width()) // 2)
@@ -2318,7 +2332,7 @@ class GameScene:
             return
         y_offset = 106
         for entry in self.spoils_change_entries:
-            opponent_name = FACTION_DISPLAY_NAMES.get(entry.loser, entry.loser)
+            opponent_name = faction_full_name(entry.loser) if entry.loser else ""
             title_text = f"Spoils of War vs {opponent_name} - Choose a Change modifier:" if opponent_name else "Spoils of War - Choose a Change modifier:"
             title = self.font.render(title_text, True, (255, 200, 100))
             title_x = max(20, (_HEX_MAP_LEFT_X - title.get_width()) // 2)

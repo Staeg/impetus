@@ -6,6 +6,7 @@ from shared.constants import (
     Phase, AgendaType, IdolType, FACTION_COLORS, FACTION_DISPLAY_NAMES,
     FACTION_NAMES,
 )
+from client.faction_names import faction_full_name
 from client.renderer.assets import agenda_ribbon_icons
 
 
@@ -161,15 +162,6 @@ class UIRenderer:
         self.panel_war_rect: pygame.Rect | None = None
         self.panel_faction_id: str | None = None
         self.faction_panel_rect: pygame.Rect | None = None
-        # Spirit panel rects (right pop-out panel)
-        self.spirit_panel_rect: pygame.Rect | None = None
-        self.spirit_panel_guidance_rect: pygame.Rect | None = None
-        self.spirit_panel_influence_rect: pygame.Rect | None = None
-        self.spirit_panel_worship_rects: dict[str, pygame.Rect] = {}  # faction_id -> rect
-        # Persistent spirit panel rects (bottom-left, always visible)
-        self.spirit_panel_persistent_guidance_rect: pygame.Rect | None = None
-        self.spirit_panel_persistent_influence_rect: pygame.Rect | None = None
-        self.spirit_panel_persistent_worship_rects: dict[str, pygame.Rect] = {}
 
     def _get_font(self, size=16):
         return pygame.font.SysFont("consolas", size)
@@ -220,7 +212,7 @@ class UIRenderer:
             # Render faction tag in faction color
             if faction_id:
                 faction_color = FACTION_COLORS.get(faction_id, (150, 150, 150))
-                faction_tag = f" [{FACTION_DISPLAY_NAMES.get(faction_id, faction_id)}]"
+                faction_tag = f" [{faction_full_name(faction_id)}]"
                 tag_surf = self.small_font.render(faction_tag, True, faction_color)
                 surface.blit(tag_surf, (x, 12))
                 x += tag_surf.get_width()
@@ -289,7 +281,7 @@ class UIRenderer:
                 # Greyed-out eliminated faction
                 pygame.draw.rect(surface, (40, 40, 40), pygame.Rect(cx, strip_y, 3, strip_h))
                 pygame.draw.rect(surface, (20, 20, 20), pygame.Rect(cx + 3, strip_y, cell_w - 3, strip_h))
-                abbr = FACTION_DISPLAY_NAMES.get(fid, fid)
+                abbr = faction_full_name(fid)
                 abbr_surf = self.small_font.render(abbr, True, (80, 80, 80))
                 surface.blit(abbr_surf, (cx + 6, strip_y + 4))
                 elim_surf = self.small_font.render("ELIMINATED", True, (120, 60, 60))
@@ -304,7 +296,7 @@ class UIRenderer:
             pygame.draw.rect(surface, bg, pygame.Rect(cx + 3, strip_y, cell_w - 3, strip_h))
 
             # Faction name
-            abbr = FACTION_DISPLAY_NAMES.get(fid, fid)
+            abbr = faction_full_name(fid)
             abbr_surf = self.small_font.render(abbr, True, fc)
             surface.blit(abbr_surf, (cx + 6, strip_y + 4))
 
@@ -498,9 +490,9 @@ class UIRenderer:
                 if ripe is None and isinstance(w, dict):
                     ripe = w.get('is_ripe', False)
                 if fa == fid:
-                    war_opponents.append((FACTION_DISPLAY_NAMES.get(fb, fb), ripe, fb))
+                    war_opponents.append((faction_full_name(fb), ripe, fb))
                 elif fb == fid:
-                    war_opponents.append((FACTION_DISPLAY_NAMES.get(fa, fa), ripe, fa))
+                    war_opponents.append((faction_full_name(fa), ripe, fa))
 
         # Calculate dynamic panel height based on content
         panel_h = 8 + 24  # top padding + name header
@@ -530,7 +522,7 @@ class UIRenderer:
         pygame.draw.rect(surface, color, panel_rect, 2, border_radius=4)
 
         dy = y + 8
-        name = FACTION_DISPLAY_NAMES.get(fid, fid)
+        name = faction_full_name(fid)
         name_text = self.font.render(name, True, color)
         surface.blit(name_text, (x + 10, dy))
         dy += 24
@@ -662,7 +654,7 @@ class UIRenderer:
             dy += 18
             for other_fid, val in regard.items():
                 regard_changes = _field_changes("regard", target=other_fid)
-                other_name = FACTION_DISPLAY_NAMES.get(other_fid, other_fid)
+                other_name = faction_full_name(other_fid)
                 if regard_changes:
                     regard_delta_total = self._sum_numeric_deltas(regard_changes)
                     old_regard = val - regard_delta_total
@@ -763,12 +755,14 @@ class UIRenderer:
                           factions: dict, all_idols: list, hex_ownership: dict,
                           x: int, y: int, width: int = 230,
                           my_spirit_id: str = "",
-                          circle_fills: "list[float] | None" = None,
-                          store_hover_rects: bool = True,
-                          persistent_hover_rects: bool = False):
-        """Draw spirit info panel showing guidance, influence, worship, and idol counts."""
+                          circle_fills: "list[float] | None" = None) -> dict:
+        """Draw spirit info panel showing guidance, influence, worship, and idol counts.
+
+        Returns a dict with keys "panel", "guidance", "influence", "worship" containing
+        the pygame.Rect for each hoverable region (for use by the caller).
+        """
         if not spirit_data:
-            return
+            return {}
 
         spirit_id = spirit_data.get("spirit_id", my_spirit_id)
         name = spirit_data.get("name", spirit_id[:6])
@@ -776,6 +770,8 @@ class UIRenderer:
         guided_faction = spirit_data.get("guided_faction")
         is_vagrant = spirit_data.get("is_vagrant", True)
         vp = spirit_data.get("victory_points", 0)
+        habitat_affinity = spirit_data.get("habitat_affinity", "")
+        race_affinity = spirit_data.get("race_affinity", "")
 
         # Find factions worshipping this spirit
         worshipping_factions = []
@@ -784,7 +780,7 @@ class UIRenderer:
                 worshipping_factions.append((fid, fdata))
 
         # Calculate panel height
-        panel_h = 90  # header + guidance + influence
+        panel_h = 108  # header + guidance + influence + affinity
         if worshipping_factions:
             panel_h += 22 + len(worshipping_factions) * 36  # section header + per-faction
         else:
@@ -793,8 +789,6 @@ class UIRenderer:
         panel_rect = pygame.Rect(x, y, width, panel_h)
         pygame.draw.rect(surface, (30, 30, 40), panel_rect, border_radius=4)
         pygame.draw.rect(surface, (255, 255, 100), panel_rect, 2, border_radius=4)
-        if store_hover_rects:
-            self.spirit_panel_rect = panel_rect
 
         dy = y + 8
 
@@ -810,7 +804,7 @@ class UIRenderer:
         guidance_line_y = dy
         if guided_faction:
             faction_color = tuple(FACTION_COLORS.get(guided_faction, (150, 150, 150)))
-            faction_name = FACTION_DISPLAY_NAMES.get(guided_faction, guided_faction)
+            faction_name = faction_full_name(guided_faction)
             label_surf = self.small_font.render("Guiding: ", True, (180, 180, 200))
             surface.blit(label_surf, (x + 10, dy))
             value_surf = self.small_font.render(faction_name, True, faction_color)
@@ -820,10 +814,7 @@ class UIRenderer:
             label_surf = self.small_font.render("Vagrant", True, (140, 140, 160))
             surface.blit(label_surf, (x + 10, dy))
             guidance_text_w = label_surf.get_width()
-        if store_hover_rects:
-            self.spirit_panel_guidance_rect = pygame.Rect(x + 10, guidance_line_y, guidance_text_w, 16)
-        elif persistent_hover_rects:
-            self.spirit_panel_persistent_guidance_rect = pygame.Rect(x + 10, guidance_line_y, guidance_text_w, 16)
+        guidance_rect = pygame.Rect(x + 10, guidance_line_y, guidance_text_w, 16)
         draw_dotted_underline(surface, x + 10, guidance_line_y + 14, guidance_text_w)
         dy += 18
 
@@ -848,18 +839,42 @@ class UIRenderer:
             pygame.draw.circle(surface, (120, 120, 160), (cx, cy), circle_r, 1)
         circles_w = 3 * (circle_r * 2 + 3)
         total_w = inf_label.get_width() + circles_w
-        if store_hover_rects:
-            self.spirit_panel_influence_rect = pygame.Rect(x + 10, influence_line_y, total_w, circle_r * 2)
-        elif persistent_hover_rects:
-            self.spirit_panel_persistent_influence_rect = pygame.Rect(x + 10, influence_line_y, total_w, circle_r * 2)
+        influence_rect = pygame.Rect(x + 10, influence_line_y, total_w, circle_r * 2)
         draw_dotted_underline(surface, x + 10, influence_line_y + circle_r * 2 + 2, total_w)
         dy += circle_r * 2 + 6
 
+        # Affinity row
+        affinity_rect = None
+        if habitat_affinity or race_affinity:
+            aff_label = self.small_font.render("Affinity: ", True, (150, 150, 170))
+            surface.blit(aff_label, (x + 10, dy))
+            draw_dotted_underline(surface, x + 10, dy + 14, aff_label.get_width() - 1)
+            affinity_rect = pygame.Rect(x + 10, dy, aff_label.get_width(), 16)
+            ax = x + 10 + aff_label.get_width()
+            hab_color = tuple(FACTION_COLORS.get(habitat_affinity, (180, 180, 200)))
+            if habitat_affinity:
+                hab_name = FACTION_DISPLAY_NAMES.get(habitat_affinity, habitat_affinity)
+                hab_surf = self.small_font.render(hab_name, True, hab_color)
+                surface.blit(hab_surf, (ax, dy))
+                ax += hab_surf.get_width()
+            if habitat_affinity and race_affinity:
+                sep_surf = self.small_font.render(" / ", True, (120, 120, 140))
+                surface.blit(sep_surf, (ax, dy))
+                ax += sep_surf.get_width()
+            if race_affinity:
+                # Color the race with the color of whichever faction has that race
+                race_faction_id = next(
+                    (fid for fid, fd in factions.items()
+                     if (fd.get("race") if isinstance(fd, dict) else getattr(fd, "race", "")) == race_affinity),
+                    None
+                )
+                race_color = tuple(FACTION_COLORS.get(race_faction_id, (180, 180, 200))) if race_faction_id else hab_color
+                race_surf = self.small_font.render(race_affinity, True, race_color)
+                surface.blit(race_surf, (ax, dy))
+            dy += 18
+
         # Worshipped by section
-        if store_hover_rects:
-            self.spirit_panel_worship_rects.clear()
-        elif persistent_hover_rects:
-            self.spirit_panel_persistent_worship_rects.clear()
+        worship_rects: dict[str, pygame.Rect] = {}
         section_surf = self.small_font.render("Worshipped by:", True, (150, 150, 170))
         surface.blit(section_surf, (x + 10, dy))
         dy += 18
@@ -867,14 +882,11 @@ class UIRenderer:
         if worshipping_factions:
             for fid, fdata in worshipping_factions:
                 faction_color = tuple(FACTION_COLORS.get(fid, (150, 150, 150)))
-                faction_name = FACTION_DISPLAY_NAMES.get(fid, fid)
+                faction_name = faction_full_name(fid)
                 fname_surf = self.small_font.render(faction_name, True, faction_color)
                 surface.blit(fname_surf, (x + 14, dy))
                 fname_w = fname_surf.get_width()
-                if store_hover_rects:
-                    self.spirit_panel_worship_rects[fid] = pygame.Rect(x + 14, dy, fname_w, 16)
-                elif persistent_hover_rects:
-                    self.spirit_panel_persistent_worship_rects[fid] = pygame.Rect(x + 14, dy, fname_w, 16)
+                worship_rects[fid] = pygame.Rect(x + 14, dy, fname_w, 16)
                 draw_dotted_underline(surface, x + 14, dy + 14, fname_w)
                 dy += 18
 
@@ -910,6 +922,9 @@ class UIRenderer:
             none_surf = self.small_font.render("  None", True, (140, 140, 160))
             surface.blit(none_surf, (x + 10, dy))
             dy += 18
+
+        return {"panel": panel_rect, "guidance": guidance_rect, "influence": influence_rect,
+                "worship": worship_rects, "affinity": affinity_rect}
 
     def _build_card_description(self, agenda_type: str, modifiers: dict,
                                 is_spoils: bool = False) -> list[str]:

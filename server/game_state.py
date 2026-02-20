@@ -4,7 +4,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Optional
 from shared.constants import (
-    Phase, SubPhase, AgendaType, IdolType, FACTION_NAMES, VP_TO_WIN,
+    Phase, SubPhase, AgendaType, IdolType, FACTION_NAMES, RACES, VP_TO_WIN,
     STARTING_INFLUENCE, CHANGE_DECK,
 )
 from shared.models import HexCoord, Idol, GameStateSnapshot
@@ -76,10 +76,27 @@ class GameState:
                     faction.regard[other_id] = 0
             self.factions[faction_id] = faction
 
+        # Assign a unique race to each faction (shuffle so each game is different)
+        races_shuffled = random.sample(RACES, len(FACTION_NAMES))
+        for faction_id, race in zip(FACTION_NAMES, races_shuffled):
+            self.factions[faction_id].race = race
+
         # Create spirits
         for info in player_info:
             spirit = Spirit(info["spirit_id"], info["name"])
             self.spirits[spirit.spirit_id] = spirit
+
+        # Assign unique (habitat, race) affinity pairs to each spirit.
+        # Pairs that exactly match a faction (same habitat AND race) are forbidden.
+        faction_combos = {(fid, self.factions[fid].race) for fid in self.factions}
+        valid_pairs = [
+            (h, r) for h in FACTION_NAMES for r in RACES
+            if (h, r) not in faction_combos
+        ]
+        random.shuffle(valid_pairs)
+        for spirit, (habitat, race) in zip(self.spirits.values(), valid_pairs):
+            spirit.habitat_affinity = habitat
+            spirit.race_affinity = race
 
         turn_results: list[tuple[list[dict], GameStateSnapshot]] = []
 
@@ -397,15 +414,73 @@ class GameState:
                 # Check worship
                 self._check_worship(faction, spirit, events)
             else:
-                # Contested - all fail, single event with all spirits
-                events.append({
-                    "type": "guide_contested",
-                    "spirits": spirit_ids,
-                    "faction": target_faction,
-                })
-                # Apply 1-turn cooldown: none of these spirits can target this faction next turn
-                for sid in spirit_ids:
-                    self.guidance_cooldowns.setdefault(sid, set()).add(target_faction)
+                # Multiple spirits contested — resolve via Affinities first
+                faction = self.factions[target_faction]
+                faction_race = faction.race
+
+                # Spirits whose habitat affinity matches this faction's habitat
+                habitat_matches = [
+                    sid for sid in spirit_ids
+                    if self.spirits[sid].habitat_affinity == target_faction
+                ]
+                # Spirits whose race affinity matches this faction's race (ignoring habitat matches)
+                race_matches = [
+                    sid for sid in spirit_ids
+                    if self.spirits[sid].race_affinity == faction_race
+                    and sid not in habitat_matches
+                ]
+
+                if len(habitat_matches) == 1:
+                    # Exactly one habitat-affinity winner — they guide, others waste their turn
+                    winner_id = habitat_matches[0]
+                    winner = self.spirits[winner_id]
+                    faction.guiding_spirit = winner_id
+                    winner.guide_faction(target_faction)
+                    events.append({
+                        "type": "guided",
+                        "spirit": winner_id,
+                        "faction": target_faction,
+                    })
+                    self._check_worship(faction, winner, events)
+                    losers = [sid for sid in spirit_ids if sid != winner_id]
+                    if losers:
+                        events.append({
+                            "type": "guide_contested",
+                            "spirits": losers,
+                            "faction": target_faction,
+                            "won_by_affinity": winner_id,
+                        })
+                elif not habitat_matches and len(race_matches) == 1:
+                    # No habitat contenders, exactly one race-affinity winner
+                    winner_id = race_matches[0]
+                    winner = self.spirits[winner_id]
+                    faction.guiding_spirit = winner_id
+                    winner.guide_faction(target_faction)
+                    events.append({
+                        "type": "guided",
+                        "spirit": winner_id,
+                        "faction": target_faction,
+                    })
+                    self._check_worship(faction, winner, events)
+                    losers = [sid for sid in spirit_ids if sid != winner_id]
+                    if losers:
+                        events.append({
+                            "type": "guide_contested",
+                            "spirits": losers,
+                            "faction": target_faction,
+                            "won_by_affinity": winner_id,
+                        })
+                else:
+                    # No clear affinity winner — normal contested resolution
+                    # Cooldown applies only to the top-tier contenders
+                    contested = habitat_matches or race_matches or spirit_ids
+                    events.append({
+                        "type": "guide_contested",
+                        "spirits": spirit_ids,
+                        "faction": target_faction,
+                    })
+                    for sid in contested:
+                        self.guidance_cooldowns.setdefault(sid, set()).add(target_faction)
 
         self.pending_actions.clear()
         self.phase = Phase.AGENDA_PHASE
