@@ -65,17 +65,17 @@ class Faction:
         self.regard[other_faction_id] = current + delta
 
     def draw_agenda_cards(self, count: int) -> list[AgendaCard]:
-        """Draw `count` cards from the agenda pool (with replacement).
+        """Draw up to `count` cards from the agenda pool without replacement.
 
-        The pool is never depleted — cards are sampled with replacement,
-        so duplicates are possible.
+        If count exceeds pool size, all pool cards are returned in random order.
+        The pool itself is never modified.
         """
-        return random.choices(self.agenda_pool, k=count)
+        return random.sample(self.agenda_pool, min(count, len(self.agenda_pool)))
 
     def draw_random_agenda(self) -> AgendaCard:
         """Draw a single random agenda card (for non-guided factions).
 
-        The pool is never depleted.
+        The pool is never modified.
         """
         return random.choice(self.agenda_pool)
 
@@ -98,9 +98,6 @@ class Faction:
     def cleanup_deck(self):
         """Clear turn tracking. The pool is static — no cards to return."""
         self.played_agenda_this_turn.clear()
-
-    def shuffle_agenda_pool(self):
-        random.shuffle(self.agenda_pool)
 
     def to_state(self, hex_map) -> FactionState:
         territories = hex_map.get_faction_territories(self.faction_id)

@@ -290,14 +290,14 @@ class TestDeckPool:
         assert card is not None
         assert len(faction.agenda_pool) == original_size
 
-    def test_draw_agenda_cards_allows_duplicates(self):
-        """With a pool of 1 card, drawing 3 should give 3 copies."""
+    def test_draw_agenda_cards_capped_at_pool_size(self):
+        """Drawing more cards than the pool size returns at most pool_size cards."""
         factions = make_factions()
         faction = factions["mountain"]
         faction.agenda_pool = [AgendaCard(AgendaType.TRADE)]
         hand = faction.draw_agenda_cards(3)
-        assert len(hand) == 3
-        assert all(c.agenda_type == AgendaType.TRADE for c in hand)
+        assert len(hand) == 1
+        assert hand[0].agenda_type == AgendaType.TRADE
 
     def test_cleanup_deck_clears_played(self):
         factions = make_factions()
