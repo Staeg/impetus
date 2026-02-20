@@ -21,6 +21,7 @@ class AnimationOrchestrator:
         self.hex_renderer = hex_renderer
         self.input_handler = input_handler
         self.deferred_phase_start: dict | None = None
+        self.faction_order: list[str] = list(FACTION_NAMES)
 
     # --- Position helpers ---
 
@@ -39,44 +40,41 @@ class AnimationOrchestrator:
     def _get_gold_display_pos(self, faction_id: str, small_font) -> tuple[int, int]:
         """Get screen position below the faction's gold text in the overview strip."""
         try:
-            idx = FACTION_NAMES.index(faction_id)
+            idx = self.faction_order.index(faction_id)
         except ValueError:
             return (SCREEN_WIDTH // 2, 97)
-        cell_w = SCREEN_WIDTH // len(FACTION_NAMES)
+        cell_w = SCREEN_WIDTH // len(self.faction_order)
         cx = idx * cell_w
         abbr = faction_full_name(faction_id)
         abbr_w = small_font.size(abbr)[0]
         gold_x = cx + 6 + abbr_w + 6
         return (gold_x, 97)
 
-    @staticmethod
-    def _get_agenda_label_pos(faction_id: str, img_width: int, row: int = 0) -> tuple[int, int]:
+    def _get_agenda_label_pos(self, faction_id: str, img_width: int, row: int = 0) -> tuple[int, int]:
         """Get the target screen position for an agenda slide animation."""
         try:
-            idx = FACTION_NAMES.index(faction_id)
+            idx = self.faction_order.index(faction_id)
         except ValueError:
             return (SCREEN_WIDTH // 2, 46)
-        cell_w = SCREEN_WIDTH // len(FACTION_NAMES)
+        cell_w = SCREEN_WIDTH // len(self.faction_order)
         cx = idx * cell_w
         target_x = cx + cell_w - img_width - 6
         target_y = 42 + 4 + row * 24
         return target_x, target_y
 
-    @staticmethod
-    def _get_agenda_slide_start(faction_id: str, img_width: int, row: int = 0) -> tuple[int, int]:
+    def _get_agenda_slide_start(self, faction_id: str, img_width: int, row: int = 0) -> tuple[int, int]:
         """Get the start screen position for an agenda slide animation (below strip)."""
-        target_x, _ = AnimationOrchestrator._get_agenda_label_pos(faction_id, img_width, row)
+        target_x, _ = self._get_agenda_label_pos(faction_id, img_width, row)
         start_y = 42 + 55 + 20
         return target_x, start_y
 
-    @staticmethod
-    def _get_faction_strip_pos(faction_id: str) -> tuple[int, int]:
+    def _get_faction_strip_pos(self, faction_id: str) -> tuple[int, int]:
         """Get position below a faction's name in the overview strip for regard text."""
         try:
-            idx = FACTION_NAMES.index(faction_id)
+            idx = self.faction_order.index(faction_id)
         except ValueError:
             return (SCREEN_WIDTH // 2, 101)
-        cell_w = SCREEN_WIDTH // len(FACTION_NAMES)
+        cell_w = SCREEN_WIDTH // len(self.faction_order)
         cx = idx * cell_w
         return (cx + 6, 97 + 4)
 

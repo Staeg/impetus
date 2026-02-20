@@ -177,6 +177,9 @@ class GameScene:
         # Per-spirit influence values from last state update (for fade animation detection)
         self._influence_prev: dict[str, int] = {}
 
+        # Faction display order (left-to-right by starting hex x-position)
+        self.faction_order: list[str] = list(FACTION_NAMES)
+
         # Faction overview tracking
         self.faction_agendas_this_turn: dict[str, str] = {}
         self.faction_spoils_agendas_this_turn: dict[str, list[str]] = {}
@@ -334,6 +337,11 @@ class GameScene:
             if len(parts) == 2:
                 q, r = int(parts[0]), int(parts[1])
                 self.hex_ownership[(q, r)] = owner
+
+        # Faction display order
+        if "faction_order" in data:
+            self.faction_order = data["faction_order"]
+            self.orchestrator.faction_order = self.faction_order
 
     def _snapshot_display_state(self):
         """Capture current state into display fields before updating real state.
@@ -1605,6 +1613,7 @@ class GameScene:
             spirits=self.spirits,
             preview_guidance=preview_guid_dict,
             animated_agenda_factions=animated_agenda_factions,
+            faction_order=self.faction_order,
         )
 
         # Draw persistent agenda slide animations (on top of overview strip)
