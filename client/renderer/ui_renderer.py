@@ -232,7 +232,8 @@ class UIRenderer:
                               faction_spoils_agendas: dict[str, list[str]] = None,
                               spirits: dict = None,
                               preview_guidance: dict = None,
-                              animated_agenda_factions: set = None):
+                              animated_agenda_factions: set = None,
+                              faction_order: list = None):
         """Draw a compact overview strip showing all factions' gold, agenda, wars, and worship.
 
         Returns (agenda_label_entries, pool_icon_rects):
@@ -242,13 +243,14 @@ class UIRenderer:
         spirits = spirits or {}
         faction_spoils_agendas = faction_spoils_agendas or {}
         animated_agenda_factions = animated_agenda_factions or set()
+        faction_order = faction_order or FACTION_NAMES
         agenda_label_entries: list[tuple[str, str, bool, pygame.Rect]] = []
         pool_icon_rects: dict[str, pygame.Rect] = {}
         ribbon_war_rects: dict[str, pygame.Rect] = {}
         strip_y = 42
         strip_h = 55
         sw = surface.get_width()
-        cell_w = sw // len(FACTION_NAMES) if FACTION_NAMES else sw
+        cell_w = sw // len(faction_order) if faction_order else sw
 
         # Background
         pygame.draw.rect(surface, (15, 15, 22), pygame.Rect(0, strip_y, sw, strip_h))
@@ -269,7 +271,7 @@ class UIRenderer:
                 war_lookup.setdefault(war.faction_a, []).append((war.faction_b, war.is_ripe))
                 war_lookup.setdefault(war.faction_b, []).append((war.faction_a, war.is_ripe))
 
-        for i, fid in enumerate(FACTION_NAMES):
+        for i, fid in enumerate(faction_order):
             fd = factions.get(fid)
             if not fd:
                 continue

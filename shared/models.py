@@ -6,7 +6,7 @@ Used by both client and server for network communication.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
-from shared.constants import IdolType, AgendaType, Phase, ChangeModifierTarget
+from shared.constants import IdolType, AgendaType, Phase, ChangeModifierTarget, FACTION_NAMES
 
 
 @dataclass
@@ -204,6 +204,11 @@ class GameStateSnapshot:
     wars: list[WarState]
     all_idols: list[Idol]
     hex_ownership: dict[str, Optional[str]]  # "q,r" -> faction_id or None
+    faction_order: list[str] = None
+
+    def __post_init__(self):
+        if self.faction_order is None:
+            self.faction_order = list(FACTION_NAMES)
 
     def to_dict(self) -> dict:
         return {
@@ -214,6 +219,7 @@ class GameStateSnapshot:
             "wars": [w.to_dict() for w in self.wars],
             "all_idols": [i.to_dict() for i in self.all_idols],
             "hex_ownership": self.hex_ownership,
+            "faction_order": self.faction_order,
         }
 
     @staticmethod
@@ -226,4 +232,5 @@ class GameStateSnapshot:
             wars=[WarState.from_dict(w) for w in d["wars"]],
             all_idols=[Idol.from_dict(i) for i in d["all_idols"]],
             hex_ownership=d["hex_ownership"],
+            faction_order=d.get("faction_order", list(FACTION_NAMES)),
         )

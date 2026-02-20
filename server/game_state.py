@@ -5,8 +5,11 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from shared.constants import (
     Phase, SubPhase, AgendaType, IdolType, FACTION_NAMES, RACES, VP_TO_WIN,
-    STARTING_INFLUENCE, CHANGE_DECK,
+    STARTING_INFLUENCE, CHANGE_DECK, FACTION_START_HEXES,
 )
+
+# Left-to-right ribbon order: sorted by x then y of flat-top axial hex positions
+RIBBON_HEX_ORDER = [(-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0)]
 from shared.models import HexCoord, Idol, GameStateSnapshot
 from server.hex_map import HexMap
 from server.faction import Faction
@@ -57,6 +60,8 @@ class GameState:
         self._stored_agenda_choices: dict[str, AgendaType] = {}
         self._guided_change_factions: list[str] = []
         self._guided_change_modifiers: dict[str, str] = {}
+        # Faction display order (left-to-right by starting hex x-position)
+        self.faction_order: list[str] = list(FACTION_NAMES)
 
     def setup_game(self, player_info: list[dict]) -> tuple[GameStateSnapshot, list[tuple[list[dict], GameStateSnapshot]]]:
         """Initialize the game with the given players.
@@ -100,6 +105,15 @@ class GameState:
         for spirit, (habitat, race) in zip(self.spirits.values(), pairs):
             spirit.habitat_affinity = habitat
             spirit.race_affinity = race
+
+        # Shuffle which faction starts at which position
+        start_positions = list(FACTION_START_HEXES.values())
+        random.shuffle(start_positions)
+        faction_start_hexes = dict(zip(FACTION_NAMES, start_positions))
+        self.hex_map = HexMap(faction_start_hexes)
+        # Compute ribbon order from spatial position (left-to-right by hex x)
+        pos_to_faction = {v: k for k, v in faction_start_hexes.items()}
+        self.faction_order = [pos_to_faction[pos] for pos in RIBBON_HEX_ORDER]
 
         turn_results: list[tuple[list[dict], GameStateSnapshot]] = []
 
@@ -180,6 +194,7 @@ class GameState:
             wars=[w.to_state() for w in self.wars],
             all_idols=list(self.hex_map.idols),
             hex_ownership=self.hex_map.get_ownership_dict(),
+            faction_order=self.faction_order,
         )
 
     def get_phase_options(self, spirit_id: str) -> dict:

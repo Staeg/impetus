@@ -12,17 +12,18 @@ from shared.models import HexCoord, Idol
 class HexMap:
     """Manages the hex grid, territory ownership, and idol placement."""
 
-    def __init__(self):
+    def __init__(self, faction_start_hexes=None):
         self.all_hexes: set[tuple[int, int]] = generate_hex_grid(MAP_SIDE_LENGTH)
         # Maps (q, r) -> faction_id or None (neutral)
         self.ownership: dict[tuple[int, int], Optional[str]] = {}
         self.idols: list[Idol] = []
+        self._faction_start_hexes = faction_start_hexes or FACTION_START_HEXES
         self._init_ownership()
 
     def _init_ownership(self):
         for hex_coord in self.all_hexes:
             self.ownership[hex_coord] = None
-        for faction_id, (q, r) in FACTION_START_HEXES.items():
+        for faction_id, (q, r) in self._faction_start_hexes.items():
             self.ownership[(q, r)] = faction_id
 
     def get_faction_territories(self, faction_id: str) -> set[tuple[int, int]]:
