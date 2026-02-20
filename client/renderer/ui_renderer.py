@@ -1050,7 +1050,8 @@ class UIRenderer:
     def draw_event_log(self, surface: pygame.Surface, events: list[str],
                        x: int, y: int, width: int, height: int,
                        scroll_offset: int = 0,
-                       highlight_log_idx: int = None):
+                       highlight_log_idx: int = None,
+                       h_scroll_offset: int = 0):
         """Draw scrollable event log."""
         panel_rect = pygame.Rect(x, y, width, height)
         pygame.draw.rect(surface, (20, 20, 30), panel_rect, border_radius=4)
@@ -1071,6 +1072,12 @@ class UIRenderer:
             end = total
         visible_events = events[start:end]
 
+        # Clamp horizontal scroll to the width of the longest visible line
+        available_width = width - 16
+        max_text_width = max((self.small_font.size(t)[0] for t in visible_events), default=0)
+        max_h_offset = max(0, max_text_width - available_width)
+        h_scroll_offset = min(h_scroll_offset, max_h_offset)
+
         clip_rect = pygame.Rect(x + 4, y + 22, width - 8, height - 26)
         surface.set_clip(clip_rect)
 
@@ -1084,12 +1091,12 @@ class UIRenderer:
                 text = self.small_font.render(event_text, True, (255, 240, 150))
             else:
                 text = self.small_font.render(event_text, True, (160, 160, 180))
-            surface.blit(text, (x + 8, dy))
+            surface.blit(text, (x + 8 - h_scroll_offset, dy))
             dy += 16
 
         surface.set_clip(None)
 
-        # Scroll indicators
+        # Vertical scroll indicators (right edge)
         if total > visible_count:
             indicator_x = x + width - 14
             if scroll_offset < total - visible_count:
@@ -1100,6 +1107,15 @@ class UIRenderer:
                 # Can scroll down (newer events)
                 arrow_down = self.small_font.render("\u25bc", True, (120, 120, 150))
                 surface.blit(arrow_down, (indicator_x, y + height - 18))
+
+        # Horizontal scroll indicators (bottom edge)
+        if max_h_offset > 0:
+            if h_scroll_offset > 0:
+                arrow_left = self.small_font.render("\u25c4", True, (120, 120, 150))
+                surface.blit(arrow_left, (x + 4, y + height - 18))
+            if h_scroll_offset < max_h_offset:
+                arrow_right = self.small_font.render("\u25ba", True, (120, 120, 150))
+                surface.blit(arrow_right, (x + width - 26, y + height - 18))
 
     def draw_waiting_overlay(self, surface: pygame.Surface, waiting_for: list[str],
                              spirits: dict, x: int = None, y: int = None):

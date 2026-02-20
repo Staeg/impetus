@@ -47,8 +47,7 @@ _INFLUENCE_TOOLTIP = (
 _AFFINITY_TOOLTIP = (
     "When two Spirits contest the same Faction, Affinity determines who succeeds. "
     "A matching Habitat Affinity wins outright. A matching Race Affinity wins if no "
-    "one has the Habitat. If both Spirits tie at the same priority, both fail and "
-    "cannot Guide that Faction next turn."
+    "one has the Habitat. If no Spirit holds a relevant Affinity, guidance is Contested."
 )
 
 _AGENDA_POOL_TOOLTIP = (
@@ -100,7 +99,8 @@ _MODIFIER_TOOLTIP = (
 _CONTESTED_TOOLTIP = (
     "If several Spirits attempt to Guide the same Faction on a given turn, "
     "the Guidance fails. This prevents all involved Spirits from Guiding "
-    "that Faction for exactly 1 turn.\n\n"
+    "that Faction for exactly 1 turn. This only occurs if no contesting Spirit "
+    "holds a Habitat or Race Affinity for that Faction.\n\n"
     "Spirits can only place 1 Idol per successful Guidance."
 )
 
@@ -171,6 +171,7 @@ class GameScene:
         self.has_submitted: bool = False
         self.event_log: list[str] = []
         self.event_log_scroll_offset: int = 0
+        self.event_log_h_scroll_offset: int = 0
         # Per-spirit influence values from last state update (for fade animation detection)
         self._influence_prev: dict[str, int] = {}
 
@@ -392,6 +393,8 @@ class GameScene:
                 max_offset = max(0, len(self.event_log) - visible_count)
                 self.event_log_scroll_offset += event.y
                 self.event_log_scroll_offset = max(0, min(self.event_log_scroll_offset, max_offset))
+                self.event_log_h_scroll_offset += event.x * 16
+                self.event_log_h_scroll_offset = max(0, self.event_log_h_scroll_offset)
 
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             self.popup_manager.handle_escape()
@@ -1669,6 +1672,7 @@ class GameScene:
             SCREEN_WIDTH - 300, SCREEN_HEIGHT - 200, 290, 190,
             scroll_offset=self.event_log_scroll_offset,
             highlight_log_idx=self.highlighted_log_index,
+            h_scroll_offset=self.event_log_h_scroll_offset,
         )
 
         # Draw waiting indicator near confirm button area, only after player has submitted

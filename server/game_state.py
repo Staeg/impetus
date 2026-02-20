@@ -86,15 +86,18 @@ class GameState:
             spirit = Spirit(info["spirit_id"], info["name"])
             self.spirits[spirit.spirit_id] = spirit
 
-        # Assign unique (habitat, race) affinity pairs to each spirit.
-        # Pairs that exactly match a faction (same habitat AND race) are forbidden.
+        # Assign affinities so each habitat and each race appears at most once
+        # across all spirits, and no pair exactly matches a faction combo.
         faction_combos = {(fid, self.factions[fid].race) for fid in self.factions}
-        valid_pairs = [
-            (h, r) for h in FACTION_NAMES for r in RACES
-            if (h, r) not in faction_combos
-        ]
-        random.shuffle(valid_pairs)
-        for spirit, (habitat, race) in zip(self.spirits.values(), valid_pairs):
+        habitats = list(FACTION_NAMES)
+        races = list(RACES)
+        while True:
+            random.shuffle(habitats)
+            random.shuffle(races)
+            pairs = list(zip(habitats, races))
+            if all(pair not in faction_combos for pair in pairs):
+                break
+        for spirit, (habitat, race) in zip(self.spirits.values(), pairs):
             spirit.habitat_affinity = habitat
             spirit.race_affinity = race
 
