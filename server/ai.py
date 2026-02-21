@@ -3,6 +3,19 @@
 import random
 from shared.hex_utils import hex_neighbors
 
+
+def _would_gain_worship(game_state, spirit_id: str, faction_id: str) -> bool:
+    """Return True if guiding faction_id would grant spirit_id worship of it."""
+    faction = game_state.factions[faction_id]
+    if faction.worship_spirit is None:
+        return True
+    # Another spirit holds worship — AI gains it only if it has >= idols in territory
+    current_idols = game_state.hex_map.count_spirit_idols_in_faction(
+        faction.worship_spirit, faction_id)
+    new_idols = game_state.hex_map.count_spirit_idols_in_faction(
+        spirit_id, faction_id)
+    return new_idols >= current_idols
+
 AI_NAMES = ["Amadeus", "Brandon", "Catherine", "Dumisai", "Eudokia"]
 
 
@@ -40,14 +53,38 @@ def get_ai_vagrant_action(game_state, spirit_id) -> dict:
     ]
     can_place = can_place and bool(idol_hexes)
 
+    def choose_guide_target(candidates):
+        # Priority 1: factions where guiding would grant worship
+        worship_candidates = [
+            fid for fid in candidates
+            if _would_gain_worship(game_state, spirit_id, fid)
+        ]
+        pool = worship_candidates if worship_candidates else candidates
+        if worship_candidates:
+            # Priority 2: most total idols in territory
+            idol_counts = {
+                fid: len(game_state.hex_map.get_idols_in_territories(fid))
+                for fid in pool
+            }
+            max_idols = max(idol_counts.values())
+            pool = [fid for fid in pool if idol_counts[fid] == max_idols]
+            # Priority 3: factions that already worship another spirit
+            already_worshipped = [
+                fid for fid in pool
+                if game_state.factions[fid].worship_spirit is not None
+            ]
+            if already_worshipped:
+                pool = already_worshipped
+        return random.choice(pool)
+
     action = {}
     if available and can_place:
-        action["guide_target"] = random.choice(available)
+        action["guide_target"] = choose_guide_target(available)
         h = random.choice(idol_hexes)
         action["idol_type"] = random.choice(idol_types)
         action["idol_q"], action["idol_r"] = h["q"], h["r"]
     elif available:
-        action["guide_target"] = random.choice(available)
+        action["guide_target"] = choose_guide_target(available)
     elif can_place:
         h = random.choice(idol_hexes)
         action["idol_type"] = random.choice(idol_types)
