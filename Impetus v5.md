@@ -4,7 +4,7 @@
 
 You play as a Spirit with the ability to take control of Factions to shape their future and expand the reach of your faith.
 
-You gain Victory Points whenever Factions which have your Idols and Worship win fights, expand their territory and make lots of gold. First to 10 Victory Points wins.
+You gain Victory Points whenever Factions which have your Idols and Worship win fights, expand their territory and make lots of gold. First to 100 Victory Points wins.
 
 ## Turn structure
 
@@ -87,10 +87,10 @@ Three kinds of Idols exist: Battle Idols that reward winning Wars, Affluence Ido
   * If they already have this Faction's Worship: nothing happens.
 * A Spirit cannot Guide a Faction that Worships them.
 * Factions with a Worshipped Spirit can score Victory Points for that Spirit, based on what kinds of Idols are in its territory (but ignoring which Spirit those Idols belong to):
-  * 0.5 VP per Battle Idol for each War won this turn
-  * 0.2 VP per Affluence Idol for each gold gained this turn
-  * 0.5 VP per Spread Idol for each new territory taken this turn
-  * These Victory Points are summed together and rounded down, then added to that Spirit's total.
+  * 5 VP per Battle Idol for each War won this turn
+  * 2 VP per Affluence Idol for each gold gained this turn
+  * 5 VP per Spread Idol for each new territory taken this turn
+  * These Victory Points are summed together and added to that Spirit's total.
 
 ## Faction Elimination
 

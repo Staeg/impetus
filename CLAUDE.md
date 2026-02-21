@@ -40,7 +40,7 @@ pyinstaller impetus.spec --noconfirm
 - `tests/` — pytest suite covering server logic and protocol serialization (no client rendering tests)
 
 ### Game state machine
-`LOBBY → VAGRANT → AGENDA → WAR → SCORING → CLEANUP → (loop until 10 VP)`
+`LOBBY → VAGRANT → AGENDA → WAR → SCORING → CLEANUP → (loop until 100 VP)`
 
 Each phase: wait for input → validate → resolve → broadcast → transition. Driven by `server/game_state.py`.
 

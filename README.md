@@ -1,6 +1,6 @@
 # Impetus
 
-A multiplayer turn-based strategy game built with PyGame and Python. Players take on the role of spirits who indirectly control factions on a hex grid, competing to reach 10 victory points through guidance, influence, and worship.
+A multiplayer turn-based strategy game built with PyGame and Python. Players take on the role of spirits who indirectly control factions on a hex grid, competing to reach 100 victory points through guidance, influence, and worship.
 
 ## Requirements
 
@@ -95,7 +95,7 @@ impetus/
 Each turn progresses through a fixed sequence of phases:
 
 ```
-LOBBY → SETUP → VAGRANT → AGENDA → WAR → SCORING → CLEANUP → (repeat until 10 VP)
+LOBBY → SETUP → VAGRANT → AGENDA → WAR → SCORING → CLEANUP → (repeat until 100 VP)
 ```
 
 - **Vagrant**: Unguided spirits choose a faction to guide and/or place an idol.

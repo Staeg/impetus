@@ -1,5 +1,6 @@
 """Primary gameplay scene: hex map, UI, phases."""
 
+import math
 import pygame
 from dataclasses import dataclass
 from shared.constants import (
@@ -7,10 +8,11 @@ from shared.constants import (
     SCREEN_WIDTH, SCREEN_HEIGHT, HEX_SIZE, FACTION_NAMES, FACTION_COLORS,
     BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPREAD_IDOL_VP,
 )
+from shared.hex_utils import axial_to_pixel
 from client.faction_names import faction_full_name, update_faction_races
 from client.renderer.hex_renderer import HexRenderer
 from client.renderer.ui_renderer import UIRenderer, Button, build_agenda_tooltip, build_modifier_tooltip, draw_dotted_underline
-from client.renderer.animation import AnimationManager, TextAnimation
+from client.renderer.animation import AnimationManager, TextAnimation, IdolBeamAnimation
 from client.renderer.assets import load_assets, agenda_card_images
 from client.input_handler import InputHandler
 from client.scenes.animation_orchestrator import AnimationOrchestrator
@@ -793,11 +795,52 @@ class GameScene:
                     vp_pos = self.ui_renderer.vp_positions.get(sid)
                     if vp_pos:
                         self.animation.add_effect_animation(TextAnimation(
-                            f"+{vp:.1f} VP", vp_pos[0], vp_pos[1] + 16,
+                            f"+{vp} VP", vp_pos[0], vp_pos[1] + 16,
                             (80, 255, 80),
                             delay=0.0, duration=3.0, drift_pixels=40,
                             direction=1, screen_space=True,
                         ))
+                        # Idol VP beams: one streaking beam per contributing idol
+                        faction_id = event.get("faction", "")
+                        wars_won = event.get("wars_won", 0)
+                        gold_gained_ev = event.get("gold_gained", 0)
+                        territories_gained = event.get("territories_gained", 0)
+                        active_types = {}
+                        if event.get("battle_idols", 0) > 0 and wars_won > 0:
+                            active_types["battle"] = (255, 60, 80)
+                        if event.get("affluence_idols", 0) > 0 and gold_gained_ev > 0:
+                            active_types["affluence"] = (255, 200, 50)
+                        if event.get("spread_idols", 0) > 0 and territories_gained > 0:
+                            active_types["spread"] = (60, 220, 100)
+                        if faction_id and active_types:
+                            spirit_idx_map = {
+                                s: i for i, s in enumerate(sorted(self.spirits.keys()))
+                            }
+                            beam_delay = 0.0
+                            for idol_data in self.all_idols:
+                                if not isinstance(idol_data, dict):
+                                    continue
+                                pos = idol_data.get("position", {})
+                                q, r = pos.get("q"), pos.get("r")
+                                if self.hex_ownership.get((q, r)) != faction_id:
+                                    continue
+                                beam_color = active_types.get(idol_data.get("type"))
+                                if beam_color is None:
+                                    continue
+                                wx, wy = axial_to_pixel(q, r, HEX_SIZE)
+                                player_idx = spirit_idx_map.get(
+                                    idol_data.get("owner_spirit"), 0
+                                )
+                                angle = math.radians(-90 + player_idx * 60)
+                                wx += math.cos(angle) * (HEX_SIZE / 2)
+                                wy += math.sin(angle) * (HEX_SIZE / 2)
+                                self.animation.add_effect_animation(IdolBeamAnimation(
+                                    wx, wy,
+                                    vp_pos[0], vp_pos[1] + 8,
+                                    beam_color,
+                                    delay=beam_delay, duration=0.75,
+                                ))
+                                beam_delay += 0.07
             elif event.get("type") == "swell":
                 sid = event.get("spirit", "")
                 if sid:

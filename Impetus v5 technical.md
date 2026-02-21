@@ -47,11 +47,10 @@
   * Any non-Ripe Wars become Ripe and a random Battleground is selected  
 * Scoring
   * For each Faction that has any Spirit's Worship:
-    * That Spirit gains 0.5 Victory Points for all Wars won this turn per Battle Idol in that Faction’s territory  
-    * That Spirit gains 0.2 Victory Points for each gold gained this turn per Affluence Idol in that Faction’s territory  
-    * That Spirit gains 0.5 Victory Points for each new Territory gained this turn per Spread Idol in that Faction’s territory  
-  * All Victory Point counts are then rounded down to the next integer.  
-  * If any Spirit has 10 Victory Points, the game ends.  
+    * That Spirit gains 5 Victory Points for all Wars won this turn per Battle Idol in that Faction’s territory
+    * That Spirit gains 2 Victory Points for each gold gained this turn per Affluence Idol in that Faction’s territory
+    * That Spirit gains 5 Victory Points for each new Territory gained this turn per Spread Idol in that Faction’s territory
+  * If any Spirit has 100 Victory Points, the game ends.  
     * If there is a tie for most Victory Points at this moment, the victory is shared.  
 * Cleanup
   * The Agenda pool is static \- cards are sampled with replacement and never consumed, so no reshuffling is needed.

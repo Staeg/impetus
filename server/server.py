@@ -258,7 +258,7 @@ class GameServer:
                     {"message": "Only the host can change lobby options"}))
                 return
             if "vp_to_win" in payload:
-                room.vp_to_win = max(5, min(25, int(payload["vp_to_win"])))
+                room.vp_to_win = max(50, min(250, int(payload["vp_to_win"])))
             if "ai_count" in payload:
                 ai_count = max(0, min(5, int(payload["ai_count"])))
                 # Total human + AI must not exceed 5
