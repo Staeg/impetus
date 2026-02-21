@@ -838,7 +838,7 @@ class GameScene:
                                     wx, wy,
                                     vp_pos[0], vp_pos[1] + 8,
                                     beam_color,
-                                    delay=beam_delay, duration=0.75,
+                                    delay=beam_delay, duration=1.5,
                                 ))
                                 beam_delay += 0.07
             elif event.get("type") == "swell":

@@ -335,7 +335,7 @@ class ArrowAnimation(BaseAnimation):
 class IdolBeamAnimation(BaseAnimation):
     """Glowing beam that travels from an idol (world-space) to the VP counter (screen-space)."""
 
-    TRAIL_FRAC = 0.4  # fraction of the full path shown as trail at any moment
+    TRAIL_FRAC = 1.0  # fraction of the full path shown as trail at any moment
 
     def __init__(self, start_world_x: float, start_world_y: float,
                  end_screen_x: float, end_screen_y: float,

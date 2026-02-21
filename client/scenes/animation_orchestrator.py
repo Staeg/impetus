@@ -14,24 +14,17 @@ from client.renderer.animation import (
 from client.renderer.assets import agenda_images
 
 
-def _draw_idol_beam(screen: pygame.Surface, p0: tuple, p1: tuple,
+def _draw_idol_beam(screen: pygame.Surface, p0: tuple, ctrl: tuple, p1: tuple,
+                    t_tail: float, t_head: float,
                     color: tuple, alpha: int):
-    """Draw a glowing curved beam between two screen-space points."""
-    dx = p1[0] - p0[0]
-    dy = p1[1] - p0[1]
-    length = max(1.0, (dx * dx + dy * dy) ** 0.5)
-    # Perpendicular offset for a gentle curve (25% of length)
-    perp_x = (-dy / length) * length * 0.25
-    perp_y = (dx / length) * length * 0.25
-    mx = (p0[0] + p1[0]) / 2 + perp_x
-    my = (p0[1] + p1[1]) / 2 + perp_y
-    # Sample quadratic Bézier
+    """Draw a glowing curved beam segment from t_tail to t_head along a fixed quadratic Bézier."""
+    # Sample points only between t_tail and t_head on the fixed full-path curve
     N = 12
     pts = []
     for i in range(N + 1):
-        t = i / N
-        bx = (1 - t) ** 2 * p0[0] + 2 * (1 - t) * t * mx + t ** 2 * p1[0]
-        by = (1 - t) ** 2 * p0[1] + 2 * (1 - t) * t * my + t ** 2 * p1[1]
+        t = t_tail + (t_head - t_tail) * (i / N)
+        bx = (1 - t) ** 2 * p0[0] + 2 * (1 - t) * t * ctrl[0] + t ** 2 * p1[0]
+        by = (1 - t) ** 2 * p0[1] + 2 * (1 - t) * t * ctrl[1] + t ** 2 * p1[1]
         pts.append((int(bx), int(by)))
     # Bounding box for clipped surface
     xs = [p[0] for p in pts]
@@ -413,15 +406,17 @@ class AnimationOrchestrator:
                     SCREEN_WIDTH, SCREEN_HEIGHT,
                 )
                 sx1, sy1 = int(anim.end_screen_x), int(anim.end_screen_y)
-                p = ease_out_cubic(anim.progress)
-                # Head of beam (travels from idol → VP counter)
-                hx = int(sx0 + (sx1 - sx0) * p)
-                hy = int(sy0 + (sy1 - sy0) * p)
-                # Tail of beam (trails behind by TRAIL_FRAC of path)
-                trail_p = max(0.0, p - IdolBeamAnimation.TRAIL_FRAC)
-                tx = int(sx0 + (sx1 - sx0) * trail_p)
-                ty = int(sy0 + (sy1 - sy0) * trail_p)
-                _draw_idol_beam(screen, (tx, ty), (hx, hy), anim.color, alpha)
+                # Compute Bézier control point once for the FULL path so the
+                # curve shape stays fixed as head/tail travel along it
+                fdx = sx1 - sx0
+                fdy = sy1 - sy0
+                flen = max(1.0, (fdx * fdx + fdy * fdy) ** 0.5)
+                ctrl_x = (sx0 + sx1) / 2 + (-fdy / flen) * flen * 0.25
+                ctrl_y = (sy0 + sy1) / 2 + (fdx / flen) * flen * 0.25
+                t_head = ease_out_cubic(anim.progress)
+                t_tail = max(0.0, t_head - IdolBeamAnimation.TRAIL_FRAC)
+                _draw_idol_beam(screen, (sx0, sy0), (ctrl_x, ctrl_y), (sx1, sy1),
+                                t_tail, t_head, anim.color, alpha)
 
     # --- Hex reveal ---
 
