@@ -758,7 +758,8 @@ class GameScene:
 
     def _process_phase_result(self, payload):
         active_sub_phase = self.phase if self.phase in (
-            SubPhase.CHANGE_CHOICE, SubPhase.SPOILS_CHOICE, SubPhase.SPOILS_CHANGE_CHOICE) else None
+            SubPhase.CHANGE_CHOICE, SubPhase.SPOILS_CHOICE, SubPhase.SPOILS_CHANGE_CHOICE,
+            SubPhase.EJECTION_CHOICE) else None
         # Snapshot display state before updating so animations render old state
         events = payload.get("events", [])
         _ANIM_ORDER = {
@@ -778,6 +779,8 @@ class GameScene:
         elif active_sub_phase == SubPhase.SPOILS_CHOICE and self.spoils_entries:
             self.phase = active_sub_phase
         elif active_sub_phase == SubPhase.SPOILS_CHANGE_CHOICE and self.spoils_change_entries:
+            self.phase = active_sub_phase
+        elif active_sub_phase == SubPhase.EJECTION_CHOICE and self.ejection_pending:
             self.phase = active_sub_phase
         # Log events (consolidate agenda play + resolution into one line)
         self._log_events_batch(events)
