@@ -1734,6 +1734,18 @@ class GameScene:
             sid: i for i, sid in enumerate(sorted(self.spirits.keys()))
         }
 
+        # Build faction_id -> spirit_index for guidance and worship indicators
+        faction_spirit_index = {}
+        faction_worship = {}
+        for faction_id, fdata in self.factions.items():
+            fdict = fdata if isinstance(fdata, dict) else {}
+            guiding = fdict.get("guiding_spirit")
+            if guiding and guiding in spirit_index_map:
+                faction_spirit_index[faction_id] = spirit_index_map[guiding]
+            worship = fdict.get("worship_spirit")
+            if worship and worship in spirit_index_map:
+                faction_worship[faction_id] = spirit_index_map[worship]
+
         self.hex_renderer.draw_hex_grid(
             screen, hex_own,
             self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT,
@@ -1742,6 +1754,8 @@ class GameScene:
             highlight_hexes=highlight,
             spirit_index_map=spirit_index_map,
             preview_idol=render_preview_idol,
+            faction_spirit_index=faction_spirit_index,
+            faction_worship=faction_worship,
         )
 
         # Draw world-space effect animations (border text + arrows)
@@ -1794,6 +1808,7 @@ class GameScene:
                 self.hex_ownership, SCREEN_WIDTH - 240, 102, 230,
                 my_spirit_id=self.spirit_panel_spirit_id,
                 circle_fills=fills,
+                spirit_index_map=spirit_index_map,
             )
             # Clear faction panel rects
             self.ui_renderer.faction_panel_rect = None
@@ -1838,6 +1853,7 @@ class GameScene:
                 self.hex_ownership, SCREEN_WIDTH - 540, SCREEN_HEIGHT - 200, 230,
                 my_spirit_id=self.app.my_spirit_id,
                 circle_fills=fills,
+                spirit_index_map=spirit_index_map,
             )
 
         # Draw event log (bottom right)

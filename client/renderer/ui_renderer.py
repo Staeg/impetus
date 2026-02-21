@@ -8,6 +8,7 @@ from shared.constants import (
 )
 from client.faction_names import faction_full_name
 from client.renderer.assets import agenda_ribbon_icons
+from client.renderer.hex_renderer import draw_spirit_symbol
 
 
 def _wrap_text(text: str, font: "pygame.font.Font", max_width: int) -> list[str]:
@@ -194,6 +195,9 @@ class UIRenderer:
         phase_text = self.font.render(f"Turn {turn} | {phase.replace('_', ' ').title()}", True, (200, 200, 220))
         surface.blit(phase_text, (10, 10))
 
+        # Build spirit index map for sigil lookup (sorted for stability)
+        spirit_index_map = {sid: i for i, sid in enumerate(sorted(spirits.keys()))}
+
         # VP display
         x = 300
         self.vp_hover_rects.clear()
@@ -209,13 +213,12 @@ class UIRenderer:
             surface.blit(name_surf, (x, 12))
             x += name_surf.get_width()
 
-            # Render faction tag in faction color
-            if faction_id:
-                faction_color = FACTION_COLORS.get(faction_id, (150, 150, 150))
-                faction_tag = f" [{faction_full_name(faction_id)}]"
-                tag_surf = self.small_font.render(faction_tag, True, faction_color)
-                surface.blit(tag_surf, (x, 12))
-                x += tag_surf.get_width()
+            # Render identity symbol (always, vagrant or guiding) — silver
+            sigil_r = 14
+            sigil_cx = x + 4 + sigil_r
+            draw_spirit_symbol(surface, sigil_cx, 20, sigil_r * 2,
+                               spirit_index_map.get(sid, 0))
+            x += sigil_r * 2 + 10  # left-pad(4) + diameter + right-pad(4)
 
             # Render VP
             self.vp_positions[sid] = (x, 12)
@@ -223,7 +226,7 @@ class UIRenderer:
             surface.blit(vp_surf, (x, 12))
             x += vp_surf.get_width()
 
-            # Store hover rect covering name+tag+VP (for click detection)
+            # Store hover rect covering name+sigil+VP (for click detection)
             self.vp_hover_rects[sid] = pygame.Rect(entry_start_x, 4, x - entry_start_x, 28)
             x += 20
 
@@ -768,7 +771,8 @@ class UIRenderer:
                           factions: dict, all_idols: list, hex_ownership: dict,
                           x: int, y: int, width: int = 230,
                           my_spirit_id: str = "",
-                          circle_fills: "list[float] | None" = None) -> dict:
+                          circle_fills: "list[float] | None" = None,
+                          spirit_index_map: dict = None) -> dict:
         """Draw spirit info panel showing guidance, influence, worship, and idol counts.
 
         Returns a dict with keys "panel", "guidance", "influence", "worship" containing
@@ -811,6 +815,13 @@ class UIRenderer:
         # VP to the right
         vp_surf = self.small_font.render(f"{vp} VP", True, (200, 200, 220))
         surface.blit(vp_surf, (x + width - 10 - vp_surf.get_width(), dy + 2))
+        # Identity symbol in header (always, vagrant or guiding) — silver
+        if spirit_index_map is not None:
+            sidx = spirit_index_map.get(spirit_id, 0)
+            sigil_sr = 24
+            sigil_cx = x + width - 10 - vp_surf.get_width() - sigil_sr - 8
+            sigil_cy = dy + 12   # vertically centred in the 24 px header zone
+            draw_spirit_symbol(surface, sigil_cx, sigil_cy, sigil_sr, sidx)
         dy += 24
 
         # Guidance line

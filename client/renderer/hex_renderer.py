@@ -8,6 +8,66 @@ from shared.constants import (
 )
 
 
+# One shape per spirit index (0-4 unique, 5+ wraps).
+_SPIRIT_SHAPES = ["triangle", "circle", "diamond", "star", "square"]
+
+# Scale each shape so all five read the same visual weight at the same radius.
+# Circles fill their whole circumcircle; triangles/stars are sparse.
+_SHAPE_SCALE = {
+    "circle":   0.75,
+    "triangle": 1.05,
+    "diamond":  1.00,
+    "star":     0.80,
+    "square":   0.90,
+}
+
+
+def draw_spirit_symbol(surface, cx, cy, screen_radius, spirit_idx,
+                       color=(192, 192, 192)):
+    """Draw a single spirit symbol at (cx, cy).
+
+    screen_radius drives the size: symbol is drawn at screen_radius/3 * shape_scale.
+    Public — importable by ui_renderer and other modules.
+    """
+    shape = _SPIRIT_SHAPES[spirit_idx % len(_SPIRIT_SHAPES)]
+    r = screen_radius / 3 * _SHAPE_SCALE[shape]
+    _draw_shape(surface, shape, cx, cy, r, color)
+
+
+def _draw_shape(surface, shape, cx, cy, r, color):
+    """Draw a filled shape centred at (cx, cy) with circumradius r."""
+    cx, cy = int(cx), int(cy)
+    r = max(r, 1)
+    if shape == "circle":
+        pygame.draw.circle(surface, color, (cx, cy), int(r))
+    elif shape == "triangle":
+        pts = [
+            (cx,              cy - r),
+            (cx - r * 0.866,  cy + r * 0.5),
+            (cx + r * 0.866,  cy + r * 0.5),
+        ]
+        pygame.draw.polygon(surface, color, [(int(x), int(y)) for x, y in pts])
+    elif shape == "diamond":
+        pts = [
+            (cx,             cy - r),
+            (cx + r * 0.65,  cy),
+            (cx,             cy + r),
+            (cx - r * 0.65,  cy),
+        ]
+        pygame.draw.polygon(surface, color, [(int(x), int(y)) for x, y in pts])
+    elif shape == "star":
+        pts = []
+        inner = r * 0.4
+        for i in range(10):
+            angle = math.radians(-90 + i * 36)
+            ri = r if i % 2 == 0 else inner
+            pts.append((int(cx + ri * math.cos(angle)),
+                         int(cy + ri * math.sin(angle))))
+        pygame.draw.polygon(surface, color, pts)
+    elif shape == "square":
+        s = int(r * 0.71)  # r/√2: half-side of square inscribed in circumcircle
+        pygame.draw.rect(surface, color, (cx - s, cy - s, s * 2, s * 2))
+
 IDOL_COLORS = {
     IdolType.BATTLE: (255, 50, 50),
     IdolType.AFFLUENCE: (255, 215, 0),
@@ -38,7 +98,9 @@ class HexRenderer:
                       idols: list = None, wars: list = None,
                       selected_hex=None, highlight_hexes=None,
                       spirit_index_map: dict = None,
-                      preview_idol: tuple = None):
+                      preview_idol: tuple = None,
+                      faction_spirit_index: dict = None,
+                      faction_worship: dict = None):
         """Draw the complete hex map.
 
         Args:
@@ -49,6 +111,8 @@ class HexRenderer:
             selected_hex: (q, r) tuple to highlight
             highlight_hexes: set of (q, r) tuples to highlight (e.g., valid targets)
             spirit_index_map: dict of spirit_id -> player index for idol positioning
+            faction_spirit_index: dict of faction_id -> spirit index for guidance symbols
+            faction_worship: dict of faction_id -> spirit index for worship symbols near idols
         """
         font = self._get_font()
 
@@ -78,6 +142,13 @@ class HexRenderer:
             # Draw filled hex
             pygame.draw.polygon(surface, color, screen_verts)
 
+            # Draw guidance symbol (black) at hex centre for guided factions
+            if faction_spirit_index and owner:
+                sidx = faction_spirit_index.get(owner)
+                if sidx is not None:
+                    sr = math.dist(screen_verts[0], (sx, sy))
+                    draw_spirit_symbol(surface, sx, sy, sr, sidx, (0, 0, 0))
+
             # Draw border
             border_color = (40, 40, 40)
             if (q, r) == selected_hex:
@@ -97,7 +168,9 @@ class HexRenderer:
         # Draw idols
         if idols:
             self._draw_idols(surface, idols, camera, screen_w, screen_h,
-                             spirit_index_map or {})
+                             spirit_index_map or {},
+                             hex_ownership=hex_ownership,
+                             faction_worship=faction_worship)
 
         # Draw preview idol (semi-transparent)
         if preview_idol:
@@ -105,7 +178,7 @@ class HexRenderer:
                                     screen_w, screen_h)
 
     def _draw_idols(self, surface, idols, camera, screen_w, screen_h,
-                    spirit_index_map):
+                    spirit_index_map, hex_ownership=None, faction_worship=None):
         """Draw idol icons on their hexes, offset radially by owner."""
         font = self._get_font(12)
         dist = self.hex_size / 2  # halfway to hex vertex
@@ -119,6 +192,19 @@ class HexRenderer:
             offset_y = math.sin(angle) * dist
             ix, iy = camera.world_to_screen(wx + offset_x, wy + offset_y,
                                             screen_w, screen_h)
+
+            # Draw worship symbol (silver) behind the idol dot
+            if hex_ownership is not None and faction_worship:
+                owner_fid = hex_ownership.get((idol.position.q, idol.position.r))
+                if owner_fid:
+                    worship_sidx = faction_worship.get(owner_fid)
+                    if worship_sidx is not None:
+                        # Use distance from hex centre to idol as proxy for hex screen radius
+                        csx, csy = camera.world_to_screen(wx, wy, screen_w, screen_h)
+                        sr = math.dist((ix, iy), (csx, csy)) * 2
+                        draw_spirit_symbol(surface, ix, iy, sr, worship_sidx,
+                                           (192, 192, 192))
+
             idol_color = IDOL_COLORS.get(idol.type, (255, 255, 255))
             pygame.draw.circle(surface, idol_color, (ix, iy), 5)
             # Draw letter
