@@ -1,6 +1,5 @@
 """Victory point calculation per phase."""
 
-import math
 from shared.constants import IdolType, BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPREAD_IDOL_VP
 
 
@@ -27,12 +26,9 @@ def calculate_scoring(factions: dict, spirits: dict, hex_map) -> list[dict]:
         affluence_idols = sum(1 for i in idols if i.type == IdolType.AFFLUENCE)
         spread_idols = sum(1 for i in idols if i.type == IdolType.SPREAD)
 
-        vp_raw = 0.0
-        vp_raw += battle_idols * BATTLE_IDOL_VP * faction.wars_won_this_turn
-        vp_raw += affluence_idols * AFFLUENCE_IDOL_VP * faction.gold_gained_this_turn
-        vp_raw += spread_idols * SPREAD_IDOL_VP * faction.territories_gained_this_turn
-
-        vp_gained = math.floor(vp_raw)
+        vp_gained = (battle_idols * BATTLE_IDOL_VP * faction.wars_won_this_turn
+                     + affluence_idols * AFFLUENCE_IDOL_VP * faction.gold_gained_this_turn
+                     + spread_idols * SPREAD_IDOL_VP * faction.territories_gained_this_turn)
 
         if vp_gained > 0:
             spirit.victory_points += vp_gained
@@ -46,7 +42,6 @@ def calculate_scoring(factions: dict, spirits: dict, hex_map) -> list[dict]:
                 "wars_won": faction.wars_won_this_turn,
                 "gold_gained": faction.gold_gained_this_turn,
                 "territories_gained": faction.territories_gained_this_turn,
-                "vp_raw": vp_raw,
                 "vp_gained": vp_gained,
                 "total_vp": spirit.victory_points,
             })

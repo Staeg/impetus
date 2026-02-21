@@ -45,9 +45,9 @@ class TestScoring:
         spirit.idols.append(idol)
 
         events = calculate_scoring(factions, spirits, hm)
-        # 1 battle idol * 0.5 * 2 wars won = 1.0 VP -> floor = 1
+        # 1 battle idol * 5 * 2 wars won = 10 VP
         assert len(events) == 1
-        assert events[0]["vp_gained"] == 1
+        assert events[0]["vp_gained"] == 10
 
     def test_affluence_idol_scoring(self):
         hm, factions, spirits = self._setup()
@@ -61,9 +61,9 @@ class TestScoring:
         spirit.idols.append(idol)
 
         events = calculate_scoring(factions, spirits, hm)
-        # 1 affluence idol * 0.2 * 5 gold = 1.0 VP -> floor = 1
+        # 1 affluence idol * 2 * 5 gold = 10 VP
         assert len(events) == 1
-        assert events[0]["vp_gained"] == 1
+        assert events[0]["vp_gained"] == 10
 
     def test_spread_idol_scoring(self):
         hm, factions, spirits = self._setup()
@@ -77,11 +77,11 @@ class TestScoring:
         spirit.idols.append(idol)
 
         events = calculate_scoring(factions, spirits, hm)
-        # 1 spread idol * 0.5 * 2 territories = 1.0 VP -> floor = 1
+        # 1 spread idol * 5 * 2 territories = 10 VP
         assert len(events) == 1
-        assert events[0]["vp_gained"] == 1
+        assert events[0]["vp_gained"] == 10
 
-    def test_floor_rounding(self):
+    def test_single_idol_single_event(self):
         hm, factions, spirits = self._setup()
         spirit = spirits["s1"]
         faction = factions["mountain"]
@@ -93,8 +93,9 @@ class TestScoring:
         spirit.idols.append(idol)
 
         events = calculate_scoring(factions, spirits, hm)
-        # 1 battle idol * 0.5 * 1 war = 0.5 -> floor = 0, no VP event
-        assert len(events) == 0
+        # 1 battle idol * 5 * 1 war = 5 VP
+        assert len(events) == 1
+        assert events[0]["vp_gained"] == 5
 
     def test_multiple_idols(self):
         hm, factions, spirits = self._setup()
@@ -110,6 +111,6 @@ class TestScoring:
             spirit.idols.append(idol)
 
         events = calculate_scoring(factions, spirits, hm)
-        # 2 battle idols * 0.5 * 1 war = 1.0 -> floor = 1
+        # 2 battle idols * 5 * 1 war = 10 VP
         assert len(events) == 1
-        assert events[0]["vp_gained"] == 1
+        assert events[0]["vp_gained"] == 10

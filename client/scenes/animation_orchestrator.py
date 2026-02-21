@@ -1,5 +1,6 @@
 """Animation orchestration: creation and rendering of agenda/effect animations."""
 
+import math
 import pygame
 from shared.constants import (
     SCREEN_WIDTH, SCREEN_HEIGHT, HEX_SIZE, FACTION_NAMES,
@@ -8,8 +9,59 @@ from client.faction_names import faction_full_name
 from shared.hex_utils import axial_to_pixel, hex_neighbors
 from client.renderer.animation import (
     AnimationManager, AgendaSlideAnimation, TextAnimation, ArrowAnimation,
+    IdolBeamAnimation, ease_out_cubic,
 )
 from client.renderer.assets import agenda_images
+
+
+def _draw_idol_beam(screen: pygame.Surface, p0: tuple, p1: tuple,
+                    color: tuple, alpha: int):
+    """Draw a glowing curved beam between two screen-space points."""
+    dx = p1[0] - p0[0]
+    dy = p1[1] - p0[1]
+    length = max(1.0, (dx * dx + dy * dy) ** 0.5)
+    # Perpendicular offset for a gentle curve (25% of length)
+    perp_x = (-dy / length) * length * 0.25
+    perp_y = (dx / length) * length * 0.25
+    mx = (p0[0] + p1[0]) / 2 + perp_x
+    my = (p0[1] + p1[1]) / 2 + perp_y
+    # Sample quadratic Bézier
+    N = 12
+    pts = []
+    for i in range(N + 1):
+        t = i / N
+        bx = (1 - t) ** 2 * p0[0] + 2 * (1 - t) * t * mx + t ** 2 * p1[0]
+        by = (1 - t) ** 2 * p0[1] + 2 * (1 - t) * t * my + t ** 2 * p1[1]
+        pts.append((int(bx), int(by)))
+    # Bounding box for clipped surface
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    margin = 9
+    min_x = max(0, min(xs) - margin)
+    min_y = max(0, min(ys) - margin)
+    max_x = min(SCREEN_WIDTH, max(xs) + margin)
+    max_y = min(SCREEN_HEIGHT, max(ys) + margin)
+    w = max_x - min_x
+    h = max_y - min_y
+    if w <= 0 or h <= 0:
+        return
+    tmp = pygame.Surface((w, h), pygame.SRCALPHA)
+    lpts = [(px - min_x, py - min_y) for px, py in pts]
+    r, g, b = color
+    # Glow layer (wide, very transparent)
+    for i in range(len(lpts) - 1):
+        pygame.draw.line(tmp, (r, g, b, int(alpha * 0.18)), lpts[i], lpts[i + 1], 9)
+    # Mid glow
+    for i in range(len(lpts) - 1):
+        pygame.draw.line(tmp, (r, g, b, int(alpha * 0.50)), lpts[i], lpts[i + 1], 3)
+    # Bright core
+    for i in range(len(lpts) - 1):
+        pygame.draw.line(tmp, (255, 255, 255, int(alpha * 0.85)), lpts[i], lpts[i + 1], 1)
+    # Head dot
+    hx, hy = lpts[-1]
+    pygame.draw.circle(tmp, (r, g, b, int(alpha * 0.65)), (hx, hy), 6)
+    pygame.draw.circle(tmp, (255, 255, 255, int(alpha * 0.95)), (hx, hy), 3)
+    screen.blit(tmp, (min_x, min_y))
 
 
 class AnimationOrchestrator:
@@ -350,6 +402,26 @@ class AnimationOrchestrator:
                     self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT,
                     width=3, head_size=8, unidirectional=True,
                 )
+
+            elif isinstance(anim, IdolBeamAnimation):
+                alpha = anim.alpha
+                if alpha <= 0:
+                    continue
+                # Convert idol world position to screen coords
+                sx0, sy0 = self.input_handler.world_to_screen(
+                    anim.start_world_x, anim.start_world_y,
+                    SCREEN_WIDTH, SCREEN_HEIGHT,
+                )
+                sx1, sy1 = int(anim.end_screen_x), int(anim.end_screen_y)
+                p = ease_out_cubic(anim.progress)
+                # Head of beam (travels from idol → VP counter)
+                hx = int(sx0 + (sx1 - sx0) * p)
+                hy = int(sy0 + (sy1 - sy0) * p)
+                # Tail of beam (trails behind by TRAIL_FRAC of path)
+                trail_p = max(0.0, p - IdolBeamAnimation.TRAIL_FRAC)
+                tx = int(sx0 + (sx1 - sx0) * trail_p)
+                ty = int(sy0 + (sy1 - sy0) * trail_p)
+                _draw_idol_beam(screen, (tx, ty), (hx, hy), anim.color, alpha)
 
     # --- Hex reveal ---
 

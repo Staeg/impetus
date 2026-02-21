@@ -330,3 +330,26 @@ class ArrowAnimation(BaseAnimation):
         self.to_hex = to_hex
         self.color = color
         self.screen_space = False  # always world-space
+
+
+class IdolBeamAnimation(BaseAnimation):
+    """Glowing beam that travels from an idol (world-space) to the VP counter (screen-space)."""
+
+    TRAIL_FRAC = 0.4  # fraction of the full path shown as trail at any moment
+
+    def __init__(self, start_world_x: float, start_world_y: float,
+                 end_screen_x: float, end_screen_y: float,
+                 color: tuple,
+                 delay: float = 0.0, duration: float = 0.75):
+        super().__init__(delay=delay, duration=duration)
+        self.start_world_x = start_world_x
+        self.start_world_y = start_world_y
+        self.end_screen_x = end_screen_x
+        self.end_screen_y = end_screen_y
+        self.color = color
+        self.screen_space = True  # rendered in the screen-space pass
+
+    @property
+    def alpha(self) -> int:
+        # Stay full brightness until 75% through the journey, then fade out quickly
+        return fade_alpha(self.progress, hold=0.75)

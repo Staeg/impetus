@@ -116,7 +116,7 @@ The game progresses through a fixed sequence of phases each turn. The state mach
 LOBBY → SETUP → VAGRANT_PHASE → AGENDA_PHASE → WAR_PHASE → SCORING → CLEANUP ─┐
                      ▲                                                          │
                      └──────────────────────────────────────────────────────────┘
-                                    (loop until 10 VP)
+                                    (loop until 100 VP)
 ```
 
 Each phase:
@@ -133,7 +133,7 @@ Phase details:
 | VAGRANT_PHASE | Vagrant spirits choose: guide a faction AND/OR place an idol (must do both if both available). Cannot guide a faction that Worships them. One idol per vagrant stint. | Simultaneous reveal. Contested guidance fails. Idols placed. Influence set to 3 on success. Worship checked. |
 | AGENDA_PHASE | Guiding spirits choose 1 agenda from drawn hand | Simultaneous reveal. Non-guided factions draw randomly. Resolve in order: Trade → Steal → Expand → Change. Eject 0-influence spirits (they choose agenda to add). Worship checked. |
 | WAR_PHASE | None (dice rolls are server-side), unless guided spirits need to choose spoils cards | Resolve ripe wars first: roll + power. Losers lose gold, winners gain gold + spoils agenda (guided spirits draw 1+influence spoils cards and choose). Then ripen new wars (select battlegrounds). Spoils resolved in agenda order. Check for faction eliminations. |
-| SCORING | None | Calculate VP per spirit based on idols in factions where they have Worship. Round down. Check for 10 VP winner. |
+| SCORING | None | Calculate VP per spirit based on idols in factions where they have Worship. Check for 100 VP winner. |
 | CLEANUP | None | Clear `played_agenda_this_turn` on each faction (no cards to return since the deck is a pool sampled with replacement). Advance turn counter. |
 
 The `GameState` object holds all mutable game data: the hex map, all factions, all spirits, current phase, pending wars, and the turn counter. It exposes methods like `submit_action(spirit_id, action)` and `resolve_current_phase()`.
@@ -235,7 +235,7 @@ Message types fall into two categories:
 | `phase_start` | Each phase begins | `{phase, your_options}` (e.g., drawn agenda hand) |
 | `waiting_for` | Player submits | `{players_remaining}` |
 | `phase_result` | Phase resolves | `{events[], updated_state}` |
-| `game_over` | 10 VP reached | `{winner, final_scores}` |
+| `game_over` | 100 VP reached | `{winner, final_scores}` |
 | `error` | Invalid action | `{message}` |
 
 ### Information Hiding
