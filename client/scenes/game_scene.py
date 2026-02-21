@@ -743,7 +743,7 @@ class GameScene:
         needs_input = action not in ("none", "") or phase in (
             SubPhase.CHANGE_CHOICE, SubPhase.SPOILS_CHOICE,
             SubPhase.SPOILS_CHANGE_CHOICE, SubPhase.EJECTION_CHOICE)
-        if needs_input and self.orchestrator.has_animations_playing():
+        if needs_input and (self.orchestrator.has_animations_playing() or self._phase_result_queue):
             self.orchestrator.deferred_phase_start = payload
         else:
             self.phase = payload.get("phase", self.phase)
@@ -1600,14 +1600,12 @@ class GameScene:
             self.orchestrator.apply_change_modifier_deltas(self._display_factions)
         if self._display_wars is not None:
             self.orchestrator.apply_war_reveals(self._display_wars)
-        self.orchestrator.try_show_deferred_phase_ui(self)
-        # Clear display state when all animations are done
-        if self._display_hex_ownership is not None and not self.orchestrator.has_animations_playing():
-            self._clear_display_state()
         # Drain queued PHASE_RESULT messages one at a time, waiting for each
         # animation batch to finish before processing the next.  Non-animating
         # payloads (war / scoring / cleanup with no agenda events) are consumed
         # immediately since is_all_done() stays True after they are processed.
+        # Must run before try_show_deferred_phase_ui so snapshots can't overwrite
+        # a PHASE_START that was deferred because the queue was non-empty.
         while not self.orchestrator.has_animations_playing() and self._phase_result_queue and not self._pending_game_over:
             payload = self._phase_result_queue.pop(0)
             game_over_event = next(
@@ -1618,6 +1616,10 @@ class GameScene:
             if game_over_event:
                 self._pending_game_over = game_over_event
                 break
+        self.orchestrator.try_show_deferred_phase_ui(self)
+        # Clear display state when all animations are done
+        if self._display_hex_ownership is not None and not self.orchestrator.has_animations_playing():
+            self._clear_display_state()
         # Once game_over animations have settled, transition to the results scene.
         if not self.orchestrator.has_animations_playing() and self._pending_game_over:
             event = self._pending_game_over
