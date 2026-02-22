@@ -1,6 +1,6 @@
 """Hex math utilities using axial coordinates (q, r).
 
-Flat-top hexagons. Used by both client and server.
+Pointy-top hexagons. Used by both client and server.
 """
 
 import math
@@ -82,16 +82,16 @@ def generate_hex_grid(side_length: int) -> set[tuple[int, int]]:
 
 
 def axial_to_pixel(q: int, r: int, hex_size: float) -> tuple[float, float]:
-    """Convert axial coords to pixel coords (flat-top hex)."""
-    x = hex_size * (3 / 2 * q)
-    y = hex_size * (math.sqrt(3) / 2 * q + math.sqrt(3) * r)
+    """Convert axial coords to pixel coords (pointy-top hex)."""
+    x = hex_size * (math.sqrt(3) * q + math.sqrt(3) / 2 * r)
+    y = hex_size * (3 / 2 * r)
     return (x, y)
 
 
 def pixel_to_axial(px: float, py: float, hex_size: float) -> tuple[int, int]:
-    """Convert pixel coords to the nearest axial hex coord (flat-top hex)."""
-    q_frac = (2 / 3 * px) / hex_size
-    r_frac = (-1 / 3 * px + math.sqrt(3) / 3 * py) / hex_size
+    """Convert pixel coords to the nearest axial hex coord (pointy-top hex)."""
+    q_frac = (math.sqrt(3) / 3 * px - 1 / 3 * py) / hex_size
+    r_frac = (2 / 3 * py) / hex_size
     return axial_round(q_frac, r_frac)
 
 
@@ -112,11 +112,11 @@ def axial_round(q_frac: float, r_frac: float) -> tuple[int, int]:
 
 
 def hex_vertices(q: int, r: int, hex_size: float) -> list[tuple[float, float]]:
-    """Return the 6 corner vertices of a flat-top hex at (q, r)."""
+    """Return the 6 corner vertices of a pointy-top hex at (q, r)."""
     cx, cy = axial_to_pixel(q, r, hex_size)
     vertices = []
     for i in range(6):
-        angle = math.radians(60 * i)
+        angle = math.radians(-90 + 60 * i)
         vx = cx + hex_size * math.cos(angle)
         vy = cy + hex_size * math.sin(angle)
         vertices.append((vx, vy))
