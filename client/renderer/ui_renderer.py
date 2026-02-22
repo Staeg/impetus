@@ -371,8 +371,14 @@ class UIRenderer:
                                          pygame.Rect(px, py, icon_size, icon_size), border_radius=2)
                     mod_count = change_mods.get(at_str, 0)
                     if mod_count > 0:
-                        plus_surf = plus_font.render("+" * mod_count, True, (255, 255, 255))
-                        surface.blit(plus_surf, (px + 1, py + 1))
+                        display = min(mod_count, 6)
+                        line1 = "+" * min(display, 3)
+                        line2 = "+" * max(0, display - 3)
+                        surf1 = plus_font.render(line1, True, (255, 255, 255))
+                        surface.blit(surf1, (px + 1, py + 1))
+                        if line2:
+                            surf2 = plus_font.render(line2, True, (255, 255, 255))
+                            surface.blit(surf2, (px + 1, py + 1 + surf1.get_height()))
                 pool_icon_rects[fid] = pygame.Rect(
                     grid_start_x, grid_start_y, grid_total_w, grid_total_h)
 

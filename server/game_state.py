@@ -530,11 +530,11 @@ class GameState:
         # Resolve swell actions
         for spirit_id in swell_spirits:
             spirit = self.spirits[spirit_id]
-            spirit.victory_points += 1
+            spirit.victory_points += 10
             events.append({
                 "type": "swell",
                 "spirit": spirit_id,
-                "vp_gained": 1,
+                "vp_gained": 10,
                 "total_vp": spirit.victory_points,
             })
 

@@ -36,7 +36,7 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
 
     elif etype == "swell":
         name = spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
-        event_log.append(f"{name} Swelled (+1 VP, total: {event.get('total_vp', 0)})")
+        event_log.append(f"{name} Swelled (+{event.get('vp_gained', 10)} VP, total: {event.get('total_vp', 0)})")
 
     elif etype == "agenda_chosen":
         fname = faction_full_name(event["faction"])
@@ -131,17 +131,17 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
         event_log.append(f"{name} scored {event.get('vp_gained', 0)} VP from {faction_name} (total: {event.get('total_vp', 0)})")
         b_idols = event.get("battle_idols", 0)
         b_wars = event.get("wars_won", 0)
-        if b_idols:
+        if b_idols and b_wars:
             b_vp = b_idols * BATTLE_IDOL_VP * b_wars
             event_log.append(f"  Battle: {b_idols} idol x {b_wars} wars = {b_vp:.1f}")
         a_idols = event.get("affluence_idols", 0)
         a_gold = event.get("gold_gained", 0)
-        if a_idols:
+        if a_idols and a_gold:
             a_vp = a_idols * AFFLUENCE_IDOL_VP * a_gold
             event_log.append(f"  Affluence: {a_idols} idol x {a_gold} gold = {a_vp:.1f}")
         s_idols = event.get("spread_idols", 0)
         s_terr = event.get("territories_gained", 0)
-        if s_idols:
+        if s_idols and s_terr:
             s_vp = s_idols * SPREAD_IDOL_VP * s_terr
             event_log.append(f"  Spread: {s_idols} idol x {s_terr} terr = {s_vp:.1f}")
 

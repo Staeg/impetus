@@ -293,6 +293,11 @@ class GameScene:
         # Deferred game-over event: set when game_over payload is processed,
         # consumed (scene transition) once all animations have settled.
         self._pending_game_over: dict | None = None
+        # Final game-over state — stay in game_scene and show scores in-place.
+        self.game_over: bool = False
+        self.game_over_data: dict | None = None
+        self._game_over_bold_font = None
+        self._game_over_win_font = None
 
         # Network message dispatch table (built after all state is initialised)
         self._net_handlers = {
@@ -424,6 +429,9 @@ class GameScene:
                 self.event_log_h_scroll_offset = max(0, self.event_log_h_scroll_offset)
 
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            if self.game_over:
+                self.app.set_scene("menu")
+                return
             self.popup_manager.handle_escape()
 
         if event.type == pygame.MOUSEMOTION:
@@ -464,7 +472,7 @@ class GameScene:
             self.popup_manager.update_hover(event.pos)
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            if self.spectator_mode:
+            if self.spectator_mode and not self.game_over:
                 return
             # Check submit button
             if self.submit_button and self.submit_button.clicked(event.pos):
@@ -736,6 +744,8 @@ class GameScene:
     def _handle_game_start(self, payload):
         self._phase_result_queue = []
         self._pending_game_over = None
+        self.game_over = False
+        self.game_over_data = None
         self._update_state_from_snapshot(payload)
         self.change_tracker.snapshot_and_reset(self.factions, self.spirits)
         self.event_log.append("Game started.")
@@ -1655,18 +1665,11 @@ class GameScene:
         # Clear display state when all animations are done
         if self._display_hex_ownership is not None and not self.orchestrator.has_animations_playing():
             self._clear_display_state()
-        # Once game_over animations have settled, transition to the results scene.
+        # Once game_over animations have settled, show final scores in-place.
         if not self.orchestrator.has_animations_playing() and self._pending_game_over:
-            event = self._pending_game_over
+            self.game_over_data = self._pending_game_over
             self._pending_game_over = None
-            results = self.app.scenes.get("results")
-            if results:
-                results.set_results(
-                    event.get("winners", []),
-                    event.get("scores", {}),
-                    self.spirits,
-                )
-            self.app.set_scene("results")
+            self.game_over = True
 
     def _register_ui_rects_for_tooltips(self):
         """Populate the popup_manager rect registry for tooltip placement scoring."""
@@ -2061,11 +2064,68 @@ class GameScene:
             surf.set_alpha(int(alpha))
             screen.blit(surf, surf.get_rect(center=(SCREEN_WIDTH // 2, 108)))
 
+        # Final scores panel (drawn after everything else so it's always visible)
+        if self.game_over:
+            self._render_game_over_panel(screen)
+
         # Render the single active tooltip (suppressed when popups are open)
         self.tooltip_registry.render(screen, self.small_font, self.popup_manager)
 
         # Pinned popups (drawn on top of everything)
         self.popup_manager.render(screen, self.small_font)
+
+    def _render_game_over_panel(self, screen: pygame.Surface):
+        """Draw the final scores panel on the left side of the screen."""
+        if not self.game_over_data:
+            return
+        if self._game_over_bold_font is None:
+            self._game_over_bold_font = pygame.font.SysFont("consolas", 16, bold=True)
+        if self._game_over_win_font is None:
+            self._game_over_win_font = pygame.font.SysFont("consolas", 20, bold=True)
+
+        winners = self.game_over_data.get("winners", [])
+        scores = self.game_over_data.get("scores", {})
+        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
+        n = len(sorted_scores)
+        row_h = 22
+        panel_w = 210
+        panel_h = 30 + n * row_h + (30 if winners else 0) + 22
+        panel_x = 10
+        # Center vertically in the play area below the faction ribbon (y=97)
+        play_top = 97
+        play_bot = SCREEN_HEIGHT - 20
+        panel_y = max(play_top + 8, (play_top + play_bot - panel_h) // 2)
+
+        overlay = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        overlay.fill((20, 20, 30, 220))
+        screen.blit(overlay, (panel_x, panel_y))
+        pygame.draw.rect(screen, (130, 130, 170),
+                         pygame.Rect(panel_x, panel_y, panel_w, panel_h), 1, border_radius=4)
+
+        header = self.font.render("Final Scores", True, (220, 220, 240))
+        screen.blit(header, (panel_x + 10, panel_y + 8))
+
+        y = panel_y + 30
+        for spirit_id, vp in sorted_scores:
+            spirit = self.spirits.get(spirit_id, {})
+            name = spirit.get("name", spirit_id[:8])
+            is_winner = spirit_id in winners
+            row_font = self._game_over_bold_font if is_winner else self.font
+            color = (255, 220, 130) if is_winner else (190, 190, 210)
+            text = row_font.render(f"{name}: {vp} VP", True, color)
+            screen.blit(text, (panel_x + 10, y))
+            y += row_h
+
+        if winners:
+            winner_id = winners[0]
+            winner_name = self.spirits.get(winner_id, {}).get("name", winner_id[:8])
+            win_text = self._game_over_win_font.render(f"{winner_name} wins!", True, (255, 220, 120))
+            screen.blit(win_text, (panel_x + 10, y + 4))
+            y += 30
+
+        hint = self.small_font.render("Esc → menu", True, (120, 120, 145))
+        screen.blit(hint, (panel_x + 10, panel_y + panel_h - 17))
 
     def _build_idol_tooltip_text(self, idol):
         idol_type = idol.type
