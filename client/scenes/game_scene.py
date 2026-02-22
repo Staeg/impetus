@@ -1001,7 +1001,7 @@ class GameScene:
         modifiers = self._get_faction_modifiers(self.ejection_faction)
         btn_x, btn_w, btn_h, btn_gap = 20, 157, 36, 6
         # Build remove buttons (one per unique type in the current pool) — vertical
-        y_remove = 240
+        y_remove = 300
         self.remove_buttons = []
         seen_types: list[str] = []
         for at_str in self.ejection_pool:
@@ -2778,6 +2778,12 @@ class GameScene:
             else:
                 self.submit_button.tooltip = None
             self.submit_button.draw(screen, self.font)
+            if (self.submit_button.tooltip and self.submit_button.hovered
+                    and (not self.submit_button.enabled or self.submit_button.tooltip_always)):
+                self.tooltip_registry.offer(TooltipDescriptor(
+                    self.submit_button.tooltip, _GUIDANCE_HOVER_REGIONS,
+                    self.submit_button.rect.centerx, self.submit_button.rect.top,
+                ))
 
     def _render_spoils_change_ui(self, screen):
         if not self.spoils_change_entries:
@@ -2842,3 +2848,9 @@ class GameScene:
             else:
                 self.submit_button.tooltip = None
             self.submit_button.draw(screen, self.font)
+            if (self.submit_button.tooltip and self.submit_button.hovered
+                    and (not self.submit_button.enabled or self.submit_button.tooltip_always)):
+                self.tooltip_registry.offer(TooltipDescriptor(
+                    self.submit_button.tooltip, _GUIDANCE_HOVER_REGIONS,
+                    self.submit_button.rect.centerx, self.submit_button.rect.top,
+                ))
