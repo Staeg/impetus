@@ -250,6 +250,8 @@ class GameScene:
         # Ribbon war indicator hover state
         self.ribbon_war_rects: dict[str, pygame.Rect] = {}
         self.hovered_ribbon_war_fid: str | None = None
+        # Guided hex sigil hover state
+        self.hovered_guided_hex_spirit: str | None = None
         # Ribbon faction cell rects (for click handling)
         self.ribbon_faction_rects: dict[str, pygame.Rect] = {}
 
@@ -456,6 +458,8 @@ class GameScene:
                 if rect.collidepoint(event.pos):
                     self.hovered_ribbon_war_fid = fid
                     break
+            # Guided hex sigil hover detection
+            self._update_guided_hex_hover(event.pos)
             # Popup keyword hover
             self.popup_manager.update_hover(event.pos)
 
@@ -1119,6 +1123,33 @@ class GameScene:
         start_x = (_HEX_MAP_LEFT_X - total_w) // 2
         start_x = max(20, start_x)
         return self._calc_card_rects(count, start_x=start_x, y=y, centered=False)
+
+    def _update_guided_hex_hover(self, mouse_pos):
+        """Check if mouse is hovering over the guidance sigil at a hex center."""
+        hex_coord = self.hex_renderer.get_hex_at_screen(
+            mouse_pos[0], mouse_pos[1], self.input_handler,
+            SCREEN_WIDTH, SCREEN_HEIGHT, set(self.hex_ownership.keys())
+        )
+        if hex_coord is None:
+            self.hovered_guided_hex_spirit = None
+            return
+        faction_id = self.hex_ownership.get(hex_coord)
+        if not faction_id:
+            self.hovered_guided_hex_spirit = None
+            return
+        fdata = self.factions.get(faction_id, {})
+        guiding = fdata.get("guiding_spirit") if isinstance(fdata, dict) else None
+        if not guiding:
+            self.hovered_guided_hex_spirit = None
+            return
+        # Check mouse is within sigil hit radius at hex center
+        wx, wy = axial_to_pixel(hex_coord[0], hex_coord[1], HEX_SIZE)
+        sx, sy = self.input_handler.world_to_screen(wx, wy, SCREEN_WIDTH, SCREEN_HEIGHT)
+        sigil_hit_radius = HEX_SIZE / 3
+        if math.dist(mouse_pos, (sx, sy)) <= sigil_hit_radius:
+            self.hovered_guided_hex_spirit = guiding
+        else:
+            self.hovered_guided_hex_spirit = None
 
     def _update_idol_hover(self, mouse_pos):
         """Check if mouse is hovering over a placed idol on the hex map."""
@@ -2000,6 +2031,14 @@ class GameScene:
                         tooltip_text, [],
                         pool_rect.centerx, pool_rect.bottom, below=True,
                     ))
+
+        # Guided hex sigil hover tooltip
+        if self.hovered_guided_hex_spirit:
+            name = self.spirits.get(self.hovered_guided_hex_spirit, {}).get("name", "?")
+            mx, my = pygame.mouse.get_pos()
+            self.tooltip_registry.offer(TooltipDescriptor(
+                f"Guided by {name}", [], mx, my,
+            ))
 
         # Ribbon war indicator hover tooltip
         if self.hovered_ribbon_war_fid:

@@ -231,9 +231,10 @@ class AgendaSlideAnimation:
         self.done = False
         self._fading_out = False
         self._fadeout_elapsed = 0.0
-        # Hex reveal: when set, the display hex map updates when this anim becomes active
+        # Hex reveal: when set, the display hex map updates after hex_reveal_delay seconds
         self.hex_reveal: tuple[int, int] | None = None
         self.hex_reveal_faction: str | None = None
+        self.hex_reveal_delay: float = 0.0   # extra seconds after anim.delay before revealing
         self._hex_revealed: bool = False
         # Gold reveal: display gold updates when this anim becomes active
         self.gold_delta: int = 0

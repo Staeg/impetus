@@ -73,12 +73,15 @@ class LobbyScene:
         self.spectators = []
         self.my_spirit_id = ""
         self.host_spirit_id = ""
-        self.vp_to_win = 10
+        self.vp_to_win = 100
         self.ai_player_count = 0
         self.all_ready = False
         self.error_message = ""
         self._tip_phrase_rect = pygame.Rect(0, 0, 0, 0)
         self.popup_manager = PopupManager()
+        # Hold-to-repeat state for VP ± buttons
+        self._vp_held = None        # 'minus' | 'plus' | None
+        self._vp_hold_timer = 0.0   # seconds until next repeat fire
 
     # ------------------------------------------------------------------ #
     # Helpers
@@ -93,6 +96,14 @@ class LobbyScene:
     def _is_ready(self) -> bool:
         return any(p.get("spirit_id") == self.my_spirit_id and p.get("ready")
                    for p in self.players)
+
+    def _send_vp_change(self, direction: str):
+        if direction == 'minus':
+            new_vp = max(50, self.vp_to_win - 5)
+        else:
+            new_vp = min(250, self.vp_to_win + 5)
+        if new_vp != self.vp_to_win:
+            self.app.network.send(MessageType.SET_LOBBY_OPTIONS, {"vp_to_win": new_vp})
 
     # ------------------------------------------------------------------ #
     # Events
@@ -129,17 +140,22 @@ class LobbyScene:
 
             if i_am_host:
                 if self.vp_minus.clicked(event.pos):
-                    new_vp = max(5, self.vp_to_win - 1)
-                    self.app.network.send(MessageType.SET_LOBBY_OPTIONS, {"vp_to_win": new_vp})
+                    self._send_vp_change('minus')
+                    self._vp_held = 'minus'
+                    self._vp_hold_timer = 0.4
                 elif self.vp_plus.clicked(event.pos):
-                    new_vp = min(25, self.vp_to_win + 1)
-                    self.app.network.send(MessageType.SET_LOBBY_OPTIONS, {"vp_to_win": new_vp})
+                    self._send_vp_change('plus')
+                    self._vp_held = 'plus'
+                    self._vp_hold_timer = 0.4
                 elif self.ai_minus.clicked(event.pos):
                     new_ai = max(0, self.ai_player_count - 1)
                     self.app.network.send(MessageType.SET_LOBBY_OPTIONS, {"ai_count": new_ai})
                 elif self.ai_plus.clicked(event.pos):
                     new_ai = min(5, self.ai_player_count + 1)
                     self.app.network.send(MessageType.SET_LOBBY_OPTIONS, {"ai_count": new_ai})
+
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self._vp_held = None
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
             if self.popup_manager.has_popups():
@@ -194,7 +210,11 @@ class LobbyScene:
                 self.app.set_scene("menu")
 
     def update(self, dt):
-        pass
+        if self._vp_held and self._is_host():
+            self._vp_hold_timer -= dt
+            if self._vp_hold_timer <= 0.0:
+                self._send_vp_change(self._vp_held)
+                self._vp_hold_timer = 0.1
 
     # ------------------------------------------------------------------ #
     # Rendering

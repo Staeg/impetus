@@ -261,12 +261,13 @@ class AnimationOrchestrator:
                     is_spoils=is_spoils,
                     agenda_type=etype,
                 )
-                # Tag expand animations with hex reveal info
+                # Tag expand animations with hex reveal info (deferred until arrow finishes)
                 if etype in ("expand", "expand_spoils"):
                     target_hex = event.get("hex")
                     if target_hex:
                         anim.hex_reveal = (target_hex["q"], target_hex["r"])
                         anim.hex_reveal_faction = faction_id
+                        anim.hex_reveal_delay = 3.0  # matches ArrowAnimation duration
                 # Tag gold delta for incremental ribbon updates
                 gold_gained = event.get("gold_gained", 0)
                 if gold_gained:
@@ -421,10 +422,10 @@ class AnimationOrchestrator:
     # --- Hex reveal ---
 
     def apply_hex_reveals(self, display_hex_ownership: dict):
-        """Incrementally reveal hex ownership as expand animations become active."""
+        """Incrementally reveal hex ownership once the expand arrow animation finishes."""
         for anim in self.animation.get_persistent_agenda_animations():
-            if (anim.active and anim.hex_reveal is not None
-                    and not anim._hex_revealed):
+            if (anim.hex_reveal is not None and not anim._hex_revealed
+                    and anim.elapsed >= anim.delay + anim.hex_reveal_delay):
                 display_hex_ownership[anim.hex_reveal] = anim.hex_reveal_faction
                 anim._hex_revealed = True
 
