@@ -100,7 +100,8 @@ class HexRenderer:
                       spirit_index_map: dict = None,
                       preview_idol: tuple = None,
                       faction_spirit_index: dict = None,
-                      faction_worship: dict = None):
+                      faction_worship: dict = None,
+                      highlight_spirit_id: str = None):
         """Draw the complete hex map.
 
         Args:
@@ -170,7 +171,8 @@ class HexRenderer:
             self._draw_idols(surface, idols, camera, screen_w, screen_h,
                              spirit_index_map or {},
                              hex_ownership=hex_ownership,
-                             faction_worship=faction_worship)
+                             faction_worship=faction_worship,
+                             highlight_spirit_id=highlight_spirit_id)
 
         # Draw preview idol (semi-transparent)
         if preview_idol:
@@ -178,7 +180,8 @@ class HexRenderer:
                                     screen_w, screen_h)
 
     def _draw_idols(self, surface, idols, camera, screen_w, screen_h,
-                    spirit_index_map, hex_ownership=None, faction_worship=None):
+                    spirit_index_map, hex_ownership=None, faction_worship=None,
+                    highlight_spirit_id=None):
         """Draw idol icons on their hexes, offset radially by owner."""
         font = self._get_font(12)
         dist = self.hex_size / 2  # halfway to hex vertex
@@ -186,7 +189,8 @@ class HexRenderer:
         for idol in idols:
             wx, wy = axial_to_pixel(idol.position.q, idol.position.r, self.hex_size)
             # Radial offset based on player index
-            player_idx = spirit_index_map.get(getattr(idol, 'owner_spirit', None), 0)
+            owner_spirit = getattr(idol, 'owner_spirit', None)
+            player_idx = spirit_index_map.get(owner_spirit, 0)
             angle = math.radians(-90 + player_idx * 60)
             offset_x = math.cos(angle) * dist
             offset_y = math.sin(angle) * dist
@@ -207,6 +211,9 @@ class HexRenderer:
 
             idol_color = IDOL_COLORS.get(idol.type, (255, 255, 255))
             pygame.draw.circle(surface, idol_color, (ix, iy), 5)
+            # Black outline ring for idols belonging to the highlighted spirit
+            if owner_spirit == highlight_spirit_id:
+                pygame.draw.circle(surface, (0, 0, 0), (ix, iy), 7, 2)
             # Draw letter
             symbol = IDOL_SYMBOLS.get(idol.type, "?")
             text = font.render(symbol, True, (0, 0, 0))

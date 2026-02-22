@@ -1800,6 +1800,7 @@ class GameScene:
             preview_idol=render_preview_idol,
             faction_spirit_index=faction_spirit_index,
             faction_worship=faction_worship,
+            highlight_spirit_id=self.spirit_panel_spirit_id,
         )
 
         # Draw world-space effect animations (border text + arrows)
