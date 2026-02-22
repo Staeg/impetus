@@ -250,6 +250,9 @@ class GameScene:
         # Ribbon war indicator hover state
         self.ribbon_war_rects: dict[str, pygame.Rect] = {}
         self.hovered_ribbon_war_fid: str | None = None
+        # Ribbon worship sigil hover state
+        self.ribbon_worship_rects: dict[str, pygame.Rect] = {}
+        self.hovered_ribbon_worship_fid: str | None = None
         # Guided hex sigil hover state
         self.hovered_guided_hex_spirit: str | None = None
         # Ribbon faction cell rects (for click handling)
@@ -465,6 +468,12 @@ class GameScene:
             for fid, rect in self.ribbon_war_rects.items():
                 if rect.collidepoint(event.pos):
                     self.hovered_ribbon_war_fid = fid
+                    break
+            # Ribbon worship sigil hover detection
+            self.hovered_ribbon_worship_fid = None
+            for fid, rect in self.ribbon_worship_rects.items():
+                if rect.collidepoint(event.pos):
+                    self.hovered_ribbon_worship_fid = fid
                     break
             # Guided hex sigil hover detection
             self._update_guided_hex_hover(event.pos)
@@ -1812,7 +1821,7 @@ class GameScene:
         # stay current even when _display_factions is stale during AI-only games.
         disp_factions = self.factions
         animated_agenda_factions = self.animation.get_persistent_agenda_factions()
-        self.agenda_label_rects, self.pool_icon_rects, self.ribbon_war_rects = self.ui_renderer.draw_faction_overview(
+        self.agenda_label_rects, self.pool_icon_rects, self.ribbon_war_rects, self.ribbon_worship_rects = self.ui_renderer.draw_faction_overview(
             screen, disp_factions, self.faction_agendas_this_turn,
             wars=render_wars,
             faction_spoils_agendas=self.faction_spoils_agendas_this_turn,
@@ -2054,6 +2063,23 @@ class GameScene:
                 self.tooltip_registry.offer(TooltipDescriptor(
                     tooltip_text, _RIBBON_WAR_HOVER_REGIONS,
                     war_rect.centerx, war_rect.bottom, below=True,
+                ))
+
+        # Ribbon worship sigil hover tooltip
+        if self.hovered_ribbon_worship_fid:
+            fid = self.hovered_ribbon_worship_fid
+            fdata = self.factions.get(fid, {})
+            worship_id = fdata.get("worship_spirit") if isinstance(fdata, dict) else None
+            sigil_rect = self.ribbon_worship_rects.get(fid)
+            if worship_id and sigil_rect:
+                spirit_name = self.spirits.get(worship_id, {}).get("name", worship_id[:6])
+                faction_name = faction_full_name(fid)
+                worship_sub_tooltip = self._build_spirit_worship_tooltip(fid, worship_id)
+                hover_regions = [HoverRegion("Worshipping", worship_sub_tooltip, sub_regions=[])]
+                self.tooltip_registry.offer(TooltipDescriptor(
+                    f"{faction_name} is Worshipping {spirit_name}",
+                    hover_regions,
+                    sigil_rect.centerx, sigil_rect.bottom, below=True,
                 ))
 
         # Fading error message (hex click errors, etc.)

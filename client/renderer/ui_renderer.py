@@ -239,9 +239,11 @@ class UIRenderer:
                               faction_order: list = None):
         """Draw a compact overview strip showing all factions' gold, agenda, wars, and worship.
 
-        Returns (agenda_label_entries, pool_icon_rects):
+        Returns (agenda_label_entries, pool_icon_rects, ribbon_war_rects, ribbon_worship_rects):
         - agenda_label_entries: list of (faction_id, agenda_type, is_spoils, rect)
         - pool_icon_rects: dict of faction_id -> pygame.Rect covering the pool icons row
+        - ribbon_war_rects: dict of faction_id -> pygame.Rect covering the war indicator group
+        - ribbon_worship_rects: dict of faction_id -> pygame.Rect covering the worship sigil
         """
         spirits = spirits or {}
         faction_spoils_agendas = faction_spoils_agendas or {}
@@ -250,6 +252,7 @@ class UIRenderer:
         agenda_label_entries: list[tuple[str, str, bool, pygame.Rect]] = []
         pool_icon_rects: dict[str, pygame.Rect] = {}
         ribbon_war_rects: dict[str, pygame.Rect] = {}
+        ribbon_worship_rects: dict[str, pygame.Rect] = {}
         spirit_index_map = {sid: i for i, sid in enumerate(sorted(spirits.keys()))}
         strip_y = 42
         strip_h = 55
@@ -391,6 +394,7 @@ class UIRenderer:
                 sigil_cx = grid_start_x + grid_total_w + 10
                 draw_spirit_symbol(surface, sigil_cx, sy, 24,
                                    worship_sidx, (192, 192, 192))
+                ribbon_worship_rects[fid] = pygame.Rect(sigil_cx - 12, sy - 12, 24, 24)
 
             if fid in war_lookup:
                 opponents = war_lookup[fid]
@@ -422,7 +426,7 @@ class UIRenderer:
                 # Store hoverable rect covering the whole war indicator group
                 ribbon_war_rects[fid] = pygame.Rect(wars_x_start, strip_y, total_war_w, strip_h)
 
-        return agenda_label_entries, pool_icon_rects, ribbon_war_rects
+        return agenda_label_entries, pool_icon_rects, ribbon_war_rects, ribbon_worship_rects
 
     def _render_strikethrough(self, surface, font, text_str, color, pos):
         """Render text with a strikethrough line."""

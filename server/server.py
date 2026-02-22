@@ -179,8 +179,12 @@ class GameServer:
             if create_room:
                 room_code = create_room.upper()[:6]
                 if room_code in self.rooms:
-                    await ws.send(create_message(MessageType.ERROR, {"message": f"Room {room_code} already exists"}))
-                    return None, None
+                    existing = self.rooms[room_code]
+                    if existing.game_state and existing.game_state.phase == Phase.GAME_OVER:
+                        del self.rooms[room_code]
+                    else:
+                        await ws.send(create_message(MessageType.ERROR, {"message": f"Room {room_code} already exists"}))
+                        return None, None
             else:
                 room_code = self._generate_room_code()
             room = GameRoom(room_code)
