@@ -776,6 +776,10 @@ class GameScene:
         agenda_events = [e for e in events if e.get("type", "") in _ANIM_ORDER
                        and not e.get("is_guided_modifier")]
         if agenda_events and "state" in payload:
+            # Clear any stale display state before re-snapshotting so that
+            # fast AI-only games (queue never fully drains) always get a fresh
+            # baseline for hex-reveal and war-reveal animations each turn.
+            self._clear_display_state()
             self._snapshot_display_state()
         if "state" in payload:
             self._update_state_from_snapshot(payload["state"])
@@ -1751,8 +1755,6 @@ class GameScene:
         # Draw hex grid (use display state if available)
         hex_own = self.display_hex_ownership
         highlight = None
-        if self.phase == Phase.VAGRANT_PHASE.value:
-            highlight = {h for h, o in hex_own.items() if o is None}
 
         # Compute preview idol (post-confirm or pre-confirm)
         render_preview_idol = self.preview_idol
@@ -1803,8 +1805,9 @@ class GameScene:
             my_name = self.spirits.get(self.app.my_spirit_id, {}).get("name", "?")
             preview_guid_dict = {preview_fid: my_name}
 
-        # Draw faction overview strip (with war indicators, use display state)
-        disp_factions = self.display_factions
+        # Draw faction overview strip — always use live factions so worship/pool
+        # stay current even when _display_factions is stale during AI-only games.
+        disp_factions = self.factions
         animated_agenda_factions = self.animation.get_persistent_agenda_factions()
         self.agenda_label_rects, self.pool_icon_rects, self.ribbon_war_rects = self.ui_renderer.draw_faction_overview(
             screen, disp_factions, self.faction_agendas_this_turn,

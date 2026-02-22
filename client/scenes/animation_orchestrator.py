@@ -496,6 +496,8 @@ class AnimationOrchestrator:
             return
         if not self.animation.is_all_done():
             return
+        if scene._phase_result_queue:
+            return
         payload = self.deferred_phase_start
         self.deferred_phase_start = None
         scene.phase = payload.get("phase", scene.phase)

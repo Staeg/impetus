@@ -77,6 +77,8 @@ def get_ai_vagrant_action(game_state, spirit_id) -> dict:
                 pool = already_worshipped
         return random.choice(pool)
 
+    can_swell = options.get("can_swell", False)
+
     action = {}
     if available and can_place:
         action["guide_target"] = choose_guide_target(available)
@@ -89,6 +91,8 @@ def get_ai_vagrant_action(game_state, spirit_id) -> dict:
         h = random.choice(idol_hexes)
         action["idol_type"] = random.choice(idol_types)
         action["idol_q"], action["idol_r"] = h["q"], h["r"]
+    elif can_swell:
+        action["swell"] = True
     return action
 
 

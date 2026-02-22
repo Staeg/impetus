@@ -250,6 +250,7 @@ class UIRenderer:
         agenda_label_entries: list[tuple[str, str, bool, pygame.Rect]] = []
         pool_icon_rects: dict[str, pygame.Rect] = {}
         ribbon_war_rects: dict[str, pygame.Rect] = {}
+        spirit_index_map = {sid: i for i, sid in enumerate(sorted(spirits.keys()))}
         strip_y = 42
         strip_h = 55
         sw = surface.get_width()
@@ -310,20 +311,15 @@ class UIRenderer:
             gold_text = self.small_font.render(f"{gold}g", True, (255, 220, 60))
             surface.blit(gold_text, (cx + 6 + abbr_surf.get_width() + 6, strip_y + 4))
 
-            # Worship indicator (first row, after gold)
             worship_id = fd.get("worship_spirit") if isinstance(fd, dict) else getattr(fd, "worship_spirit", None)
             guiding_id = fd.get("guiding_spirit") if isinstance(fd, dict) else getattr(fd, "guiding_spirit", None)
-            worship_end_x = cx + 6 + abbr_surf.get_width() + 6 + gold_text.get_width()
-            if worship_id:
-                p_name = spirits.get(worship_id, {}).get("name", worship_id[:6])
-                p_surf = self.small_font.render(f" W:{p_name}", True, (100, 200, 180))
-                surface.blit(p_surf, (worship_end_x, strip_y + 4))
 
-            # Preview guidance indicator (faded, with ? prefix)
+            # Preview guidance indicator (faded, with ? prefix) — first row, after gold
             if preview_guidance and not guiding_id and fid in preview_guidance:
                 preview_name = preview_guidance[fid]
                 pv_surf = self.small_font.render(f" ?{preview_name}", True, (80, 80, 100))
-                surface.blit(pv_surf, (worship_end_x + (p_surf.get_width() if worship_id else 0), strip_y + 4))
+                preview_x = cx + 6 + abbr_surf.get_width() + 6 + gold_text.get_width()
+                surface.blit(pv_surf, (preview_x, strip_y + 4))
 
             # Agenda name (right-aligned) - skip if animated
             if fid not in animated_agenda_factions:
@@ -382,6 +378,14 @@ class UIRenderer:
 
             # War indicators: centered in the faction cell (away from the pool)
             sy = grid_start_y + grid_total_h // 2  # center y aligned with pool grid
+
+            # Worship sigil: silver spirit symbol right of pool, left of wars
+            if worship_id:
+                worship_sidx = spirit_index_map.get(worship_id, 0)
+                sigil_cx = grid_start_x + grid_total_w + 10
+                draw_spirit_symbol(surface, sigil_cx, sy, 24,
+                                   worship_sidx, (192, 192, 192))
+
             if fid in war_lookup:
                 opponents = war_lookup[fid]
                 # Total width: 14px for swords + 14px per opponent hex
