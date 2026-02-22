@@ -481,85 +481,84 @@ class GameScene:
             self.popup_manager.update_hover(event.pos)
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            if self.spectator_mode and not self.game_over:
-                return
-            # Check submit button
-            if self.submit_button and self.submit_button.clicked(event.pos):
-                self._submit_action()
-                return
-
-            # Check ejection remove buttons
-            for btn in self.remove_buttons:
-                if btn.clicked(event.pos):
-                    chosen_remove = btn.text.lower()
-                    if self.selected_ejection_add_type == chosen_remove:
-                        return
-                    self.selected_ejection_remove_type = chosen_remove
+            if not (self.spectator_mode and not self.game_over):
+                # Check submit button
+                if self.submit_button and self.submit_button.clicked(event.pos):
+                    self._submit_action()
                     return
 
-            # Check action buttons
-            for btn in self.action_buttons:
-                if btn.clicked(event.pos):
-                    self._handle_action_button(btn.text)
-                    return
-
-            # Check faction buttons
-            for btn, fid in zip(self.faction_buttons, self.faction_button_ids):
-                if btn.clicked(event.pos):
-                    self._handle_faction_select(fid)
-                    return
-
-            # Check idol type buttons
-            for btn in self.idol_buttons:
-                if btn.clicked(event.pos):
-                    self._handle_idol_select(btn.text.lower())
-                    return
-
-            # Check agenda card clicks
-            if self.agenda_hand:
-                for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.agenda_hand))):
-                    if rect.collidepoint(event.pos):
-                        self.selected_agenda_index = i
-                        return
-
-            # Check change card clicks
-            if self.change_cards:
-                for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.change_cards))):
-                    if rect.collidepoint(event.pos):
-                        self._submit_card_choice(i, MessageType.SUBMIT_CHANGE_CHOICE, "change_cards")
-                        return
-
-            # Check spoils card clicks (multi-war)
-            if self.spoils_entries:
-                y_offset = _CHOICE_CARD_Y
-                for war_idx, entry in enumerate(self.spoils_entries):
-                    rects = self._calc_left_choice_card_rects(len(entry.cards), y=y_offset)
-                    for i, rect in enumerate(rects):
-                        if rect.collidepoint(event.pos):
-                            entry.selected = i
-                            if all(e.selected >= 0 for e in self.spoils_entries):
-                                self.app.network.send(MessageType.SUBMIT_SPOILS_CHOICE,
-                                    {"card_indices": [e.selected for e in self.spoils_entries]})
-                                self.spoils_entries = []
-                                self.has_submitted = True
+                # Check ejection remove buttons
+                for btn in self.remove_buttons:
+                    if btn.clicked(event.pos):
+                        chosen_remove = btn.text.lower()
+                        if self.selected_ejection_add_type == chosen_remove:
                             return
-                    y_offset += _MULTI_CHOICE_BLOCK_STEP
+                        self.selected_ejection_remove_type = chosen_remove
+                        return
 
-            # Check spoils change card clicks (multi-choice)
-            if self.spoils_change_entries:
-                y_offset = _CHOICE_CARD_Y
-                for choice_idx, entry in enumerate(self.spoils_change_entries):
-                    rects = self._calc_left_choice_card_rects(len(entry.cards), y=y_offset)
-                    for i, rect in enumerate(rects):
+                # Check action buttons
+                for btn in self.action_buttons:
+                    if btn.clicked(event.pos):
+                        self._handle_action_button(btn.text)
+                        return
+
+                # Check faction buttons
+                for btn, fid in zip(self.faction_buttons, self.faction_button_ids):
+                    if btn.clicked(event.pos):
+                        self._handle_faction_select(fid)
+                        return
+
+                # Check idol type buttons
+                for btn in self.idol_buttons:
+                    if btn.clicked(event.pos):
+                        self._handle_idol_select(btn.text.lower())
+                        return
+
+                # Check agenda card clicks
+                if self.agenda_hand:
+                    for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.agenda_hand))):
                         if rect.collidepoint(event.pos):
-                            entry.selected = i
-                            if all(e.selected >= 0 for e in self.spoils_change_entries):
-                                self.app.network.send(MessageType.SUBMIT_SPOILS_CHANGE_CHOICE,
-                                    {"card_indices": [e.selected for e in self.spoils_change_entries]})
-                                self.spoils_change_entries = []
-                                self.has_submitted = True
+                            self.selected_agenda_index = i
                             return
-                    y_offset += _MULTI_CHOICE_BLOCK_STEP
+
+                # Check change card clicks
+                if self.change_cards:
+                    for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.change_cards))):
+                        if rect.collidepoint(event.pos):
+                            self._submit_card_choice(i, MessageType.SUBMIT_CHANGE_CHOICE, "change_cards")
+                            return
+
+                # Check spoils card clicks (multi-war)
+                if self.spoils_entries:
+                    y_offset = _CHOICE_CARD_Y
+                    for war_idx, entry in enumerate(self.spoils_entries):
+                        rects = self._calc_left_choice_card_rects(len(entry.cards), y=y_offset)
+                        for i, rect in enumerate(rects):
+                            if rect.collidepoint(event.pos):
+                                entry.selected = i
+                                if all(e.selected >= 0 for e in self.spoils_entries):
+                                    self.app.network.send(MessageType.SUBMIT_SPOILS_CHOICE,
+                                        {"card_indices": [e.selected for e in self.spoils_entries]})
+                                    self.spoils_entries = []
+                                    self.has_submitted = True
+                                return
+                        y_offset += _MULTI_CHOICE_BLOCK_STEP
+
+                # Check spoils change card clicks (multi-choice)
+                if self.spoils_change_entries:
+                    y_offset = _CHOICE_CARD_Y
+                    for choice_idx, entry in enumerate(self.spoils_change_entries):
+                        rects = self._calc_left_choice_card_rects(len(entry.cards), y=y_offset)
+                        for i, rect in enumerate(rects):
+                            if rect.collidepoint(event.pos):
+                                entry.selected = i
+                                if all(e.selected >= 0 for e in self.spoils_change_entries):
+                                    self.app.network.send(MessageType.SUBMIT_SPOILS_CHANGE_CHOICE,
+                                        {"card_indices": [e.selected for e in self.spoils_change_entries]})
+                                    self.spoils_change_entries = []
+                                    self.has_submitted = True
+                                return
+                        y_offset += _MULTI_CHOICE_BLOCK_STEP
 
             # Check change delta chip clicks (faction panel)
             for rect, log_idx in self.panel_change_rects:
@@ -2077,7 +2076,7 @@ class GameScene:
                 worship_sub_tooltip = self._build_spirit_worship_tooltip(fid, worship_id)
                 hover_regions = [HoverRegion("Worshipping", worship_sub_tooltip, sub_regions=[])]
                 self.tooltip_registry.offer(TooltipDescriptor(
-                    f"{faction_name} is Worshipping {spirit_name}",
+                    f"{faction_name} are Worshipping {spirit_name}",
                     hover_regions,
                     sigil_rect.centerx, sigil_rect.bottom, below=True,
                 ))

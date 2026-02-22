@@ -15,7 +15,7 @@ _CX = SCREEN_WIDTH // 2
 class LobbyScene:
     _LOBBY_TIP_TOOLTIP = (
         "While hovering you can right-click to freeze the popup window. "
-        "When popups are frozen, right-click closes only the newest one."
+        "Then you can get nested popups!"
     )
     _LOBBY_FREEZE_TOOLTIP = (
         "Right-click closes only the newest frozen popup. Keep right-clicking "
@@ -333,23 +333,15 @@ class LobbyScene:
 
         # ── Tip line ─────────────────────────────────────────────────────
         tip_y = self._tip_y
-        prefix_str = "Tip: "
-        hover_phrase = "underlined text"
-        suffix_str = " has on-hover tooltips!"
-        p_surf = self.small_font.render(prefix_str, True, (140, 140, 165))
+        hover_phrase = "Tip: hover over me!"
         h_surf = self.small_font.render(hover_phrase, True, (100, 220, 210))
-        s_surf = self.small_font.render(suffix_str, True, (140, 140, 165))
-        total_w = p_surf.get_width() + h_surf.get_width() + s_surf.get_width()
-        start_x = _CX - total_w // 2
-        screen.blit(p_surf, (start_x, tip_y))
-        hover_x = start_x + p_surf.get_width()
+        hover_x = _CX - h_surf.get_width() // 2
         screen.blit(h_surf, (hover_x, tip_y))
         self._tip_phrase_rect = pygame.Rect(
             hover_x, tip_y, h_surf.get_width(), h_surf.get_height())
         draw_dotted_underline(
             screen, self._tip_phrase_rect.x, self._tip_phrase_rect.bottom - 1,
             self._tip_phrase_rect.width, color=(100, 220, 210))
-        screen.blit(s_surf, (self._tip_phrase_rect.right, tip_y))
 
         mouse_pos = pygame.mouse.get_pos()
         if not self.popup_manager.has_popups() and self._tip_phrase_rect.collidepoint(mouse_pos):
@@ -361,12 +353,6 @@ class LobbyScene:
                 max_width=420, below=True,
             )
         self.popup_manager.render(screen, self.small_font)
-
-        # ── Hint text ─────────────────────────────────────────────────────
-        hint = self.small_font.render(
-            "All human players must be ready before the host can start",
-            True, (100, 100, 120))
-        screen.blit(hint, (_CX - hint.get_width() // 2, SCREEN_HEIGHT - 42))
 
         if self.error_message:
             err = self.small_font.render(self.error_message, True, (255, 100, 100))

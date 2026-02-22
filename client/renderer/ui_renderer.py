@@ -546,6 +546,7 @@ class UIRenderer:
             if war_opponents:
                 panel_h += 4 + 18 + len(war_opponents) * 18
         panel_h += 8  # bottom padding
+        panel_h = min(panel_h, surface.get_height() - y - 4)
         panel_rect = pygame.Rect(x, y, width, panel_h)
         self.faction_panel_rect = panel_rect
         pygame.draw.rect(surface, (30, 30, 40), panel_rect, border_radius=4)
@@ -561,6 +562,9 @@ class UIRenderer:
             elim_text = self.font.render("ELIMINATED", True, (200, 60, 60))
             surface.blit(elim_text, (x + 10, dy))
             return
+
+        old_clip = surface.get_clip()
+        surface.set_clip(panel_rect)
 
         # Check for preview guidance name
         preview_guid_name = preview_guidance.get(fid)
@@ -780,6 +784,8 @@ class UIRenderer:
                 dy += 18
         else:
             self.panel_war_rect = None
+
+        surface.set_clip(old_clip)
 
     def draw_spirit_panel(self, surface: "pygame.Surface", spirit_data: dict,
                           factions: dict, all_idols: list, hex_ownership: dict,
