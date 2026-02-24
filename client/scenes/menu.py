@@ -28,6 +28,10 @@ class MenuScene:
         cx = SCREEN_WIDTH // 2
         cy = SCREEN_HEIGHT // 2
 
+        self.single_player_button = Button(
+            pygame.Rect(cx - 120, cy - 90, 240, 50),
+            "Single Player", (50, 110, 70)
+        )
         self.host_button = Button(
             pygame.Rect(cx - 120, cy - 20, 240, 50),
             "Host Game", (60, 80, 130)
@@ -50,6 +54,7 @@ class MenuScene:
 
     def handle_event(self, event):
         if event.type == pygame.MOUSEMOTION:
+            self.single_player_button.update(event.pos)
             self.host_button.update(event.pos)
             self.join_button.update(event.pos)
 
@@ -122,7 +127,9 @@ class MenuScene:
             if self.entering_server:
                 self._apply_server_address()
                 self.entering_server = False
-            if self.host_button.clicked(event.pos):
+            if self.single_player_button.clicked(event.pos):
+                self._start_single_player()
+            elif self.host_button.clicked(event.pos):
                 self.entering_host_code = True
                 self.host_code = ""
             elif self.join_button.clicked(event.pos):
@@ -142,6 +149,16 @@ class MenuScene:
         else:
             self.app.server_host = addr
             self.app.server_port = DEFAULT_PORT
+
+    def _start_single_player(self):
+        self.app.start_local_server()
+        self.app.connect_to_server()
+        self.app.network.send(MessageType.JOIN_GAME, {
+            "player_name": self.player_name.strip(),
+        })
+        # Pre-set 1 AI player; server will echo this back in LOBBY_STATE
+        self.app.network.send(MessageType.SET_LOBBY_OPTIONS, {"ai_count": 1})
+        self.app.set_scene("lobby")
 
     def _host_game(self):
         self._apply_server_address()
@@ -238,6 +255,7 @@ class MenuScene:
         addr_text = self.small_font.render(display_addr, True, (180, 180, 200))
         screen.blit(addr_text, (server_rect.x + 6, server_rect.y + 6))
 
+        self.single_player_button.draw(screen, self.font)
         self.host_button.draw(screen, self.font)
         self.join_button.draw(screen, self.font)
 

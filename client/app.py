@@ -4,6 +4,7 @@ import pygame
 from shared.constants import (
     SCREEN_WIDTH, SCREEN_HEIGHT, FPS, TITLE, MessageType, DEFAULT_HOST, DEFAULT_PORT,
 )
+from client.local_server import LocalServer
 from client.network import NetworkClient
 from client.scenes.menu import MenuScene
 from client.scenes.lobby import LobbyScene
@@ -26,6 +27,7 @@ class App:
         self.server_port = server_port
         self.network = NetworkClient()
         self.my_spirit_id = ""
+        self.local_server: LocalServer | None = None
 
         self.scenes: dict = {}
         self.current_scene = None
@@ -40,6 +42,19 @@ class App:
 
     def set_scene(self, scene_name: str):
         self.current_scene = self.scenes.get(scene_name)
+
+    def start_local_server(self) -> int:
+        """Start an embedded server on a free loopback port and return the port."""
+        self.local_server = LocalServer()
+        port = self.local_server.start()
+        self.server_host = "127.0.0.1"
+        self.server_port = port
+        return port
+
+    def stop_local_server(self):
+        if self.local_server:
+            self.local_server.stop()
+            self.local_server = None
 
     def connect_to_server(self):
         if not self.network.connected:
@@ -72,6 +87,7 @@ class App:
             pygame.display.flip()
 
         self.network.disconnect()
+        self.stop_local_server()
         pygame.quit()
 
     def _handle_network_message(self, msg_type: MessageType, payload: dict):
