@@ -17,6 +17,7 @@ from client.renderer.assets import load_assets, agenda_card_images
 from client.input_handler import InputHandler
 from client.scenes.animation_orchestrator import AnimationOrchestrator
 from client.scenes.change_tracker import FactionChangeTracker
+from client.tutorial import TutorialManager
 from client.renderer.popup_manager import (
     PopupManager, HoverRegion, TooltipDescriptor, TooltipRegistry,
     set_ui_rects, _WEIGHT_TEXT, _WEIGHT_NON_TEXT,
@@ -305,6 +306,11 @@ class GameScene:
         self._font = None
         self._small_font = None
 
+        # Tutorial overlay (active in tutorial mode)
+        self.tutorial: TutorialManager | None = None
+        self._tutorial_anim_notified: bool = False
+        self._tutorial_last_step: int = -1
+
         # Queued PHASE_RESULT payloads — processed one at a time as animations finish
         self._phase_result_queue: list[dict] = []
         # Deferred game-over event: set when game_over payload is processed,
@@ -501,6 +507,13 @@ class GameScene:
             self.popup_manager.update_hover(event.pos)
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            # Tutorial input gate: let tutorial consume/block clicks first
+            if self.tutorial:
+                consumed = self.tutorial.handle_click(event.pos)
+                if consumed:
+                    return
+                if self.tutorial.is_hard_blocking():
+                    return  # block all game input
             if not (self.spectator_mode and not self.game_over):
                 # Check submit button
                 if self.submit_button and self.submit_button.clicked(event.pos):
@@ -526,6 +539,9 @@ class GameScene:
                 for btn, fid in zip(self.faction_buttons, self.faction_button_ids):
                     if btn.clicked(event.pos):
                         self._handle_faction_select(fid)
+                        # Notify guidance_selected for step 6 gate
+                        if self.tutorial and btn.enabled:
+                            self.tutorial.notify_action("guidance_selected", {"faction": fid})
                         return
 
                 # Check idol type buttons
@@ -596,6 +612,8 @@ class GameScene:
                             # scroll_offset=0 shows last entries; we want log_idx visible
                             offset = total - log_idx - visible_count
                             self.event_log_scroll_offset = max(0, min(offset, total - visible_count))
+                    if self.tutorial:
+                        self.tutorial.notify_action("delta_clicked", {})
                     return
 
             # Idol tooltip: click spirit names to toggle that spirit's panel
@@ -636,6 +654,8 @@ class GameScene:
                         blocked = set(self.phase_options.get("worship_blocked", []))
                         if fid in available and fid not in blocked:
                             self.selected_faction = fid
+                    if self.tutorial:
+                        self.tutorial.notify_action("faction_selected", {"faction": fid})
                     return
 
             # Hex click
@@ -666,6 +686,8 @@ class GameScene:
         self.panel_faction = faction_id
         self.spirit_panel_spirit_id = None
         self.faction_panel_scroll_offset = 0
+        if self.tutorial:
+            self.tutorial.notify_action("faction_selected", {"faction": faction_id})
 
     def _handle_idol_select(self, idol_type: str):
         self.selected_idol_type = idol_type
@@ -698,6 +720,8 @@ class GameScene:
                     blocked = set(self.phase_options.get("worship_blocked", []))
                     if owner in available and owner not in blocked:
                         self.selected_faction = owner
+                if self.tutorial:
+                    self.tutorial.notify_action("faction_selected", {"faction": owner})
 
     def _submit_action(self):
         if self.phase == Phase.VAGRANT_PHASE.value:
@@ -721,6 +745,8 @@ class GameScene:
                 self.app.network.send(MessageType.SUBMIT_VAGRANT_ACTION, payload)
                 self._clear_selection()
                 self.has_submitted = True
+                if self.tutorial:
+                    self.tutorial.notify_action("vagrant_submitted", {})
         elif self.phase == Phase.AGENDA_PHASE.value:
             if self.selected_agenda_index >= 0:
                 self.app.network.send(MessageType.SUBMIT_AGENDA_CHOICE, {
@@ -728,6 +754,8 @@ class GameScene:
                 })
                 self._clear_selection()
                 self.has_submitted = True
+                if self.tutorial:
+                    self.tutorial.notify_action("agenda_submitted", {})
         elif self.phase == SubPhase.EJECTION_CHOICE:
             if (
                 self.selected_ejection_remove_type
@@ -741,6 +769,8 @@ class GameScene:
                 self._clear_selection()
                 self.ejection_pending = False
                 self.has_submitted = True
+                if self.tutorial:
+                    self.tutorial.notify_action("ejection_submitted", {})
         elif self.phase == SubPhase.SPOILS_CHOICE:
             if all(e.selected >= 0 for e in self.spoils_entries):
                 self.app.network.send(MessageType.SUBMIT_SPOILS_CHOICE,
@@ -795,6 +825,13 @@ class GameScene:
         self.change_tracker.snapshot_and_reset(self.factions, self.spirits)
         self.event_log.append("Game started.")
         self.spectator_mode = self.app.my_spirit_id not in self.spirits
+        # Activate tutorial overlay in tutorial mode
+        if self.app.tutorial_mode and not self.spectator_mode:
+            self.tutorial = TutorialManager()
+            self.tutorial.activate()
+            self._tutorial_anim_notified = False
+        else:
+            self.tutorial = None
 
     def _handle_phase_start(self, payload):
         phase = payload.get("phase", "")
@@ -802,7 +839,15 @@ class GameScene:
         needs_input = action not in ("none", "") or phase in (
             SubPhase.CHANGE_CHOICE, SubPhase.SPOILS_CHOICE,
             SubPhase.SPOILS_CHANGE_CHOICE, SubPhase.EJECTION_CHOICE)
-        if needs_input and (self.orchestrator.has_animations_playing() or self._phase_result_queue):
+        should_defer = (
+            needs_input
+            and (
+                self.orchestrator.has_animations_playing()
+                or self._phase_result_queue
+                or (self.tutorial and self.tutorial.is_blocking_phase_ui())
+            )
+        )
+        if should_defer:
             self.orchestrator.deferred_phase_start = payload
         else:
             self.phase = payload.get("phase", self.phase)
@@ -815,6 +860,8 @@ class GameScene:
 
     def _handle_phase_result(self, payload):
         """Queue PHASE_RESULT for sequential processing in update()."""
+        if self.tutorial:
+            self.tutorial.notify_game_event("phase_result_received", {})
         self._phase_result_queue.append(payload)
 
     def _process_phase_result(self, payload):
@@ -947,6 +994,23 @@ class GameScene:
         self.preview_guidance = None
         self.preview_idol = None
 
+    def _refire_tutorial_phase_events(self):
+        """Re-fire phase events for steps that became pending while already in the relevant phase."""
+        if not self.tutorial or not self.tutorial._step_pending_show:
+            return
+        idx = self.tutorial.step_idx
+        action = self.phase_options.get("action", "none")
+        # Steps 7 and 9 trigger on agenda_phase_started; may already be in that phase
+        if idx in (7, 9) and self.phase == Phase.AGENDA_PHASE.value and action == "choose_agenda":
+            hand = self.phase_options.get("hand", [])
+            self.tutorial.notify_game_event("agenda_phase_started", {
+                "turn": self.turn,
+                "draw_count": len(hand),
+            })
+        # Step 13 triggers on ejection_phase_started
+        elif idx == 13 and self.phase == SubPhase.EJECTION_CHOICE:
+            self.tutorial.notify_game_event("ejection_phase_started", {"turn": self.turn})
+
     def _handle_game_over(self, payload):
         # Game-over event will be in the PHASE_RESULT events; transition scene
         self.app.set_scene("results")
@@ -1039,6 +1103,18 @@ class GameScene:
         self._clear_selection()
         self.has_submitted = False
         action = self.phase_options.get("action", "none")
+        # Tutorial phase notifications (fired when UI is actually set up)
+        if self.tutorial:
+            if self.phase == Phase.AGENDA_PHASE.value and action == "choose_agenda":
+                hand = self.phase_options.get("hand", [])
+                self.tutorial.notify_game_event("agenda_phase_started", {
+                    "turn": self.turn,
+                    "draw_count": len(hand),
+                })
+            elif self.phase == SubPhase.EJECTION_CHOICE:
+                self.tutorial.notify_game_event("ejection_phase_started", {
+                    "turn": self.turn,
+                })
 
         _SUB_PHASE_SETUP = {
             SubPhase.CHANGE_CHOICE:        self._setup_change_choice_ui,
@@ -1575,6 +1651,11 @@ class GameScene:
         elif etype == "guide_contested":
             if self.app.my_spirit_id in event.get("spirits", []):
                 self.preview_guidance = None
+            if self.tutorial:
+                self.tutorial.notify_game_event("guide_contested", event)
+        elif etype == "war_erupted":
+            if self.tutorial:
+                self.tutorial.notify_game_event("war_erupted", event)
 
     @staticmethod
     def _format_faction_list(factions: list[str]) -> str:
@@ -1709,17 +1790,40 @@ class GameScene:
         # immediately since is_all_done() stays True after they are processed.
         # Must run before try_show_deferred_phase_ui so snapshots can't overwrite
         # a PHASE_START that was deferred because the queue was non-empty.
-        while not self.orchestrator.has_animations_playing() and self._phase_result_queue and not self._pending_game_over:
-            payload = self._phase_result_queue.pop(0)
-            game_over_event = next(
-                (e for e in payload.get("events", []) if e.get("type") == "game_over"),
-                None,
+        if not (self.tutorial and self.tutorial.is_blocking_animations()):
+            while not self.orchestrator.has_animations_playing() and self._phase_result_queue and not self._pending_game_over:
+                payload = self._phase_result_queue.pop(0)
+                game_over_event = next(
+                    (e for e in payload.get("events", []) if e.get("type") == "game_over"),
+                    None,
+                )
+                self._process_phase_result(payload)
+                if game_over_event:
+                    self._pending_game_over = game_over_event
+                    break
+        # Tutorial: step tracking + animation-done notification.
+        # Must run BEFORE try_show_deferred_phase_ui so that block_phase_ui can be
+        # set by animations_done (step 10) before the next phase is shown.
+        if self.tutorial:
+            if self.tutorial.step_idx != self._tutorial_last_step:
+                self._tutorial_last_step = self.tutorial.step_idx
+                self._tutorial_anim_notified = False
+                self._refire_tutorial_phase_events()
+            block_ui = self.tutorial.is_blocking_phase_ui()
+            anim_idle = (
+                not self.orchestrator.has_animations_playing()
+                and not self._phase_result_queue
+                and (not self.orchestrator.deferred_phase_start or block_ui)
             )
-            self._process_phase_result(payload)
-            if game_over_event:
-                self._pending_game_over = game_over_event
-                break
-        self.orchestrator.try_show_deferred_phase_ui(self)
+            if anim_idle:
+                if not self._tutorial_anim_notified:
+                    self._tutorial_anim_notified = True
+                    self.tutorial.notify_game_event(
+                        "animations_done", {"phase": self.phase, "turn": self.turn})
+            else:
+                self._tutorial_anim_notified = False
+        if not (self.tutorial and self.tutorial.is_blocking_phase_ui()):
+            self.orchestrator.try_show_deferred_phase_ui(self)
         # Clear display state when all animations are done
         if self._display_hex_ownership is not None and not self.orchestrator.has_animations_playing():
             self._clear_display_state()
@@ -2150,6 +2254,24 @@ class GameScene:
         # Final scores panel (drawn after everything else so it's always visible)
         if self.game_over:
             self._render_game_over_panel(screen)
+
+        # Tutorial overlay (drawn after game-over panel, before tooltips)
+        if self.tutorial:
+            _tut_spirit_panel_y = 102 + _FACTION_PANEL_MAX_H + 4
+            _tut_event_log_y = _tut_spirit_panel_y + _SPIRIT_PANEL_MAX_H + 4
+            tut_rects = {
+                "faction_info": pygame.Rect(_FACTION_PANEL_X, 102, _PANEL_W, _FACTION_PANEL_MAX_H),
+                "spirit_panel": pygame.Rect(
+                    _FACTION_PANEL_X, _tut_spirit_panel_y, _PANEL_W, _SPIRIT_PANEL_MAX_H),
+                "event_log": pygame.Rect(
+                    _FACTION_PANEL_X, _tut_event_log_y, _PANEL_W, _EVENT_LOG_H),
+            }
+            for fid, r in self.ribbon_faction_rects.items():
+                tut_rects[f"ribbon_{fid}"] = r
+            for btn, fid in zip(self.faction_buttons, self.faction_button_ids):
+                tut_rects[f"guidance_btn_{fid}"] = btn.rect
+            self.tutorial.exposed_rects = tut_rects
+            self.tutorial.render(screen, self.font, self.small_font)
 
         # Render the single active tooltip (suppressed when popups are open)
         self.tooltip_registry.render(screen, self.small_font, self.popup_manager)

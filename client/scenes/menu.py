@@ -29,15 +29,19 @@ class MenuScene:
         cy = SCREEN_HEIGHT // 2
 
         self.single_player_button = Button(
-            pygame.Rect(cx - 120, cy - 90, 240, 50),
+            pygame.Rect(cx - 120, cy - 100, 240, 50),
             "Single Player", (50, 110, 70)
         )
+        self.tutorial_button = Button(
+            pygame.Rect(cx - 120, cy - 30, 240, 50),
+            "Tutorial", (60, 80, 110)
+        )
         self.host_button = Button(
-            pygame.Rect(cx - 120, cy - 20, 240, 50),
+            pygame.Rect(cx - 120, cy + 40, 240, 50),
             "Host Game", (60, 80, 130)
         )
         self.join_button = Button(
-            pygame.Rect(cx - 120, cy + 50, 240, 50),
+            pygame.Rect(cx - 120, cy + 110, 240, 50),
             "Join Game", (60, 80, 130)
         )
 
@@ -55,6 +59,7 @@ class MenuScene:
     def handle_event(self, event):
         if event.type == pygame.MOUSEMOTION:
             self.single_player_button.update(event.pos)
+            self.tutorial_button.update(event.pos)
             self.host_button.update(event.pos)
             self.join_button.update(event.pos)
 
@@ -129,6 +134,8 @@ class MenuScene:
                 self.entering_server = False
             if self.single_player_button.clicked(event.pos):
                 self._start_single_player()
+            elif self.tutorial_button.clicked(event.pos):
+                self._start_tutorial()
             elif self.host_button.clicked(event.pos):
                 self.entering_host_code = True
                 self.host_code = ""
@@ -151,6 +158,7 @@ class MenuScene:
             self.app.server_port = DEFAULT_PORT
 
     def _start_single_player(self):
+        self.app.tutorial_mode = False
         self.app.start_local_server()
         self.app.connect_to_server()
         self.app.network.send(MessageType.JOIN_GAME, {
@@ -158,6 +166,23 @@ class MenuScene:
         })
         # Pre-set 1 AI player; server will echo this back in LOBBY_STATE
         self.app.network.send(MessageType.SET_LOBBY_OPTIONS, {"ai_count": 1})
+        self.app.set_scene("lobby")
+
+    def _start_tutorial(self):
+        self.app.tutorial_mode = True
+        lobby = self.app.scenes.get("lobby")
+        if lobby:
+            lobby._tutorial_ready_sent = False
+            lobby._tutorial_start_sent = False
+        self.app.start_local_server()
+        self.app.connect_to_server()
+        self.app.network.send(MessageType.JOIN_GAME, {
+            "player_name": self.player_name.strip(),
+        })
+        self.app.network.send(MessageType.SET_LOBBY_OPTIONS, {
+            "ai_count": 2,
+            "tutorial_mode": True,
+        })
         self.app.set_scene("lobby")
 
     def _host_game(self):
@@ -256,6 +281,7 @@ class MenuScene:
         screen.blit(addr_text, (server_rect.x + 6, server_rect.y + 6))
 
         self.single_player_button.draw(screen, self.font)
+        self.tutorial_button.draw(screen, self.font)
         self.host_button.draw(screen, self.font)
         self.join_button.draw(screen, self.font)
 

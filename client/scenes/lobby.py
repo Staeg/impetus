@@ -77,6 +77,8 @@ class LobbyScene:
         self.ai_player_count = 0
         self.all_ready = False
         self.error_message = ""
+        self._tutorial_ready_sent = False
+        self._tutorial_start_sent = False
         self._tip_phrase_rect = pygame.Rect(0, 0, 0, 0)
         self.popup_manager = PopupManager()
         # Hold-to-repeat state for VP ± buttons
@@ -194,6 +196,14 @@ class LobbyScene:
                 self.ai_player_count = payload["ai_player_count"]
             if "all_ready" in payload:
                 self.all_ready = payload["all_ready"]
+            # Tutorial mode: auto-ready and auto-start
+            if self.app.tutorial_mode:
+                if "spirit_id" in payload and not self._tutorial_ready_sent:
+                    self._tutorial_ready_sent = True
+                    self.app.network.send(MessageType.READY)
+                if self.all_ready and self._is_host() and not self._tutorial_start_sent:
+                    self._tutorial_start_sent = True
+                    self.app.network.send(MessageType.START_GAME)
         elif msg_type == MessageType.ERROR:
             self.error_message = payload.get("message", "Unknown error")
             print(f"[lobby] Error: {self.error_message}")
@@ -207,6 +217,8 @@ class LobbyScene:
                 self.spectators = []
                 self.my_spirit_id = ""
                 self.error_message = ""
+                self._tutorial_ready_sent = False
+                self._tutorial_start_sent = False
                 self.app.set_scene("menu")
 
     def update(self, dt):

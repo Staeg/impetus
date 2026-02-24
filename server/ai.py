@@ -23,9 +23,12 @@ def assign_ai_names(count: int) -> list[str]:
     return random.sample(AI_NAMES, count)
 
 
-def get_ai_vagrant_action(game_state, spirit_id) -> dict:
+def get_ai_vagrant_action(game_state, spirit_id, excluded_factions=None) -> dict:
     options = game_state.get_phase_options(spirit_id)
-    available = options.get("available_factions", [])
+    available = [
+        f for f in options.get("available_factions", [])
+        if excluded_factions is None or f not in excluded_factions
+    ]
     can_place = options.get("can_place_idol", False)
     neutral = options.get("neutral_hexes", [])
     idol_types = options.get("idol_types", [])

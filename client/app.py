@@ -28,6 +28,7 @@ class App:
         self.network = NetworkClient()
         self.my_spirit_id = ""
         self.local_server: LocalServer | None = None
+        self.tutorial_mode: bool = False
 
         self.scenes: dict = {}
         self.current_scene = None

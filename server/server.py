@@ -36,6 +36,7 @@ class GameRoom:
         self.vp_to_win: int = VP_TO_WIN
         self.ai_player_count: int = 0
         self.ai_spirit_ids: set[str] = set()
+        self.tutorial_mode: bool = False
 
     def add_player(self, session: PlayerSession):
         self.players[session.spirit_id] = session
@@ -269,6 +270,8 @@ class GameServer:
                 if room.human_player_count() + ai_count > 5:
                     ai_count = max(0, 5 - room.human_player_count())
                 room.ai_player_count = ai_count
+            if "tutorial_mode" in payload:
+                room.tutorial_mode = bool(payload["tutorial_mode"])
             await self._broadcast_lobby_state(room)
 
         elif msg_type == MessageType.TOGGLE_SPECTATOR:
@@ -470,16 +473,27 @@ class GameServer:
     async def _resolve_ai_inputs(self, room: GameRoom):
         """Submit actions on behalf of AI spirits and trigger resolution if complete."""
         gs = room.game_state
-        for sid in list(room.ai_spirit_ids):
-            if gs.needs_input(sid) and sid not in gs.pending_actions:
-                if gs.phase == Phase.VAGRANT_PHASE:
-                    action = ai.get_ai_vagrant_action(gs, sid)
-                elif gs.phase == Phase.AGENDA_PHASE:
-                    action = ai.get_ai_agenda_choice(gs, sid)
-                else:
-                    continue
-                if action:
-                    gs.submit_action(sid, action)
+        if room.tutorial_mode and gs.phase == Phase.VAGRANT_PHASE:
+            # Sequential AI vagrant actions with faction exclusion to prevent contention
+            taken: set[str] = set()
+            for sid in sorted(list(room.ai_spirit_ids)):
+                if gs.needs_input(sid) and sid not in gs.pending_actions:
+                    action = ai.get_ai_vagrant_action(gs, sid, excluded_factions=taken)
+                    if action.get("guide_target"):
+                        taken.add(action["guide_target"])
+                    if action:
+                        gs.submit_action(sid, action)
+        else:
+            for sid in list(room.ai_spirit_ids):
+                if gs.needs_input(sid) and sid not in gs.pending_actions:
+                    if gs.phase == Phase.VAGRANT_PHASE:
+                        action = ai.get_ai_vagrant_action(gs, sid)
+                    elif gs.phase == Phase.AGENDA_PHASE:
+                        action = ai.get_ai_agenda_choice(gs, sid)
+                    else:
+                        continue
+                    if action:
+                        gs.submit_action(sid, action)
         await self._broadcast_waiting(room)
         if gs.all_inputs_received():
             if gs.phase == Phase.VAGRANT_PHASE:
