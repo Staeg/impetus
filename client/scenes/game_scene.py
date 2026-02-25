@@ -1,6 +1,7 @@
 """Primary gameplay scene: hex map, UI, phases."""
 
 import math
+import time
 import pygame
 from dataclasses import dataclass
 from shared.constants import (
@@ -1027,6 +1028,8 @@ class GameScene:
         self.change_cards = self.phase_options.get("cards") or []
 
     def _setup_spoils_choice_ui(self):
+        if self.tutorial:
+            self.tutorial.notify_game_event("guided_spoils_drawn", {})
         choices = self.phase_options.get("choices", [])
         if choices:
             self.spoils_entries = [
@@ -1274,7 +1277,7 @@ class GameScene:
 
     def _calc_left_choice_card_rects(self, count: int, y: int = _CHOICE_CARD_Y) -> list[pygame.Rect]:
         """Card rects stacked vertically in the left panel."""
-        card_w, card_h, spacing = 110, 130, 5
+        card_w, card_h, spacing = 110, 145, 5
         card_x = max(20, (_HEX_MAP_LEFT_X - card_w) // 2)
         return [pygame.Rect(card_x, y + i * (card_h + spacing), card_w, card_h)
                 for i in range(count)]
@@ -1964,6 +1967,13 @@ class GameScene:
             highlight_spirit_id=self.spirit_panel_spirit_id,
         )
 
+        # Tutorial war-arrow glow (drawn on top of hex grid, under UI panels)
+        if self.tutorial and self.tutorial.highlight_war_arrows and render_wars:
+            pulse = 0.5 + 0.5 * math.sin(time.monotonic() * 3.0)
+            self.hex_renderer.draw_war_glow_arrows(
+                screen, render_wars, hex_own,
+                self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT, pulse=pulse)
+
         # Draw world-space effect animations (border text + arrows)
         self.orchestrator.render_effect_animations(screen, screen_space_only=False, small_font=self.small_font)
 
@@ -2285,6 +2295,10 @@ class GameScene:
                     card_rects[0].x, card_rects[0].y,
                     card_rects[0].w, card_rects[-1].bottom - card_rects[0].y,
                 )
+            for fid, r in self.ribbon_war_rects.items():
+                tut_rects[f"ribbon_war_{fid}"] = r
+            if self.ui_renderer.panel_war_rect:
+                tut_rects["panel_war"] = self.ui_renderer.panel_war_rect
             self.tutorial.exposed_rects = tut_rects
             self.tutorial.render(screen, self.font, self.small_font)
 

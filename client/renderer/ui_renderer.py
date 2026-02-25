@@ -1077,7 +1077,7 @@ class UIRenderer:
         effect_font = self._get_font(11)
 
         if vertical:
-            card_w, card_h = 110, 130
+            card_w, card_h = 110, 145
             spacing = 5
             for i, card in enumerate(hand):
                 cx = x

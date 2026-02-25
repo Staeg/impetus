@@ -346,6 +346,27 @@ class HexRenderer:
                      tip[1] + uy * scaled_head - py * scaled_head * 0.5)
             pygame.draw.polygon(surface, color, [tip, left, right])
 
+    def draw_war_glow_arrows(self, surface, wars, hex_ownership, camera,
+                             screen_w, screen_h, pulse: float = 1.0):
+        """Draw extra-bright, thick war arrows for tutorial highlighting."""
+        r = 255
+        g = int(80 + 120 * pulse)
+        b = 80
+        bright = (r, g, b)
+        for war in wars:
+            if war.is_ripe and war.battleground:
+                h1 = (war.battleground[0].q, war.battleground[0].r)
+                h2 = (war.battleground[1].q, war.battleground[1].r)
+                self._draw_hex_arrow(surface, h1, h2, bright,
+                                     camera, screen_w, screen_h,
+                                     width=5, head_size=12)
+            else:
+                pairs = self._get_border_pairs(hex_ownership, war.faction_a, war.faction_b)
+                for h1, h2 in pairs:
+                    self._draw_hex_arrow(surface, h1, h2, bright,
+                                         camera, screen_w, screen_h,
+                                         width=3, head_size=8)
+
     def get_hex_at_screen(self, sx: int, sy: int, camera, screen_w: int, screen_h: int,
                           valid_hexes: set = None) -> tuple[int, int] | None:
         """Return the hex coordinate at screen position, or None."""

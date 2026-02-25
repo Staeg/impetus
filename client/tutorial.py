@@ -48,6 +48,8 @@ class TutorialManager:
         self.popup_step: TutorialStep | None = None
         self.popup_ok_rect: pygame.Rect | None = None
         self._popup_panel_rect: pygame.Rect | None = None
+        self.popup_highlights: list[str] = []
+        self.highlight_war_arrows: bool = False
         self.exposed_rects: dict[str, pygame.Rect] = {}
         self._continue_rect: pygame.Rect | None = None
         self._dynamic_text: str | None = None
@@ -160,7 +162,7 @@ class TutorialManager:
                     "  Affluence — 2 VP per Gold gained\n"
                     "  Spread — 5 VP per Territory claimed\n\n"
                     "These VPs go to whichever Spirit the Faction Worships.\n"
-                    "Factions prioritize expanding into hexes with Idols.\n\n"
+                    "Factions prioritize expanding into hexes with Idols.\n"
                     "Choose an Idol type, click a neutral hex, then click Confirm."
                 ),
                 button_label=None,  # game_confirm: vagrant submission advances tutorial
@@ -278,7 +280,7 @@ class TutorialManager:
     # Hard-blocking steps: block all game input when panel is shown
     # ------------------------------------------------------------------ #
 
-    _HARD_BLOCKING_STEPS = frozenset({0, 1, 2, 4, 8, 9, 11, 15, 16})
+    _HARD_BLOCKING_STEPS = frozenset({0, 1, 2, 4, 8, 9, 15, 16})
 
     def is_hard_blocking(self) -> bool:
         if not self.active or not self._shown:
@@ -318,6 +320,8 @@ class TutorialManager:
         self.popup_step = None
         self.popup_ok_rect = None
         self._popup_panel_rect = None
+        self.popup_highlights = []
+        self.highlight_war_arrows = False
         self._step_pending_show = False
         self._expecting_phase_result = False
         self._dynamic_text = None
@@ -362,6 +366,8 @@ class TutorialManager:
                 self.popup_step = None
                 self.popup_ok_rect = None
                 self._popup_panel_rect = None
+                self.popup_highlights = []
+                self.highlight_war_arrows = False
                 return True
             if self._popup_panel_rect and self._popup_panel_rect.collidepoint(pos):
                 return True
@@ -531,6 +537,8 @@ class TutorialManager:
                     button_label="Ok",
                 )
                 self._popup_panel_rect = None
+                self.popup_highlights = ["ribbon_war", "panel_war"]
+                self.highlight_war_arrows = True
 
         elif event_type == "guide_contested":
             if (self.first_time_triggers_enabled
@@ -546,6 +554,26 @@ class TutorialManager:
                         "relevant Affinity, Guidance is Contested — both are blocked from "
                         "targeting that Faction for one full turn.\n\n"
                         "Check your Spirit panel to see your Affinity."
+                    ),
+                    button_label="Ok",
+                )
+                self._popup_panel_rect = None
+
+        elif event_type == "guided_spoils_drawn":
+            if (self.first_time_triggers_enabled
+                    and "guided_spoils_drawn" not in self.fired_triggers):
+                self.fired_triggers.add("guided_spoils_drawn")
+                self.popup_step = TutorialStep(
+                    title="Your Faction Won a War — Spoils!",
+                    text=(
+                        "Your Guided Faction won a War and draws Spoils — a bonus Agenda "
+                        "card that resolves immediately after the regular agendas this turn.\n\n"
+                        "Choose a Spoils card from those drawn. Most cards work normally: "
+                        "Trade sends gold back and benefits from others Trading this turn; "
+                        "Steal drains neighbors as usual.\n\n"
+                        "Expand is different: it targets the war's battleground hex rather "
+                        "than a free adjacent hex. The gold cost is waived — if the "
+                        "battleground is already taken, you get [+1] gold as consolation."
                     ),
                     button_label="Ok",
                 )
@@ -586,6 +614,8 @@ class TutorialManager:
 
         if self.popup_step is not None:
             self._draw_popup(screen, self.popup_step, font, small_font)
+            if self.popup_highlights:
+                self._draw_highlights(screen, self.popup_highlights)
 
         if self._shown and 0 <= self.step_idx < len(self._steps):
             step = self._steps[self.step_idx]
@@ -600,13 +630,18 @@ class TutorialManager:
         pulse_alpha = int(150 + 80 * math.sin(time.monotonic() * 3.0))
         color = (200, 180, 100)
         for key in highlights:
-            if key in ("spirit_panel", "event_log", "faction_info", "agenda_cards_area"):
+            if key in ("spirit_panel", "event_log", "faction_info", "agenda_cards_area",
+                       "panel_war"):
                 rect = self.exposed_rects.get(key)
                 if rect:
                     self._draw_glow_rect(screen, rect, color, pulse_alpha)
             elif key == "ribbon":
                 for rkey, rect in self.exposed_rects.items():
                     if rkey.startswith("ribbon_"):
+                        self._draw_glow_rect(screen, rect, color, pulse_alpha)
+            elif key == "ribbon_war":
+                for rkey, rect in self.exposed_rects.items():
+                    if rkey.startswith("ribbon_war_"):
                         self._draw_glow_rect(screen, rect, color, pulse_alpha)
             elif key == "guidance_btns":
                 for rkey, rect in self.exposed_rects.items():
@@ -734,10 +769,6 @@ class TutorialManager:
         ph = content_h + pad * 2
         px = SCREEN_WIDTH // 2 - pw // 2
         py = SCREEN_HEIGHT // 2 - ph // 2
-
-        dim = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-        dim.fill((0, 0, 0, 80))
-        screen.blit(dim, (0, 0))
 
         overlay = pygame.Surface((pw, ph), pygame.SRCALPHA)
         overlay.fill(self._BG_COLOR)
