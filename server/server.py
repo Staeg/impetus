@@ -439,6 +439,8 @@ class GameServer:
                 player_info.append({"spirit_id": ai_sid, "name": name})
 
         room.game_state = GameState()
+        room.game_state.tutorial_mode = room.tutorial_mode
+        room.game_state.ai_spirit_ids = set(room.ai_spirit_ids)
         initial_snapshot, turn_results = room.game_state.setup_game(
             player_info, vp_to_win=room.vp_to_win)
 

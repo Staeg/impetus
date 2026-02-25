@@ -42,7 +42,7 @@ class TutorialManager:
         self.action_satisfied = False
         self.block_animations = False
         self.block_phase_ui = False
-        self.hide_phase_ui = False        # suppresses _render_agenda_ui during steps 8-9
+        self.hide_phase_ui = False
         self.first_time_triggers_enabled = False
         self.fired_triggers: set[str] = set()
         self.popup_step: TutorialStep | None = None
@@ -52,6 +52,8 @@ class TutorialManager:
         self.highlight_war_arrows: bool = False
         self.exposed_rects: dict[str, pygame.Rect] = {}
         self._continue_rect: pygame.Rect | None = None
+        self._return_to_menu_rect: pygame.Rect | None = None
+        self.return_to_menu_requested: bool = False
         self._dynamic_text: str | None = None
 
         # Internal flow flags
@@ -93,9 +95,8 @@ class TutorialManager:
                 title="Event Log",
                 text=(
                     "The event log in the bottom-right records everything that happens: "
-                    "guidance, agendas, wars, scoring. Scroll it with the mouse wheel.\n\n"
-                    "Later, clicking colored delta chips [+2] in faction panels will "
-                    "highlight the event that caused them."
+                    "guidance, agendas, wars, scoring. Scroll it with the mouse wheel "
+                    "both vertically and horizontally."
                 ),
                 button_label="Continue",
                 highlights=["event_log"],
@@ -142,12 +143,9 @@ class TutorialManager:
             TutorialStep(
                 title="Guidance and Worship",
                 text=(
-                    "Each turn that you start Vagrant (not Guiding a Faction)," 
-                    "you choose one Faction to Guide from the list on the left. Guiding a Faction"
-                    " for the first time makes them Worship you, which earns Victory Points (VP).\n\n"
-                    "A Faction that Worships you cannot be Guided by you again — another Spirit "
-                    "must usurp their Worship first by having at least as many Idols in that "
-                    "Faction's territory when they begin or finish Guiding them.\n"
+                    "Each turn that you start Vagrant (not Guiding a Faction), " 
+                    "you choose one Faction to Guide from the list on the left. Guiding a Faction "
+                    "for the first time makes them Worship you, which earns Victory Points (VP).\n\n"
                     "Select a new Faction to Guide now."
                 ),
                 button_label="Continue",
@@ -170,7 +168,6 @@ class TutorialManager:
                 button_label=None,  # game_confirm: vagrant submission advances tutorial
             ),
             # Step 8: agenda types (pending: agenda_phase_started; hard-blocking)
-            # hide_phase_ui=True is set when this step shows, so agenda cards are hidden.
             TutorialStep(
                 title="Agenda Types",
                 text=(
@@ -184,7 +181,6 @@ class TutorialManager:
                 button_label="Continue",
             ),
             # Step 9: modifiers (shown immediately after step 8 Continue; hard-blocking)
-            # hide_phase_ui is cleared when step 8 Continue is clicked, so cards are visible here.
             TutorialStep(
                 title="Modifiers and Habitats",
                 text=(
@@ -197,7 +193,6 @@ class TutorialManager:
                 highlights=["ribbon", "agenda_cards_area"],
             ),
             # Step 10: agenda resolution (pending: agenda_phase_started via _refire; game_confirm)
-            # hide_phase_ui is False here, so agenda cards are visible.
             TutorialStep(
                 title="Agenda Resolution",
                 text=(
@@ -245,10 +240,10 @@ class TutorialManager:
             TutorialStep(
                 title="Agenda Pool",
                 text=(
-                    "You've been ejected! But you get to leave a mark — replace one card "
-                    "in this Faction's Agenda pool.\n\n"
-                    "Remove one Agenda type and add another; this permanently shapes what "
-                    "Agendas this Faction can draw in the future.\n\n"
+                    "Your influence has reached 0, so you've been ejected! But you get to "
+                    "leave a mark — replace one card in this Faction's Agenda pool.\n\n"
+                    "Remove one Agenda type and add another; this permanently shapes which "
+                    "Agendas this Faction will play in the future.\n\n"
                     "Select a card to remove and a card to add, then click Confirm."
                 ),
                 button_label=None,  # game_confirm
@@ -270,8 +265,7 @@ class TutorialManager:
                 title="Good Luck",
                 text=(
                     "That's the core of Impetus! From here on, you'll learn by doing — "
-                    "some mechanics (Wars, contested Guidance) will be explained the "
-                    "first time they occur.\n\n"
+                    "some mechanics will be explained the first time they occur.\n\n"
                     "First to 100 VP wins. The AI is quite basic, so this is a chance "
                     "to practice.\n\nGood luck, Spirit."
                 ),
@@ -323,6 +317,8 @@ class TutorialManager:
         self._popup_panel_rect = None
         self.popup_highlights = []
         self.highlight_war_arrows = False
+        self._return_to_menu_rect = None
+        self.return_to_menu_requested = False
         self._step_pending_show = False
         self._expecting_phase_result = False
         self._dynamic_text = None
@@ -374,6 +370,13 @@ class TutorialManager:
                 return True
             return False
 
+        # Return to Menu button (step 16 / Finish step only)
+        if self._shown and self._return_to_menu_rect and self._return_to_menu_rect.collidepoint(pos):
+            self.return_to_menu_requested = True
+            self.active = False
+            self._shown = False
+            return True
+
         # Main Continue / Finish button
         if self._shown and self._continue_rect and self._continue_rect.collidepoint(pos):
             step = self._steps[self.step_idx]
@@ -406,8 +409,7 @@ class TutorialManager:
             # Step 7 (Idols) shows immediately; player can now interact with vagrant UI
             self._advance_to(7)
         elif idx == 8:
-            # Step 9 (Modifiers) shows immediately; reveal cards so player can see modifiers
-            self.hide_phase_ui = False
+            # Step 9 (Modifiers) shows immediately
             self._advance_to(9)
         elif idx == 9:
             # Step 10 shows via _refire of agenda_phase_started; cards already visible
@@ -493,8 +495,6 @@ class TutorialManager:
             if idx == 8 and self._step_pending_show:
                 self._step_pending_show = False
                 self._shown = True
-                # Hide agenda cards while steps 8 and 9 explain agenda mechanics
-                self.hide_phase_ui = True
             elif idx == 10 and self._step_pending_show:
                 self._step_pending_show = False
                 self._shown = True
@@ -519,6 +519,13 @@ class TutorialManager:
                 self._step_pending_show = False
                 self._shown = True
 
+        elif event_type == "vagrant_phase_started":
+            # If guidance was contested/lost last turn, the player is Vagrant again and
+            # the tutorial is stuck at step 8 pending (agenda_phase_started never fires
+            # for a Vagrant player). Revert to step 6 so they know to guide again.
+            if idx == 8 and self._step_pending_show:
+                self._advance_to(6)
+
         elif event_type == "war_erupted":
             if (self.first_time_triggers_enabled
                     and "war_erupted" not in self.fired_triggers):
@@ -527,12 +534,12 @@ class TutorialManager:
                     title="A War Has Erupted!",
                     text=(
                         "Wars erupt when Regard between neighbors drops to -2 or below "
-                        "after a Steal agenda. A new War is 'green'; it ripens at the end "
+                        "after a Steal agenda. A new War is 'fresh'; it ripens at the end "
                         "of the turn and resolves at the end of the NEXT turn.\n\n"
                         "When a War resolves, both sides roll a die and add their territory "
                         "count. The winner gains gold and draws Spoils (an extra Agenda). "
                         "The loser loses 1 gold. If the winning Faction is Guided, the "
-                        "Spirit chooses which Spoils card to play."
+                        "Spirit chooses which Spoils card to play based on its Influence."
                     ),
                     button_label="Ok",
                 )
@@ -614,8 +621,9 @@ class TutorialManager:
                         "participate in Wars. Any Spirit guiding them is immediately ejected. "
                         "Their Worship is cleared, and any Wars they were involved in are "
                         "cancelled.\n\n"
-                        "Fewer Factions means fewer options for Guidance — keep an eye on "
-                        "the map to avoid being locked out."
+                        "Fewer Factions means fewer options for Guidance. However, if you are "
+                        "ever in a situation where you have to Guide and can't, you gain 10 VP "
+                        "instead."
                     ),
                     button_label="Ok",
                 )
@@ -727,12 +735,22 @@ class TutorialManager:
         screen.set_clip(old_clip)
 
         self._continue_rect = None
+        self._return_to_menu_rect = None
         if show_button:
             btn_x = px + pw - btn_w - pad
             btn_y = py + ph - btn_h - pad
             can_advance = self._can_advance_now()
             if step.button_label == "Finish":
                 btn_color = self._BTN_FINISH
+                # Draw "Return to Menu" button to the left of Finish
+                btn_w_menu = 110
+                menu_btn_x = btn_x - btn_gap - btn_w_menu
+                menu_btn_rect = pygame.Rect(menu_btn_x, btn_y, btn_w_menu, btn_h)
+                pygame.draw.rect(screen, (60, 60, 100), menu_btn_rect, border_radius=3)
+                menu_lbl = small_font.render("Return to Menu", True, (230, 230, 230))
+                screen.blit(menu_lbl, (menu_btn_rect.centerx - menu_lbl.get_width() // 2,
+                                       menu_btn_rect.centery - menu_lbl.get_height() // 2))
+                self._return_to_menu_rect = menu_btn_rect
             elif can_advance:
                 btn_color = self._BTN_ENABLED
             else:

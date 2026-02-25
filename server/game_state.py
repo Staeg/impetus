@@ -57,6 +57,9 @@ class GameState:
         self.auto_spoils_choices: list[dict] = []
         # Contested guidance cooldowns: spirit_id -> set of faction_ids blocked for 1 turn
         self.guidance_cooldowns: dict[str, set[str]] = {}
+        # Tutorial mode: give human players priority in contested guidance on turn 2
+        self.tutorial_mode: bool = False
+        self.ai_spirit_ids: set[str] = set()
         # Phase-scoped agenda resolution state (declared here to avoid mid-method creation)
         self._stored_agenda_choices: dict[str, AgendaType] = {}
         self._guided_change_factions: list[str] = []
@@ -519,6 +522,22 @@ class GameState:
                     # No clear affinity winner — normal contested resolution
                     # Cooldown applies only to the top-tier contenders
                     contested = habitat_matches or race_matches or spirit_ids
+                    # Tutorial mode: on the first vagrant phase (turn 2), give uncontested
+                    # guidance to a human player if they're the only human in the contest.
+                    if self.tutorial_mode and self.turn == 2:
+                        human_spirits = [s for s in contested if s not in self.ai_spirit_ids]
+                        if len(human_spirits) == 1:
+                            winner_id = human_spirits[0]
+                            winner = self.spirits[winner_id]
+                            faction.guiding_spirit = winner_id
+                            winner.guide_faction(target_faction)
+                            events.append({
+                                "type": "guided",
+                                "spirit": winner_id,
+                                "faction": target_faction,
+                            })
+                            self._check_worship(faction, winner, events)
+                            continue
                     events.append({
                         "type": "guide_contested",
                         "spirits": spirit_ids,

@@ -61,7 +61,7 @@ _INFLUENCE_TOOLTIP = (
 )
 
 _AFFINITY_TOOLTIP = (
-    "When two Spirits contest the same Faction, Affinity determines who succeeds. "
+    "When two Spirits try to Guide the same Faction, Affinity determines who succeeds. "
     "A matching Habitat Affinity wins outright. A matching Race Affinity wins if no "
     "one has the Habitat. If no Spirit holds a relevant Affinity, guidance is Contested."
 )
@@ -511,6 +511,9 @@ class GameScene:
             # Tutorial input gate: let tutorial consume/block clicks first
             if self.tutorial:
                 consumed = self.tutorial.handle_click(event.pos)
+                if self.tutorial.return_to_menu_requested:
+                    self.app.set_scene("menu")
+                    return
                 if consumed:
                     return
                 if self.tutorial.is_hard_blocking():
@@ -1120,7 +1123,11 @@ class GameScene:
         action = self.phase_options.get("action", "none")
         # Tutorial phase notifications (fired when UI is actually set up)
         if self.tutorial:
-            if self.phase == Phase.AGENDA_PHASE.value and action == "choose_agenda":
+            if self.phase == Phase.VAGRANT_PHASE.value and action == "choose":
+                self.tutorial.notify_game_event("vagrant_phase_started", {
+                    "turn": self.turn,
+                })
+            elif self.phase == Phase.AGENDA_PHASE.value and action == "choose_agenda":
                 hand = self.phase_options.get("hand", [])
                 self.tutorial.notify_game_event("agenda_phase_started", {
                     "turn": self.turn,
