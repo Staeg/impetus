@@ -1026,6 +1026,13 @@ class GameScene:
 
     def _setup_change_choice_ui(self):
         self.change_cards = self.phase_options.get("cards") or []
+        if self.tutorial:
+            my_spirit = self.spirits.get(self.app.my_spirit_id, {})
+            influence = my_spirit.get("influence", 0)
+            self.tutorial.notify_game_event("change_drawn", {
+                "influence": influence,
+                "card_count": len(self.change_cards),
+            })
 
     def _setup_spoils_choice_ui(self):
         if self.tutorial:

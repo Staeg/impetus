@@ -131,7 +131,7 @@ class TutorialManager:
                 text=(
                     "The colored [+2] and [-1] chips next to values show what changed last turn.\n\n"
                     "Click one of those chips now to highlight the event in the log that "
-                    "caused the change."
+                    "caused the change.\n\n"
                     "If the Faction you selected does not have any of them, select a different one."
                 ),
                 button_label="Continue",
@@ -142,11 +142,13 @@ class TutorialManager:
             TutorialStep(
                 title="Guidance and Worship",
                 text=(
-                    "Each turn you choose one Faction to Guide from the list on the left. "
-                    "Guiding makes that Faction Worship you, which earns Victory Points (VP).\n\n"
+                    "Each turn that you start Vagrant (not Guiding a Faction)," 
+                    "you choose one Faction to Guide from the list on the left. Guiding a Faction"
+                    " for the first time makes them Worship you, which earns Victory Points (VP).\n\n"
                     "A Faction that Worships you cannot be Guided by you again — another Spirit "
-                    "must usurp their Worship first (by having at least as many Idols in that "
-                    "Faction's territory).\n\nSelect a Faction to Guide now."
+                    "must usurp their Worship first by having at least as many Idols in that "
+                    "Faction's territory when they begin or finish Guiding them.\n"
+                    "Select a new Faction to Guide now."
                 ),
                 button_label="Continue",
                 highlights=["guidance_btns"],
@@ -222,7 +224,8 @@ class TutorialManager:
                 text=(
                     "Your Influence drops by 1 each turn you guide a Faction. "
                     "Higher Influence means more Agenda cards to choose from.\n\n"
-                    "When Influence reaches 0, you'll be ejected from the Faction.\n\n"
+                    "When Influence reaches 0, you'll be ejected from the Faction, "
+                    "become Vagrant again and Guide a new Faction.\n\n"
                     "Choose an Agenda and click Confirm."
                 ),
                 button_label=None,  # game_confirm
@@ -296,12 +299,10 @@ class TutorialManager:
     def is_blocking_submit(self) -> bool:
         """Return True to prevent the game Confirm button from responding.
 
-        Used at step 6 (guidance gate): the player must select a Faction guidance
-        button and click tutorial Continue before submitting their vagrant action.
-        Without this guard, an early Confirm submission would leave the tutorial
-        frozen at step 6 forever (agenda_phase_started fires before step 7 is pending).
+        Blocks Confirm during all pre-Idols steps so the player can't skip the
+        tutorial intro. Step 7 (Idols) is the first step where Confirm is meaningful.
         """
-        return self.active and self._shown and self.step_idx == 6
+        return self.active and self._shown and self.step_idx < 7
 
     # ------------------------------------------------------------------ #
     # Activation
@@ -525,7 +526,6 @@ class TutorialManager:
                 self.popup_step = TutorialStep(
                     title="A War Has Erupted!",
                     text=(
-                        "A War has erupted between two Factions!\n\n"
                         "Wars erupt when Regard between neighbors drops to -2 or below "
                         "after a Steal agenda. A new War is 'green'; it ripens at the end "
                         "of the turn and resolves at the end of the NEXT turn.\n\n"
@@ -559,6 +559,28 @@ class TutorialManager:
                 )
                 self._popup_panel_rect = None
 
+        elif event_type == "change_drawn":
+            influence = data.get("influence", 0)
+            card_count = data.get("card_count", 1)
+            if (self.first_time_triggers_enabled
+                    and influence > 0
+                    and "change_drawn_with_influence" not in self.fired_triggers):
+                self.fired_triggers.add("change_drawn_with_influence")
+                self.popup_step = TutorialStep(
+                    title="Change — Influence Helps Here",
+                    text=(
+                        f"You're drawing {card_count} modifier options because your "
+                        f"Influence is {influence}. Higher Influence means more cards "
+                        f"to choose from — so you can be selective about which modifier "
+                        f"you want.\n\n"
+                        "Each modifier permanently boosts one Agenda type for your Guided "
+                        "Faction. Stack the same type for compounding effects, or spread "
+                        "across types for flexibility."
+                    ),
+                    button_label="Ok",
+                )
+                self._popup_panel_rect = None
+
         elif event_type == "guided_spoils_drawn":
             if (self.first_time_triggers_enabled
                     and "guided_spoils_drawn" not in self.fired_triggers):
@@ -570,10 +592,11 @@ class TutorialManager:
                         "card that resolves immediately after the regular agendas this turn.\n\n"
                         "Choose a Spoils card from those drawn. Most cards work normally: "
                         "Trade sends gold back and benefits from others Trading this turn; "
-                        "Steal drains neighbors as usual.\n\n"
-                        "Expand is different: it targets the war's battleground hex rather "
-                        "than a free adjacent hex. The gold cost is waived — if the "
-                        "battleground is already taken, you get [+1] gold as consolation."
+                        "Steal and Change work exactly as normal.\n\n"
+                        "Expand is different: it conquers the war's battleground hex rather "
+                        "than an adjacent neutral hex. The gold cost is waive. If more than "
+                        "one Faction tries to conquer a hex simultaneously, they get [+1] gold "
+                        "as consolation."
                     ),
                     button_label="Ok",
                 )
@@ -636,9 +659,11 @@ class TutorialManager:
                 if rect:
                     self._draw_glow_rect(screen, rect, color, pulse_alpha)
             elif key == "ribbon":
-                for rkey, rect in self.exposed_rects.items():
-                    if rkey.startswith("ribbon_"):
-                        self._draw_glow_rect(screen, rect, color, pulse_alpha)
+                rects = [r for k, r in self.exposed_rects.items()
+                         if k.startswith("ribbon_") and not k.startswith("ribbon_war_")]
+                if rects:
+                    union = rects[0].unionall(rects[1:])
+                    self._draw_glow_rect(screen, union, color, pulse_alpha)
             elif key == "ribbon_war":
                 for rkey, rect in self.exposed_rects.items():
                     if rkey.startswith("ribbon_war_"):
@@ -768,7 +793,7 @@ class TutorialManager:
                      + btn_gap + btn_h)
         ph = content_h + pad * 2
         px = SCREEN_WIDTH // 2 - pw // 2
-        py = SCREEN_HEIGHT // 2 - ph // 2
+        py = 105  # just below the faction ribbon strip (ribbon ends at y=97)
 
         overlay = pygame.Surface((pw, ph), pygame.SRCALPHA)
         overlay.fill(self._BG_COLOR)

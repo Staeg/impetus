@@ -423,8 +423,8 @@ class UIRenderer:
                     if is_ripe:
                         pygame.draw.polygon(surface, (255, 255, 255), points, 1)
                     wx += 14
-                # Store hoverable rect covering the whole war indicator group
-                ribbon_war_rects[fid] = pygame.Rect(wars_x_start, strip_y, total_war_w, strip_h)
+                # Store hoverable rect covering just the war indicator area
+                ribbon_war_rects[fid] = pygame.Rect(wars_x_start, sy - 8, total_war_w, 16)
 
         return agenda_label_entries, pool_icon_rects, ribbon_war_rects, ribbon_worship_rects
 
@@ -1016,10 +1016,9 @@ class UIRenderer:
 
         descs = {
             "steal": [
-                f"-{1 + steal_mod} regard",
-                f"-{1 + steal_mod}g from neighbors",
+                f"-{1 + steal_mod} neighbor regard,",
+                f"-{1 + steal_mod} neighbor gold",
                 "+gold stolen",
-                "War at -2 regard",
             ],
             "trade": [
                 "+1g base",
