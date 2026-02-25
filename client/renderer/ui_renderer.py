@@ -844,7 +844,7 @@ class UIRenderer:
         display_h = min(panel_h, max_height) if max_height else panel_h
         panel_rect = pygame.Rect(x, y, width, display_h)
         pygame.draw.rect(surface, (30, 30, 40), panel_rect, border_radius=4)
-        pygame.draw.rect(surface, (255, 255, 100), panel_rect, 2, border_radius=4)
+        pygame.draw.rect(surface, (192, 192, 192), panel_rect, 2, border_radius=4)
 
         old_clip = surface.get_clip()
         surface.set_clip(panel_rect)
@@ -1077,7 +1077,7 @@ class UIRenderer:
         effect_font = self._get_font(11)
 
         if vertical:
-            card_w, card_h = 110, 160
+            card_w, card_h = 110, 130
             spacing = 5
             for i, card in enumerate(hand):
                 cx = x

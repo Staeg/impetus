@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -41,6 +42,7 @@ class TutorialManager:
         self.action_satisfied = False
         self.block_animations = False
         self.block_phase_ui = False
+        self.hide_phase_ui = False        # suppresses _render_agenda_ui during steps 8-9
         self.first_time_triggers_enabled = False
         self.fired_triggers: set[str] = set()
         self.popup_step: TutorialStep | None = None
@@ -52,17 +54,17 @@ class TutorialManager:
 
         # Internal flow flags
         self._step_pending_show = False   # step is waiting for a trigger before shown
-        self._expecting_phase_result = False  # guards animations_done for step 10
+        self._expecting_phase_result = False  # guards animations_done for step 11
 
         self._steps = self._build_steps()
 
     # ------------------------------------------------------------------ #
-    # Step definitions  (16 steps: 0–15)
+    # Step definitions  (17 steps: 0–16)
     # ------------------------------------------------------------------ #
 
     def _build_steps(self) -> list[TutorialStep]:
         return [
-            # Step 0: history (blocking)
+            # Step 0: history (hard-blocking)
             TutorialStep(
                 title="Turn 1: History of the World",
                 text=(
@@ -73,7 +75,7 @@ class TutorialManager:
                 ),
                 button_label="Continue",
             ),
-            # Step 1: spirit panel (pending show: animations_done after turn-1)
+            # Step 1: spirit panel (pending show: animations_done after turn-1; hard-blocking when shown)
             TutorialStep(
                 title="Your Spirit",
                 text=(
@@ -84,7 +86,7 @@ class TutorialManager:
                 button_label="Continue",
                 highlights=["spirit_panel"],
             ),
-            # Step 2: event log
+            # Step 2: event log (hard-blocking)
             TutorialStep(
                 title="Event Log",
                 text=(
@@ -96,7 +98,7 @@ class TutorialManager:
                 button_label="Continue",
                 highlights=["event_log"],
             ),
-            # Step 3: factions (action gate: select_faction)
+            # Step 3: factions (action gate: select_faction; NOT hard-blocking)
             TutorialStep(
                 title="Factions",
                 text=(
@@ -109,7 +111,7 @@ class TutorialManager:
                 highlights=["ribbon", "guidance_btns"],
                 action_gate="select_faction",
             ),
-            # Step 4: regard and gold (highlight faction info panel)
+            # Step 4: regard and gold (hard-blocking; highlights faction info panel)
             TutorialStep(
                 title="Regard and Gold",
                 text=(
@@ -121,23 +123,25 @@ class TutorialManager:
                 button_label="Continue",
                 highlights=["faction_info"],
             ),
-            # Step 5: tracking changes (action gate: click_delta)
+            # Step 5: tracking changes (action gate: click_delta; NOT hard-blocking)
             TutorialStep(
                 title="Tracking Changes",
                 text=(
                     "The colored [+2] and [-1] chips next to values show what changed last turn.\n\n"
                     "Click one of those chips now to highlight the event in the log that "
                     "caused the change."
+                    "If the Faction you selected does not have any of them, select a different one."
                 ),
                 button_label="Continue",
                 action_gate="click_delta",
             ),
-            # Step 6: guidance and worship (action gate: guidance_select)
+            # Step 6: guidance and worship (action gate: guidance_select; NOT hard-blocking)
+            # Game Confirm is blocked via is_blocking_submit() until Continue is clicked.
             TutorialStep(
                 title="Guidance and Worship",
                 text=(
                     "Each turn you choose one Faction to Guide from the list on the left. "
-                    "Guiding makes that Faction Worship you, which earns VP.\n\n"
+                    "Guiding makes that Faction Worship you, which earns Victory Points (VP).\n\n"
                     "A Faction that Worships you cannot be Guided by you again — another Spirit "
                     "must usurp their Worship first (by having at least as many Idols in that "
                     "Faction's territory).\n\nSelect a Faction to Guide now."
@@ -146,7 +150,23 @@ class TutorialManager:
                 highlights=["guidance_btns"],
                 action_gate="guidance_select",
             ),
-            # Step 7: agenda types (pending show: agenda_phase_started)
+            # Step 7: idols (shown immediately after step 6 Continue; game_confirm via vagrant submit)
+            TutorialStep(
+                title="Idols",
+                text=(
+                    "Alongside Guidance, you may place one Idol on any neutral hex. "
+                    "Once in a Faction's territory, they grant VP based on the Idol type:\n"
+                    "  Battle — 5 VP per War won\n"
+                    "  Affluence — 2 VP per Gold gained\n"
+                    "  Spread — 5 VP per Territory claimed\n\n"
+                    "These VPs go to whichever Spirit the Faction Worships.\n"
+                    "Factions prioritize expanding into hexes with Idols.\n\n"
+                    "Choose an Idol type, click a neutral hex, then click Confirm."
+                ),
+                button_label=None,  # game_confirm: vagrant submission advances tutorial
+            ),
+            # Step 8: agenda types (pending: agenda_phase_started; hard-blocking)
+            # hide_phase_ui=True is set when this step shows, so agenda cards are hidden.
             TutorialStep(
                 title="Agenda Types",
                 text=(
@@ -155,23 +175,25 @@ class TutorialManager:
                     "  Steal — drain gold from neighbors, risking War\n"
                     "  Expand — spend gold to claim a neutral hex\n"
                     "  Change — draw a modifier that permanently boosts an Agenda type\n\n"
-                    "Factions are not controlled directly; their AI picks the best card "
-                    "from their pool."
+                    "Factions play a random Agenda from their pool unless Guided."
                 ),
                 button_label="Continue",
             ),
-            # Step 8: modifiers (shown immediately after step 7 Continue)
+            # Step 9: modifiers (shown immediately after step 8 Continue; hard-blocking)
+            # hide_phase_ui is cleared when step 8 Continue is clicked, so cards are visible here.
             TutorialStep(
                 title="Modifiers and Habitats",
                 text=(
                     "Each Faction starts with Change modifiers based on their Habitat — "
                     "see the modifier icons on each faction's ribbon section.\n\n"
                     "Modifiers permanently increase the power of a specific Agenda. "
-                    "On the left, your Guided Faction's cards show these modifiers applied."
+                    "On the left, your Guided Faction's cards show these modifiers with a +."
                 ),
                 button_label="Continue",
+                highlights=["ribbon", "agenda_cards_area"],
             ),
-            # Step 9: agenda resolution (pending show: agenda_phase_started refire; game_confirm)
+            # Step 10: agenda resolution (pending: agenda_phase_started via _refire; game_confirm)
+            # hide_phase_ui is False here, so agenda cards are visible.
             TutorialStep(
                 title="Agenda Resolution",
                 text=(
@@ -181,7 +203,7 @@ class TutorialManager:
                 ),
                 button_label=None,  # game_confirm: player clicks game Confirm
             ),
-            # Step 10: watch and learn (pending show: animations_done after agenda phase)
+            # Step 11: watch and learn (pending: animations_done after step 10; hard-blocking)
             TutorialStep(
                 title="Watch and Learn",
                 text=(
@@ -191,7 +213,8 @@ class TutorialManager:
                 ),
                 button_label="Continue",
             ),
-            # Step 11: influence (pending show: agenda_phase_started turn 3; game_confirm)
+            # Step 12: influence (pending: agenda_phase_started with draw_count<=3; game_confirm)
+            # Shows only once influence has visibly dropped (draw_count < starting 4).
             TutorialStep(
                 title="Influence",
                 text=(
@@ -202,7 +225,8 @@ class TutorialManager:
                 ),
                 button_label=None,  # game_confirm
             ),
-            # Step 12: final choice (pending show: agenda_phase_started turn 4; game_confirm)
+            # Step 13: final choice (pending: agenda_phase_started with draw_count<=2; game_confirm)
+            # Shows only when the player is actually on their last agenda choice before ejection.
             TutorialStep(
                 title="Final Choice",
                 text=(
@@ -212,7 +236,7 @@ class TutorialManager:
                 ),
                 button_label=None,  # game_confirm
             ),
-            # Step 13: ejection / agenda pool (pending show: ejection_phase_started; game_confirm)
+            # Step 14: ejection / agenda pool (pending: ejection_phase_started; game_confirm)
             TutorialStep(
                 title="Agenda Pool",
                 text=(
@@ -224,7 +248,7 @@ class TutorialManager:
                 ),
                 button_label=None,  # game_confirm
             ),
-            # Step 14: worship recap (blocking)
+            # Step 15: worship recap (hard-blocking)
             TutorialStep(
                 title="Worship Recap",
                 text=(
@@ -236,7 +260,7 @@ class TutorialManager:
                 ),
                 button_label="Continue",
             ),
-            # Step 15: good luck (Finish)
+            # Step 16: good luck (Finish; hard-blocking)
             TutorialStep(
                 title="Good Luck",
                 text=(
@@ -254,7 +278,7 @@ class TutorialManager:
     # Hard-blocking steps: block all game input when panel is shown
     # ------------------------------------------------------------------ #
 
-    _HARD_BLOCKING_STEPS = frozenset({0, 1, 2, 4, 7, 8, 10, 14, 15})
+    _HARD_BLOCKING_STEPS = frozenset({0, 1, 2, 4, 8, 9, 11, 15, 16})
 
     def is_hard_blocking(self) -> bool:
         if not self.active or not self._shown:
@@ -267,6 +291,16 @@ class TutorialManager:
     def is_blocking_phase_ui(self) -> bool:
         return self.block_phase_ui
 
+    def is_blocking_submit(self) -> bool:
+        """Return True to prevent the game Confirm button from responding.
+
+        Used at step 6 (guidance gate): the player must select a Faction guidance
+        button and click tutorial Continue before submitting their vagrant action.
+        Without this guard, an early Confirm submission would leave the tutorial
+        frozen at step 6 forever (agenda_phase_started fires before step 7 is pending).
+        """
+        return self.active and self._shown and self.step_idx == 6
+
     # ------------------------------------------------------------------ #
     # Activation
     # ------------------------------------------------------------------ #
@@ -278,6 +312,7 @@ class TutorialManager:
         self.action_satisfied = False
         self.block_animations = True   # step 0 blocks animations until Continue
         self.block_phase_ui = False
+        self.hide_phase_ui = False
         self.first_time_triggers_enabled = False
         self.fired_triggers = set()
         self.popup_step = None
@@ -300,10 +335,13 @@ class TutorialManager:
             self.active = False
             self._shown = False
             self._step_pending_show = False
+            self.hide_phase_ui = False
             return
 
-        # Steps that need an external trigger before showing
-        if new_idx in (1, 7, 9, 10, 11, 12, 13):
+        # Steps that need an external trigger before showing.
+        # Steps 7 and 9 show immediately (not pending) — 7 after step 6 Continue,
+        # 9 after step 8 Continue.
+        if new_idx in (1, 8, 10, 11, 12, 13, 14):
             self._shown = False
             self._step_pending_show = True
         else:
@@ -352,28 +390,31 @@ class TutorialManager:
     def _on_continue_clicked(self):
         idx = self.step_idx
         if idx == 0:
-            # Release animation block; step 1 shows after animations complete
+            # Release animation block; step 1 shows after turn-1 animations complete
             self.block_animations = False
             self._advance_to(1)
         elif idx in (1, 2, 3, 4, 5):
             self._advance_to(idx + 1)
         elif idx == 6:
-            # Step 7 is pending; shows when agenda_phase_started fires
+            # Step 7 (Idols) shows immediately; player can now interact with vagrant UI
             self._advance_to(7)
-        elif idx == 7:
-            self._advance_to(8)
         elif idx == 8:
-            # Step 9 is pending; shows when agenda_phase_started fires (via refire)
+            # Step 9 (Modifiers) shows immediately; reveal cards so player can see modifiers
+            self.hide_phase_ui = False
             self._advance_to(9)
-        elif idx == 10:
-            # Release phase UI block; turn 3 vagrant phase can now appear
+        elif idx == 9:
+            # Step 10 shows via _refire of agenda_phase_started; cards already visible
+            self._advance_to(10)
+        elif idx == 11:
+            # Release phase UI block so turn-3 vagrant phase can appear
             self.block_phase_ui = False
-            self._advance_to(11)
-        elif idx == 14:
-            self._advance_to(15)
+            self._advance_to(12)
         elif idx == 15:
+            self._advance_to(16)
+        elif idx == 16:
             self.active = False
             self._shown = False
+            self.hide_phase_ui = False
 
     # ------------------------------------------------------------------ #
     # Game event / action notifications
@@ -396,21 +437,30 @@ class TutorialManager:
             if idx == 6 and not self.action_satisfied:
                 self.action_satisfied = True
 
+        elif action_type == "vagrant_submitted":
+            # Advance past idols/guidance step to wait for the agenda phase.
+            # Handles both the normal path (idx==7, player read Idols step) and
+            # the early-submit edge case (idx==6, player clicked Confirm before
+            # clicking tutorial Continue — without this guard the tutorial would
+            # get stuck at step 6 forever).
+            if idx in (6, 7):
+                self._advance_to(8)  # pending: agenda_phase_started
+
         elif action_type == "agenda_submitted":
-            if idx == 9:
+            if idx == 10:
                 self.first_time_triggers_enabled = True
-                # Block next vagrant phase until step 10 Continue
+                # Block turn-3 vagrant phase until step 11 (Watch and Learn) Continue
                 self.block_phase_ui = True
                 self._expecting_phase_result = True
-                self._advance_to(10)
-            elif idx == 11:
-                self._advance_to(12)
+                self._advance_to(11)
             elif idx == 12:
                 self._advance_to(13)
+            elif idx == 13:
+                self._advance_to(14)
 
         elif action_type == "ejection_submitted":
-            if idx == 13:
-                self._advance_to(14)
+            if idx == 14:
+                self._advance_to(15)
 
     def notify_game_event(self, event_type: str, data: dict):
         if not self.active:
@@ -425,21 +475,24 @@ class TutorialManager:
             if idx == 1 and self._step_pending_show:
                 self._step_pending_show = False
                 self._shown = True
-            # Step 10: show after turn-2 agenda animations (guarded by _expecting)
-            elif idx == 10 and self._step_pending_show and not self._expecting_phase_result:
+            # Step 11: show after turn-2 agenda animations (guarded until PHASE_RESULT arrives)
+            elif idx == 11 and self._step_pending_show and not self._expecting_phase_result:
                 self._step_pending_show = False
                 self._shown = True
-                # block_phase_ui is already True (set at agenda_submitted)
+                # block_phase_ui is already True (set at agenda_submitted for step 10)
 
         elif event_type == "agenda_phase_started":
             draw_count = data.get("draw_count", 2)
-            if idx == 7 and self._step_pending_show:
+            if idx == 8 and self._step_pending_show:
                 self._step_pending_show = False
                 self._shown = True
-            elif idx == 9 and self._step_pending_show:
+                # Hide agenda cards while steps 8 and 9 explain agenda mechanics
+                self.hide_phase_ui = True
+            elif idx == 10 and self._step_pending_show:
                 self._step_pending_show = False
                 self._shown = True
-            elif idx == 11 and self._step_pending_show:
+            elif idx == 12 and self._step_pending_show and draw_count <= 3:
+                # Show once influence has visibly dropped (starting draw_count is 4)
                 self._step_pending_show = False
                 self._shown = True
                 self._dynamic_text = (
@@ -449,12 +502,13 @@ class TutorialManager:
                     f"When Influence reaches 0, you'll be ejected.\n\n"
                     f"Choose an Agenda and click Confirm."
                 )
-            elif idx == 12 and self._step_pending_show:
+            elif idx == 13 and self._step_pending_show and draw_count <= 2:
+                # Show only when the player is truly on their last agenda choice
                 self._step_pending_show = False
                 self._shown = True
 
         elif event_type == "ejection_phase_started":
-            if idx == 13 and self._step_pending_show:
+            if idx == 14 and self._step_pending_show:
                 self._step_pending_show = False
                 self._shown = True
 
@@ -497,6 +551,25 @@ class TutorialManager:
                 )
                 self._popup_panel_rect = None
 
+        elif event_type == "faction_eliminated":
+            if (self.first_time_triggers_enabled
+                    and "faction_eliminated" not in self.fired_triggers):
+                self.fired_triggers.add("faction_eliminated")
+                self.popup_step = TutorialStep(
+                    title="A Faction Has Been Eliminated!",
+                    text=(
+                        "A Faction lost all of its territories and has been eliminated!\n\n"
+                        "Eliminated Factions no longer play Agendas, accumulate Gold, or "
+                        "participate in Wars. Any Spirit guiding them is immediately ejected. "
+                        "Their Worship is cleared, and any Wars they were involved in are "
+                        "cancelled.\n\n"
+                        "Fewer Factions means fewer options for Guidance — keep an eye on "
+                        "the map to avoid being locked out."
+                    ),
+                    button_label="Ok",
+                )
+                self._popup_panel_rect = None
+
     # ------------------------------------------------------------------ #
     # Rendering
     # ------------------------------------------------------------------ #
@@ -527,7 +600,7 @@ class TutorialManager:
         pulse_alpha = int(150 + 80 * math.sin(time.monotonic() * 3.0))
         color = (200, 180, 100)
         for key in highlights:
-            if key in ("spirit_panel", "event_log", "faction_info"):
+            if key in ("spirit_panel", "event_log", "faction_info", "agenda_cards_area"):
                 rect = self.exposed_rects.get(key)
                 if rect:
                     self._draw_glow_rect(screen, rect, color, pulse_alpha)
@@ -560,14 +633,14 @@ class TutorialManager:
 
         title_surf = font.render(step.title, True, self._TITLE_COLOR)
         body_lines = self._wrap_text(text, small_font, inner_w)
-        body_surfs = [small_font.render(ln, True, self._TEXT_COLOR) for ln in body_lines]
+        line_h = small_font.get_height() + 2
 
         btn_h = 26
         btn_w = 84
         btn_gap = 6
         show_button = step.button_label is not None
 
-        body_h = sum(s.get_height() + 2 for s in body_surfs)
+        body_h = len(body_lines) * line_h
         content_h = title_surf.get_height() + 4 + body_h
         if show_button:
             content_h += btn_gap + btn_h
@@ -586,11 +659,11 @@ class TutorialManager:
         clip_bottom = py + ph - (btn_h + btn_gap + pad if show_button else pad)
         old_clip = screen.get_clip()
         screen.set_clip(pygame.Rect(px + pad, py + pad, pw - pad * 2, ph - pad * 2))
-        for surf in body_surfs:
-            if y + surf.get_height() > clip_bottom:
+        for line in body_lines:
+            if y + line_h > clip_bottom:
                 break
-            screen.blit(surf, (px + pad, y))
-            y += surf.get_height() + 2
+            self._draw_body_line(screen, line, small_font, px + pad, y)
+            y += line_h
         screen.set_clip(old_clip)
 
         self._continue_rect = None
@@ -610,6 +683,31 @@ class TutorialManager:
             screen.blit(lbl, (btn_rect.centerx - lbl.get_width() // 2,
                                btn_rect.centery - lbl.get_height() // 2))
             self._continue_rect = btn_rect
+
+    _DELTA_POSITIVE = re.compile(r'(\[\+\d+\])')
+    _DELTA_NEGATIVE = re.compile(r'(\[-\d+\])')
+    _DELTA_SPLIT = re.compile(r'(\[[-+]\d+\])')
+    _COLOR_POS = (80, 220, 80)
+    _COLOR_NEG = (255, 90, 90)
+
+    def _draw_body_line(self, screen: pygame.Surface,
+                        line: str, font: pygame.font.Font,
+                        x: int, y: int):
+        """Draw one text line, colouring [+N] green and [-N] red."""
+        parts = self._DELTA_SPLIT.split(line)
+        cx = x
+        for part in parts:
+            if not part:
+                continue
+            if self._DELTA_POSITIVE.match(part):
+                color = self._COLOR_POS
+            elif self._DELTA_NEGATIVE.match(part):
+                color = self._COLOR_NEG
+            else:
+                color = self._TEXT_COLOR
+            surf = font.render(part, True, color)
+            screen.blit(surf, (cx, y))
+            cx += surf.get_width()
 
     # ------------------------------------------------------------------ #
     # Popup drawing (first-time triggers)

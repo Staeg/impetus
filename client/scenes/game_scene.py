@@ -517,7 +517,8 @@ class GameScene:
             if not (self.spectator_mode and not self.game_over):
                 # Check submit button
                 if self.submit_button and self.submit_button.clicked(event.pos):
-                    self._submit_action()
+                    if not (self.tutorial and self.tutorial.is_blocking_submit()):
+                        self._submit_action()
                     return
 
                 # Check ejection remove buttons
@@ -654,6 +655,8 @@ class GameScene:
                         blocked = set(self.phase_options.get("worship_blocked", []))
                         if fid in available and fid not in blocked:
                             self.selected_faction = fid
+                            if self.tutorial:
+                                self.tutorial.notify_action("guidance_selected", {"faction": fid})
                     if self.tutorial:
                         self.tutorial.notify_action("faction_selected", {"faction": fid})
                     return
@@ -720,6 +723,8 @@ class GameScene:
                     blocked = set(self.phase_options.get("worship_blocked", []))
                     if owner in available and owner not in blocked:
                         self.selected_faction = owner
+                        if self.tutorial:
+                            self.tutorial.notify_action("guidance_selected", {"faction": owner})
                 if self.tutorial:
                     self.tutorial.notify_action("faction_selected", {"faction": owner})
 
@@ -1000,15 +1005,15 @@ class GameScene:
             return
         idx = self.tutorial.step_idx
         action = self.phase_options.get("action", "none")
-        # Steps 7 and 9 trigger on agenda_phase_started; may already be in that phase
-        if idx in (7, 9) and self.phase == Phase.AGENDA_PHASE.value and action == "choose_agenda":
+        # Steps 8 and 10 trigger on agenda_phase_started; may already be in that phase
+        if idx in (8, 10) and self.phase == Phase.AGENDA_PHASE.value and action == "choose_agenda":
             hand = self.phase_options.get("hand", [])
             self.tutorial.notify_game_event("agenda_phase_started", {
                 "turn": self.turn,
                 "draw_count": len(hand),
             })
-        # Step 13 triggers on ejection_phase_started
-        elif idx == 13 and self.phase == SubPhase.EJECTION_CHOICE:
+        # Step 14 triggers on ejection_phase_started
+        elif idx == 14 and self.phase == SubPhase.EJECTION_CHOICE:
             self.tutorial.notify_game_event("ejection_phase_started", {"turn": self.turn})
 
     def _handle_game_over(self, payload):
@@ -1269,7 +1274,7 @@ class GameScene:
 
     def _calc_left_choice_card_rects(self, count: int, y: int = _CHOICE_CARD_Y) -> list[pygame.Rect]:
         """Card rects stacked vertically in the left panel."""
-        card_w, card_h, spacing = 110, 145, 5
+        card_w, card_h, spacing = 110, 130, 5
         card_x = max(20, (_HEX_MAP_LEFT_X - card_w) // 2)
         return [pygame.Rect(card_x, y + i * (card_h + spacing), card_w, card_h)
                 for i in range(count)]
@@ -1656,6 +1661,9 @@ class GameScene:
         elif etype == "war_erupted":
             if self.tutorial:
                 self.tutorial.notify_game_event("war_erupted", event)
+        elif etype == "faction_eliminated":
+            if self.tutorial:
+                self.tutorial.notify_game_event("faction_eliminated", event)
 
     @staticmethod
     def _format_faction_list(factions: list[str]) -> str:
@@ -2087,7 +2095,8 @@ class GameScene:
         if self.phase == Phase.VAGRANT_PHASE.value:
             self._render_vagrant_ui(screen)
         elif self.phase == Phase.AGENDA_PHASE.value:
-            self._render_agenda_ui(screen)
+            if not (self.tutorial and self.tutorial.hide_phase_ui):
+                self._render_agenda_ui(screen)
         elif self.phase == SubPhase.CHANGE_CHOICE:
             self._render_change_ui(screen)
         elif self.phase == SubPhase.EJECTION_CHOICE:
@@ -2270,6 +2279,12 @@ class GameScene:
                 tut_rects[f"ribbon_{fid}"] = r
             for btn, fid in zip(self.faction_buttons, self.faction_button_ids):
                 tut_rects[f"guidance_btn_{fid}"] = btn.rect
+            if self.agenda_hand:
+                card_rects = self._calc_left_choice_card_rects(len(self.agenda_hand))
+                tut_rects["agenda_cards_area"] = pygame.Rect(
+                    card_rects[0].x, card_rects[0].y,
+                    card_rects[0].w, card_rects[-1].bottom - card_rects[0].y,
+                )
             self.tutorial.exposed_rects = tut_rects
             self.tutorial.render(screen, self.font, self.small_font)
 
