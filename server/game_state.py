@@ -909,7 +909,15 @@ class GameState:
         return events
 
     def _resolve_scoring(self) -> list[dict]:
-        events = calculate_scoring(self.factions, self.spirits, self.hex_map)
+        # Check worship for all guided factions before scoring
+        events = []
+        for fid, faction in self.factions.items():
+            if faction.guiding_spirit and not faction.eliminated:
+                spirit = self.spirits.get(faction.guiding_spirit)
+                if spirit:
+                    self._check_worship(faction, spirit, events)
+
+        events.extend(calculate_scoring(self.factions, self.spirits, self.hex_map))
 
         # Check for winner
         winner = None

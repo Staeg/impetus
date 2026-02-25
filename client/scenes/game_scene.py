@@ -38,6 +38,7 @@ _PANEL_W = SCREEN_WIDTH - _FACTION_PANEL_X - 2
 _FACTION_PANEL_MAX_H = 300    # scrollable faction/spirit panel (top)
 _SPIRIT_PANEL_MAX_H = 195     # persistent self-spirit panel (middle)
 _EVENT_LOG_H = 191            # event log (bottom); 694-300-4-195-4=191
+_EVENT_LOG_H_ENLARGED = 400   # event log when expanded
 
 # Centering positions for button column (left side only)
 _GUIDANCE_CENTER_X = _HEX_MAP_LEFT_X // 2
@@ -189,6 +190,7 @@ class GameScene:
         self.event_log: list[str] = []
         self.event_log_scroll_offset: int = 0
         self.event_log_h_scroll_offset: int = 0
+        self.event_log_enlarged: bool = False
         # Per-spirit influence values from last state update (for fade animation detection)
         self._influence_prev: dict[str, int] = {}
 
@@ -440,11 +442,13 @@ class GameScene:
         self.input_handler.handle_camera_event(event)
 
         if event.type == pygame.MOUSEWHEEL:
-            _event_log_y = 102 + _FACTION_PANEL_MAX_H + 4 + _SPIRIT_PANEL_MAX_H + 4
-            log_rect = pygame.Rect(_FACTION_PANEL_X, _event_log_y, _PANEL_W, _EVENT_LOG_H)
+            _cur_event_log_h = _EVENT_LOG_H_ENLARGED if self.event_log_enlarged else _EVENT_LOG_H
+            _cur_faction_panel_h = _FACTION_PANEL_MAX_H + _EVENT_LOG_H - _cur_event_log_h
+            _event_log_y = 102 + _cur_faction_panel_h + 4 + _SPIRIT_PANEL_MAX_H + 4
+            log_rect = pygame.Rect(_FACTION_PANEL_X, _event_log_y, _PANEL_W, _cur_event_log_h)
             mx, my = pygame.mouse.get_pos()
             if log_rect.collidepoint(mx, my):
-                visible_count = (_EVENT_LOG_H - 26) // 16
+                visible_count = (_cur_event_log_h - 26) // 16
                 max_offset = max(0, len(self.event_log) - visible_count)
                 self.event_log_scroll_offset += event.y
                 self.event_log_scroll_offset = max(0, min(self.event_log_scroll_offset, max_offset))
@@ -454,7 +458,7 @@ class GameScene:
             fp_rect = self.ui_renderer.faction_panel_rect
             if fp_rect and fp_rect.collidepoint(mx, my):
                 content_h = getattr(self.ui_renderer, '_faction_panel_content_h', 0)
-                max_scroll = max(0, content_h - _FACTION_PANEL_MAX_H)
+                max_scroll = max(0, content_h - _cur_faction_panel_h)
                 self.faction_panel_scroll_offset = max(0, min(
                     self.faction_panel_scroll_offset - event.y * 16, max_scroll))
 
@@ -506,6 +510,10 @@ class GameScene:
             self._update_guided_hex_hover(event.pos)
             # Popup keyword hover
             self.popup_manager.update_hover(event.pos)
+            # Tutorial: notify when player hovers something with a tooltip
+            if self.tutorial and (self.hovered_card_tooltip or self.hovered_idol
+                                  or self.hovered_pool_faction or self.hovered_ribbon_war_fid):
+                self.tutorial.notify_action("tooltip_hovered", {})
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # Tutorial input gate: let tutorial consume/block clicks first
@@ -518,6 +526,12 @@ class GameScene:
                     return
                 if self.tutorial.is_hard_blocking():
                     return  # block all game input
+            # Event log expand/collapse toggle (always accessible)
+            if (self.ui_renderer.event_log_expand_rect and
+                    self.ui_renderer.event_log_expand_rect.collidepoint(event.pos)):
+                self.event_log_enlarged = not self.event_log_enlarged
+                return
+
             if not (self.spectator_mode and not self.game_over):
                 # Check submit button
                 if self.submit_button and self.submit_button.clicked(event.pos):
@@ -611,7 +625,8 @@ class GameScene:
                     else:
                         self.highlighted_log_index = log_idx
                         # Auto-scroll event log to show highlighted entry
-                        visible_count = (_EVENT_LOG_H - 26) // 16
+                        _cur_event_log_h = _EVENT_LOG_H_ENLARGED if self.event_log_enlarged else _EVENT_LOG_H
+                        visible_count = (_cur_event_log_h - 26) // 16
                         total = len(self.event_log)
                         if total > visible_count:
                             # scroll_offset=0 shows last entries; we want log_idx visible
@@ -677,8 +692,12 @@ class GameScene:
             if self.popup_manager.has_popups():
                 self.popup_manager.handle_right_click(
                     event.pos, self.small_font, SCREEN_WIDTH)
+                if self.tutorial:
+                    self.tutorial.notify_action("tooltip_unfrozen", {})
             else:
                 self._try_pin_hovered_tooltip(event.pos)
+                if self.tutorial:
+                    self.tutorial.notify_action("tooltip_frozen", {})
 
     def _handle_action_button(self, text: str):
         if self.ejection_pending:
@@ -966,7 +985,7 @@ class GameScene:
                     vp_pos = self.ui_renderer.vp_positions.get(sid)
                     if vp_pos:
                         self.animation.add_effect_animation(TextAnimation(
-                            "+1 VP (Swell)", vp_pos[0], vp_pos[1] + 16,
+                            "+10 VP (Swell)", vp_pos[0], vp_pos[1] + 16,
                             (220, 200, 60),
                             delay=0.0, duration=3.0, drift_pixels=40,
                             direction=1, screen_space=True,
@@ -1157,7 +1176,7 @@ class GameScene:
                 self.submit_button = Button(
                     pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
                     "Swell", (140, 110, 20),
-                    tooltip="No Guidance targets available.\nSwell to gain 1 VP.",
+                    tooltip="No Guidance targets available.\nSwell to gain 10 VP.",
                     tooltip_always=True,
                 )
             else:
@@ -1168,7 +1187,8 @@ class GameScene:
 
         elif self.phase == Phase.AGENDA_PHASE.value and action == "choose_agenda":
             hand = self.phase_options.get("hand", [])
-            self.agenda_hand = hand
+            _agenda_order = {"trade": 0, "steal": 1, "expand": 2, "change": 3}
+            self.agenda_hand = sorted(hand, key=lambda c: _agenda_order.get(c.get("agenda_type", ""), 99))
             self.selected_agenda_index = -1
             self.submit_button = Button(
                 pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
@@ -1697,7 +1717,7 @@ class GameScene:
         faction_id = play_info["faction"]
         fname = faction_full_name(faction_id)
         agenda = play_info["agenda"].title()
-        verb = "randomly plays" if play_info["source"] == "random" else "plays"
+        verb = "randomly play" if play_info["source"] == "random" else "play"
         guided_part = ""
         spirit_id = play_info.get("spirit")
         if spirit_id:
@@ -1725,7 +1745,7 @@ class GameScene:
 
         if etype == "expand":
             cost = resolution_event.get("cost", 0)
-            return f"{fname} {verb} {agenda}{guided_part} and expands territory for {cost} gold."
+            return f"{fname} {verb} {agenda}{guided_part} and expand territory for {cost} gold."
 
         if etype == "expand_failed":
             gained = resolution_event.get("gold_gained", 0)
@@ -1733,7 +1753,7 @@ class GameScene:
 
         if etype == "change":
             mod = resolution_event.get("modifier", "?")
-            return f"{fname} {verb} {agenda}{guided_part} and upgrades {mod}."
+            return f"{fname} {verb} {agenda}{guided_part} and upgrade {mod}."
 
         return f"{fname} {verb} {agenda}{guided_part}."
 
@@ -1867,9 +1887,11 @@ class GameScene:
         rects.append((pygame.Rect(0, 0, SCREEN_WIDTH, 40), _WEIGHT_TEXT))
         # Faction overview strip
         rects.append((pygame.Rect(0, 42, SCREEN_WIDTH, 55), _WEIGHT_TEXT))
-        # Event log (new position)
-        _ev_log_y = 102 + _FACTION_PANEL_MAX_H + 4 + _SPIRIT_PANEL_MAX_H + 4
-        rects.append((pygame.Rect(_FACTION_PANEL_X, _ev_log_y, _PANEL_W, _EVENT_LOG_H), _WEIGHT_TEXT))
+        # Event log (dynamic height)
+        _ev_cur_h = _EVENT_LOG_H_ENLARGED if self.event_log_enlarged else _EVENT_LOG_H
+        _ev_fp_h = _FACTION_PANEL_MAX_H + _EVENT_LOG_H - _ev_cur_h
+        _ev_log_y = 102 + _ev_fp_h + 4 + _SPIRIT_PANEL_MAX_H + 4
+        rects.append((pygame.Rect(_FACTION_PANEL_X, _ev_log_y, _PANEL_W, _ev_cur_h), _WEIGHT_TEXT))
         # Faction panel
         fp = self.ui_renderer.faction_panel_rect
         if fp:
@@ -2028,9 +2050,11 @@ class GameScene:
         # Draw screen-space effect animations (gold text overlays)
         self.orchestrator.render_effect_animations(screen, screen_space_only=True, small_font=self.small_font)
 
-        # Right column layout constants (computed here for clarity)
-        _spirit_panel_y = 102 + _FACTION_PANEL_MAX_H + 4   # = 406
-        _event_log_y = _spirit_panel_y + _SPIRIT_PANEL_MAX_H + 4  # = 605
+        # Right column layout (dynamic: event log may be enlarged, shrinking faction panel)
+        _cur_event_log_h = _EVENT_LOG_H_ENLARGED if self.event_log_enlarged else _EVENT_LOG_H
+        _cur_faction_panel_h = _FACTION_PANEL_MAX_H + _EVENT_LOG_H - _cur_event_log_h
+        _spirit_panel_y = 102 + _cur_faction_panel_h + 4
+        _event_log_y = _spirit_panel_y + _SPIRIT_PANEL_MAX_H + 4
 
         # Draw spirit panel OR faction panel (top of right column)
         self.panel_change_rects = []
@@ -2072,7 +2096,7 @@ class GameScene:
                     all_factions=self.factions,
                     faction_order=self.faction_order,
                     scroll_offset=self.faction_panel_scroll_offset,
-                    max_height=_FACTION_PANEL_MAX_H,
+                    max_height=_cur_faction_panel_h,
                 )
             else:
                 self.ui_renderer.faction_panel_rect = None
@@ -2098,10 +2122,11 @@ class GameScene:
         # Draw event log (bottom of right column)
         self.ui_renderer.draw_event_log(
             screen, self.event_log,
-            _FACTION_PANEL_X, _event_log_y, _PANEL_W, _EVENT_LOG_H,
+            _FACTION_PANEL_X, _event_log_y, _PANEL_W, _cur_event_log_h,
             scroll_offset=self.event_log_scroll_offset,
             highlight_log_idx=self.highlighted_log_index,
             h_scroll_offset=self.event_log_h_scroll_offset,
+            enlarged=self.event_log_enlarged,
         )
 
         # Draw waiting indicator near confirm button area, only after player has submitted
@@ -2290,14 +2315,12 @@ class GameScene:
 
         # Tutorial overlay (drawn after game-over panel, before tooltips)
         if self.tutorial:
-            _tut_spirit_panel_y = 102 + _FACTION_PANEL_MAX_H + 4
-            _tut_event_log_y = _tut_spirit_panel_y + _SPIRIT_PANEL_MAX_H + 4
             tut_rects = {
-                "faction_info": pygame.Rect(_FACTION_PANEL_X, 102, _PANEL_W, _FACTION_PANEL_MAX_H),
+                "faction_info": pygame.Rect(_FACTION_PANEL_X, 102, _PANEL_W, _cur_faction_panel_h),
                 "spirit_panel": pygame.Rect(
-                    _FACTION_PANEL_X, _tut_spirit_panel_y, _PANEL_W, _SPIRIT_PANEL_MAX_H),
+                    _FACTION_PANEL_X, _spirit_panel_y, _PANEL_W, _SPIRIT_PANEL_MAX_H),
                 "event_log": pygame.Rect(
-                    _FACTION_PANEL_X, _tut_event_log_y, _PANEL_W, _EVENT_LOG_H),
+                    _FACTION_PANEL_X, _event_log_y, _PANEL_W, _cur_event_log_h),
             }
             for fid, r in self.ribbon_faction_rects.items():
                 tut_rects[f"ribbon_{fid}"] = r
@@ -2404,27 +2427,27 @@ class GameScene:
                       f"currently in the custody of {faction_name}")
             if idol_type == IdolType.BATTLE:
                 if worship_name:
-                    vp_line = (f"When {faction_name} wins a War, the Spirit they "
+                    vp_line = (f"When {faction_name} win a War, the Spirit they "
                                f"Worship - {worship_name} - gains {BATTLE_IDOL_VP} VP "
                                f"at the end of the turn.")
                 else:
-                    vp_line = (f"When {faction_name} wins a War and Worships a Spirit, "
+                    vp_line = (f"When {faction_name} win a War and Worship a Spirit, "
                                f"that Spirit gains {BATTLE_IDOL_VP} VP at the end of the turn.")
             elif idol_type == IdolType.AFFLUENCE:
                 if worship_name:
-                    vp_line = (f"When {faction_name} gains gold, the Spirit they "
+                    vp_line = (f"When {faction_name} gain gold, the Spirit they "
                                f"Worship - {worship_name} - gains {AFFLUENCE_IDOL_VP} VP "
                                f"at the end of the turn.")
                 else:
-                    vp_line = (f"When {faction_name} gains gold and Worships a Spirit, "
+                    vp_line = (f"When {faction_name} gain gold and Worship a Spirit, "
                                f"that Spirit gains {AFFLUENCE_IDOL_VP} VP at the end of the turn.")
             else:  # SPREAD
                 if worship_name:
-                    vp_line = (f"When {faction_name} gains a Territory, the Spirit they "
+                    vp_line = (f"When {faction_name} gain a Territory, the Spirit they "
                                f"Worship - {worship_name} - gains {SPREAD_IDOL_VP} VP "
                                f"at the end of the turn.")
                 else:
-                    vp_line = (f"When {faction_name} gains a Territory and Worships a Spirit, "
+                    vp_line = (f"When {faction_name} gain a Territory and Worship a Spirit, "
                                f"that Spirit gains {SPREAD_IDOL_VP} VP at the end of the turn.")
         else:
             # Idol is on neutral ground
@@ -2578,8 +2601,8 @@ class GameScene:
             can_place_idol = bool(self.idol_buttons) and bool(self.phase_options.get("neutral_hexes"))
             can_swell = self.phase_options.get("can_swell", False)
             if can_swell:
-                # Swell is always available — no guidance selection required
-                self.submit_button.enabled = True
+                # Swell requires placing an idol first if idol placement is available
+                self.submit_button.enabled = has_idol if can_place_idol else True
             elif can_guide and can_place_idol:
                 self.submit_button.enabled = has_guide and has_idol
             else:
@@ -2601,15 +2624,24 @@ class GameScene:
             # Disabled tooltip: explain what's still needed
             if not self.submit_button.enabled:
                 missing = []
-                if can_guide and not has_guide:
-                    missing.append("a Faction to Guide")
-                if can_place_idol:
+                if can_swell:
+                    # Swell disabled because idol not yet placed
                     if not self.selected_idol_type and not self.selected_hex:
-                        missing.append("an Idol type and a hex location")
+                        missing.append("an Idol type and a hex location before Swelling")
                     elif not self.selected_idol_type:
-                        missing.append("an Idol type")
+                        missing.append("an Idol type before Swelling")
                     elif not self.selected_hex:
-                        missing.append("a hex location for your Idol")
+                        missing.append("a hex location for your Idol before Swelling")
+                else:
+                    if can_guide and not has_guide:
+                        missing.append("a Faction to Guide")
+                    if can_place_idol:
+                        if not self.selected_idol_type and not self.selected_hex:
+                            missing.append("an Idol type and a hex location")
+                        elif not self.selected_idol_type:
+                            missing.append("an Idol type")
+                        elif not self.selected_hex:
+                            missing.append("a hex location for your Idol")
                 if missing:
                     self.submit_button.tooltip = "Still needed: " + ", ".join(missing)
                 else:
@@ -2648,6 +2680,8 @@ class GameScene:
             screen.blit(title, (title_x, 102))
 
             modifiers = self._get_current_faction_modifiers()
+            faction_data = self.factions.get(faction_id, {})
+            faction_territories = len(faction_data.get("territories", []))
             self.ui_renderer.draw_card_hand(
                 screen, self.agenda_hand,
                 self.selected_agenda_index,
@@ -2655,6 +2689,7 @@ class GameScene:
                 modifiers=modifiers,
                 card_images=agenda_card_images,
                 vertical=True,
+                territories=faction_territories,
             )
 
         if self.submit_button:

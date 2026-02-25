@@ -40,12 +40,12 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
 
     elif etype == "agenda_chosen":
         fname = faction_full_name(event["faction"])
-        event_log.append(f"{fname} plays {event['agenda']}")
+        event_log.append(f"{fname} play {event['agenda']}")
         faction_agendas[event["faction"]] = event["agenda"]
 
     elif etype == "agenda_random":
         fname = faction_full_name(event["faction"])
-        event_log.append(f"{fname} randomly plays {event['agenda']}")
+        event_log.append(f"{fname} randomly play {event['agenda']}")
         faction_agendas[event["faction"]] = event["agenda"]
 
     elif etype == "steal":
@@ -88,7 +88,7 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
     elif etype == "change_draw":
         fname = faction_full_name(event["faction"])
         cards = event.get("cards", [])
-        event_log.append(f"{fname} draws Change: {', '.join(cards)}")
+        event_log.append(f"{fname} draw Change: {', '.join(cards)}")
 
     elif etype == "war_erupted":
         fa = faction_full_name(event["faction_a"])

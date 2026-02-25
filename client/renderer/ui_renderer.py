@@ -163,6 +163,7 @@ class UIRenderer:
         self.panel_war_rect: pygame.Rect | None = None
         self.panel_faction_id: str | None = None
         self.faction_panel_rect: pygame.Rect | None = None
+        self.event_log_expand_rect: pygame.Rect | None = None
 
     def _get_font(self, size=16):
         return pygame.font.SysFont("consolas", size)
@@ -1001,7 +1002,8 @@ class UIRenderer:
                 "worship": worship_rects, "affinity": affinity_rect}
 
     def _build_card_description(self, agenda_type: str, modifiers: dict,
-                                is_spoils: bool = False) -> list[str]:
+                                is_spoils: bool = False,
+                                territories: int = 0) -> list[str]:
         """Build detailed description lines for an agenda card based on modifiers."""
         steal_mod = modifiers.get("steal", 0)
         trade_mod = modifiers.get("trade", 0)
@@ -1014,6 +1016,7 @@ class UIRenderer:
                 "(free)",
             ]
 
+        expand_cost = max(0, territories - expand_mod)
         descs = {
             "steal": [
                 f"-{1 + steal_mod} neighbor regard,",
@@ -1026,7 +1029,7 @@ class UIRenderer:
                 f"+{1 + trade_mod} regard/trader",
             ],
             "expand": [
-                f"Cost: terr-{expand_mod}g",
+                f"Cost: {expand_cost}g",
                 "Claim neutral hex",
                 f"Fail: +{1 + expand_mod}g",
             ],
@@ -1063,7 +1066,8 @@ class UIRenderer:
                        card_images: dict | None = None,
                        is_spoils: bool = False,
                        show_preview_plus: bool = False,
-                       vertical: bool = False) -> list[pygame.Rect]:
+                       vertical: bool = False,
+                       territories: int = 0) -> list[pygame.Rect]:
         """Draw clickable agenda cards. Returns list of card rects.
 
         Each card dict should have "agenda_type". May optionally have
@@ -1116,7 +1120,7 @@ class UIRenderer:
                             surface.blit(faded_surf, (plus_x, img_y + 2 + mod_count * (plus_size + 2)))
 
                 desc_lines = card.get("description") or self._build_card_description(
-                    agenda_type, modifiers, is_spoils=is_spoils)
+                    agenda_type, modifiers, is_spoils=is_spoils, territories=territories)
                 for j, line in enumerate(desc_lines):
                     desc_text = effect_font.render(line, True, (160, 170, 190))
                     surface.blit(desc_text, (cx + card_w // 2 - desc_text.get_width() // 2, desc_y + j * 13))
@@ -1161,7 +1165,7 @@ class UIRenderer:
 
                 # Detailed description (custom or auto-generated)
                 desc_lines = card.get("description") or self._build_card_description(
-                    agenda_type, modifiers, is_spoils=is_spoils)
+                    agenda_type, modifiers, is_spoils=is_spoils, territories=territories)
                 for j, line in enumerate(desc_lines):
                     desc_text = effect_font.render(line, True, (160, 170, 190))
                     surface.blit(desc_text, (cx + card_w // 2 - desc_text.get_width() // 2, desc_y + j * 15))
@@ -1172,7 +1176,8 @@ class UIRenderer:
                        x: int, y: int, width: int, height: int,
                        scroll_offset: int = 0,
                        highlight_log_idx: int = None,
-                       h_scroll_offset: int = 0):
+                       h_scroll_offset: int = 0,
+                       enlarged: bool = False):
         """Draw scrollable event log."""
         panel_rect = pygame.Rect(x, y, width, height)
         pygame.draw.rect(surface, (20, 20, 30), panel_rect, border_radius=4)
@@ -1180,6 +1185,17 @@ class UIRenderer:
 
         header = self.small_font.render("Event Log", True, (150, 150, 170))
         surface.blit(header, (x + 8, y + 4))
+
+        # Expand/collapse toggle button
+        toggle_label = "\u25bc" if enlarged else "\u25b2"
+        toggle_surf = self.small_font.render(toggle_label, True, (120, 120, 160))
+        toggle_x = x + width - toggle_surf.get_width() - 8
+        toggle_y = y + 4
+        self.event_log_expand_rect = pygame.Rect(toggle_x - 2, toggle_y - 2,
+                                                  toggle_surf.get_width() + 4,
+                                                  toggle_surf.get_height() + 4)
+        pygame.draw.rect(surface, (40, 40, 55), self.event_log_expand_rect, border_radius=2)
+        surface.blit(toggle_surf, (toggle_x, toggle_y))
 
         visible_count = (height - 26) // 16
         total = len(events)

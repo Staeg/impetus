@@ -58,12 +58,15 @@ class TutorialManager:
 
         # Internal flow flags
         self._step_pending_show = False   # step is waiting for a trigger before shown
-        self._expecting_phase_result = False  # guards animations_done for step 11
+        self._expecting_phase_result = False  # guards animations_done for step 12
+
+        # Hover/freeze action gate tracking (step 3)
+        self._hover_freeze_done: set[str] = set()
 
         self._steps = self._build_steps()
 
     # ------------------------------------------------------------------ #
-    # Step definitions  (17 steps: 0–16)
+    # Step definitions  (18 steps: 0–17)
     # ------------------------------------------------------------------ #
 
     def _build_steps(self) -> list[TutorialStep]:
@@ -101,7 +104,22 @@ class TutorialManager:
                 button_label="Continue",
                 highlights=["event_log"],
             ),
-            # Step 3: factions (action gate: select_faction; NOT hard-blocking)
+            # Step 3: hover tooltips and right-click freeze (action gate: hover_and_freeze)
+            TutorialStep(
+                title="Hover Tooltips",
+                text=(
+                    "Many elements show a tooltip when hovered — try hovering over a Faction "
+                    "name, an idol icon, or any panel value.\n\n"
+                    "Right-click while hovering to freeze the tooltip in place. "
+                    "You can then hover other elements for nested popups.\n"
+                    "Right-click again to close the frozen tooltip.\n\n"
+                    "Try it: hover something, right-click to freeze it, then right-click "
+                    "to unfreeze. Click Continue when done."
+                ),
+                button_label="Continue",
+                action_gate="hover_and_freeze",
+            ),
+            # Step 4 (was 3): factions (action gate: select_faction; NOT hard-blocking)
             TutorialStep(
                 title="Factions",
                 text=(
@@ -114,7 +132,7 @@ class TutorialManager:
                 highlights=["ribbon", "guidance_btns"],
                 action_gate="select_faction",
             ),
-            # Step 4: regard and gold (hard-blocking; highlights faction info panel)
+            # Step 5 (was 4): regard and gold (hard-blocking; highlights faction info panel)
             TutorialStep(
                 title="Regard and Gold",
                 text=(
@@ -126,7 +144,7 @@ class TutorialManager:
                 button_label="Continue",
                 highlights=["faction_info"],
             ),
-            # Step 5: tracking changes (action gate: click_delta; NOT hard-blocking)
+            # Step 6 (was 5): tracking changes (action gate: click_delta; NOT hard-blocking)
             TutorialStep(
                 title="Tracking Changes",
                 text=(
@@ -138,7 +156,7 @@ class TutorialManager:
                 button_label="Continue",
                 action_gate="click_delta",
             ),
-            # Step 6: guidance and worship (action gate: guidance_select; NOT hard-blocking)
+            # Step 7 (was 6): guidance and worship (action gate: guidance_select; NOT hard-blocking)
             # Game Confirm is blocked via is_blocking_submit() until Continue is clicked.
             TutorialStep(
                 title="Guidance and Worship",
@@ -152,7 +170,7 @@ class TutorialManager:
                 highlights=["guidance_btns"],
                 action_gate="guidance_select",
             ),
-            # Step 7: idols (shown immediately after step 6 Continue; game_confirm via vagrant submit)
+            # Step 8 (was 7): idols (shown immediately after step 7 Continue; game_confirm via vagrant submit)
             TutorialStep(
                 title="Idols",
                 text=(
@@ -167,7 +185,7 @@ class TutorialManager:
                 ),
                 button_label=None,  # game_confirm: vagrant submission advances tutorial
             ),
-            # Step 8: agenda types (pending: agenda_phase_started; hard-blocking)
+            # Step 9 (was 8): agenda types (pending: agenda_phase_started; hard-blocking)
             TutorialStep(
                 title="Agenda Types",
                 text=(
@@ -180,7 +198,7 @@ class TutorialManager:
                 ),
                 button_label="Continue",
             ),
-            # Step 9: modifiers (shown immediately after step 8 Continue; hard-blocking)
+            # Step 10 (was 9): modifiers (shown immediately after step 9 Continue; hard-blocking)
             TutorialStep(
                 title="Modifiers and Habitats",
                 text=(
@@ -192,7 +210,7 @@ class TutorialManager:
                 button_label="Continue",
                 highlights=["ribbon", "agenda_cards_area"],
             ),
-            # Step 10: agenda resolution (pending: agenda_phase_started via _refire; game_confirm)
+            # Step 11 (was 10): agenda resolution (pending: agenda_phase_started via _refire; game_confirm)
             TutorialStep(
                 title="Agenda Resolution",
                 text=(
@@ -202,7 +220,7 @@ class TutorialManager:
                 ),
                 button_label=None,  # game_confirm: player clicks game Confirm
             ),
-            # Step 11: watch and learn (pending: animations_done after step 10; hard-blocking)
+            # Step 12 (was 11): watch and learn (pending: animations_done after step 11; hard-blocking)
             TutorialStep(
                 title="Watch and Learn",
                 text=(
@@ -212,7 +230,7 @@ class TutorialManager:
                 ),
                 button_label="Continue",
             ),
-            # Step 12: influence (pending: agenda_phase_started with draw_count<=3; game_confirm)
+            # Step 13 (was 12): influence (pending: agenda_phase_started with draw_count<=3; game_confirm)
             # Shows only once influence has visibly dropped (draw_count < starting 4).
             TutorialStep(
                 title="Influence",
@@ -225,7 +243,7 @@ class TutorialManager:
                 ),
                 button_label=None,  # game_confirm
             ),
-            # Step 13: final choice (pending: agenda_phase_started with draw_count<=2; game_confirm)
+            # Step 14 (was 13): final choice (pending: agenda_phase_started with draw_count<=2; game_confirm)
             # Shows only when the player is actually on their last agenda choice before ejection.
             TutorialStep(
                 title="Final Choice",
@@ -236,7 +254,7 @@ class TutorialManager:
                 ),
                 button_label=None,  # game_confirm
             ),
-            # Step 14: ejection / agenda pool (pending: ejection_phase_started; game_confirm)
+            # Step 15 (was 14): ejection / agenda pool (pending: ejection_phase_started; game_confirm)
             TutorialStep(
                 title="Agenda Pool",
                 text=(
@@ -248,7 +266,7 @@ class TutorialManager:
                 ),
                 button_label=None,  # game_confirm
             ),
-            # Step 15: worship recap (hard-blocking)
+            # Step 16 (was 15): worship recap (hard-blocking)
             TutorialStep(
                 title="Worship Recap",
                 text=(
@@ -260,7 +278,7 @@ class TutorialManager:
                 ),
                 button_label="Continue",
             ),
-            # Step 16: good luck (Finish; hard-blocking)
+            # Step 17 (was 16): good luck (Finish; hard-blocking)
             TutorialStep(
                 title="Good Luck",
                 text=(
@@ -277,7 +295,7 @@ class TutorialManager:
     # Hard-blocking steps: block all game input when panel is shown
     # ------------------------------------------------------------------ #
 
-    _HARD_BLOCKING_STEPS = frozenset({0, 1, 2, 4, 8, 9, 15, 16})
+    _HARD_BLOCKING_STEPS = frozenset({0, 1, 2, 5, 9, 10, 16, 17})
 
     def is_hard_blocking(self) -> bool:
         if not self.active or not self._shown:
@@ -296,7 +314,7 @@ class TutorialManager:
         Blocks Confirm during all pre-Idols steps so the player can't skip the
         tutorial intro. Step 7 (Idols) is the first step where Confirm is meaningful.
         """
-        return self.active and self._shown and self.step_idx < 7
+        return self.active and self._shown and self.step_idx < 8
 
     # ------------------------------------------------------------------ #
     # Activation
@@ -322,6 +340,7 @@ class TutorialManager:
         self._step_pending_show = False
         self._expecting_phase_result = False
         self._dynamic_text = None
+        self._hover_freeze_done = set()
 
     # ------------------------------------------------------------------ #
     # State transitions
@@ -340,9 +359,9 @@ class TutorialManager:
             return
 
         # Steps that need an external trigger before showing.
-        # Steps 7 and 9 show immediately (not pending) — 7 after step 6 Continue,
-        # 9 after step 8 Continue.
-        if new_idx in (1, 8, 10, 11, 12, 13, 14):
+        # Steps 8 and 10 show immediately (not pending) — 8 after step 7 Continue,
+        # 10 after step 9 Continue.
+        if new_idx in (1, 9, 11, 12, 13, 14, 15):
             self._shown = False
             self._step_pending_show = True
         else:
@@ -370,7 +389,7 @@ class TutorialManager:
                 return True
             return False
 
-        # Return to Menu button (step 16 / Finish step only)
+        # Return to Menu button (step 17 / Finish step only)
         if self._shown and self._return_to_menu_rect and self._return_to_menu_rect.collidepoint(pos):
             self.return_to_menu_requested = True
             self.active = False
@@ -403,24 +422,24 @@ class TutorialManager:
             # Release animation block; step 1 shows after turn-1 animations complete
             self.block_animations = False
             self._advance_to(1)
-        elif idx in (1, 2, 3, 4, 5):
+        elif idx in (1, 2, 3, 4, 5, 6):
             self._advance_to(idx + 1)
-        elif idx == 6:
-            # Step 7 (Idols) shows immediately; player can now interact with vagrant UI
-            self._advance_to(7)
-        elif idx == 8:
-            # Step 9 (Modifiers) shows immediately
-            self._advance_to(9)
+        elif idx == 7:
+            # Step 8 (Idols) shows immediately; player can now interact with vagrant UI
+            self._advance_to(8)
         elif idx == 9:
-            # Step 10 shows via _refire of agenda_phase_started; cards already visible
+            # Step 10 (Modifiers) shows immediately
             self._advance_to(10)
-        elif idx == 11:
+        elif idx == 10:
+            # Step 11 shows via _refire of agenda_phase_started; cards already visible
+            self._advance_to(11)
+        elif idx == 12:
             # Release phase UI block so turn-3 vagrant phase can appear
             self.block_phase_ui = False
-            self._advance_to(12)
-        elif idx == 15:
-            self._advance_to(16)
+            self._advance_to(13)
         elif idx == 16:
+            self._advance_to(17)
+        elif idx == 17:
             self.active = False
             self._shown = False
             self.hide_phase_ui = False
@@ -435,41 +454,59 @@ class TutorialManager:
         idx = self.step_idx
 
         if action_type == "faction_selected":
-            if idx == 3 and not self.action_satisfied:
+            if idx == 4 and not self.action_satisfied:
                 self.action_satisfied = True
 
         elif action_type == "delta_clicked":
-            if idx == 5 and not self.action_satisfied:
-                self.action_satisfied = True
-
-        elif action_type == "guidance_selected":
             if idx == 6 and not self.action_satisfied:
                 self.action_satisfied = True
 
+        elif action_type == "guidance_selected":
+            if idx == 7 and not self.action_satisfied:
+                self.action_satisfied = True
+
+        elif action_type == "tooltip_hovered":
+            if idx == 3 and not self.action_satisfied:
+                self._hover_freeze_done.add("hovered")
+                if self._hover_freeze_done >= {"hovered", "frozen", "unfrozen"}:
+                    self.action_satisfied = True
+
+        elif action_type == "tooltip_frozen":
+            if idx == 3 and not self.action_satisfied:
+                self._hover_freeze_done.add("frozen")
+                if self._hover_freeze_done >= {"hovered", "frozen", "unfrozen"}:
+                    self.action_satisfied = True
+
+        elif action_type == "tooltip_unfrozen":
+            if idx == 3 and not self.action_satisfied:
+                self._hover_freeze_done.add("unfrozen")
+                if self._hover_freeze_done >= {"hovered", "frozen", "unfrozen"}:
+                    self.action_satisfied = True
+
         elif action_type == "vagrant_submitted":
             # Advance past idols/guidance step to wait for the agenda phase.
-            # Handles both the normal path (idx==7, player read Idols step) and
-            # the early-submit edge case (idx==6, player clicked Confirm before
+            # Handles both the normal path (idx==8, player read Idols step) and
+            # the early-submit edge case (idx==7, player clicked Confirm before
             # clicking tutorial Continue — without this guard the tutorial would
-            # get stuck at step 6 forever).
-            if idx in (6, 7):
-                self._advance_to(8)  # pending: agenda_phase_started
+            # get stuck at step 7 forever).
+            if idx in (7, 8):
+                self._advance_to(9)  # pending: agenda_phase_started
 
         elif action_type == "agenda_submitted":
-            if idx == 10:
+            if idx == 11:
                 self.first_time_triggers_enabled = True
-                # Block turn-3 vagrant phase until step 11 (Watch and Learn) Continue
+                # Block turn-3 vagrant phase until step 12 (Watch and Learn) Continue
                 self.block_phase_ui = True
                 self._expecting_phase_result = True
-                self._advance_to(11)
-            elif idx == 12:
-                self._advance_to(13)
+                self._advance_to(12)
             elif idx == 13:
                 self._advance_to(14)
+            elif idx == 14:
+                self._advance_to(15)
 
         elif action_type == "ejection_submitted":
-            if idx == 14:
-                self._advance_to(15)
+            if idx == 15:
+                self._advance_to(16)
 
     def notify_game_event(self, event_type: str, data: dict):
         if not self.active:
@@ -484,21 +521,21 @@ class TutorialManager:
             if idx == 1 and self._step_pending_show:
                 self._step_pending_show = False
                 self._shown = True
-            # Step 11: show after turn-2 agenda animations (guarded until PHASE_RESULT arrives)
-            elif idx == 11 and self._step_pending_show and not self._expecting_phase_result:
+            # Step 12: show after turn-2 agenda animations (guarded until PHASE_RESULT arrives)
+            elif idx == 12 and self._step_pending_show and not self._expecting_phase_result:
                 self._step_pending_show = False
                 self._shown = True
-                # block_phase_ui is already True (set at agenda_submitted for step 10)
+                # block_phase_ui is already True (set at agenda_submitted for step 11)
 
         elif event_type == "agenda_phase_started":
             draw_count = data.get("draw_count", 2)
-            if idx == 8 and self._step_pending_show:
+            if idx == 9 and self._step_pending_show:
                 self._step_pending_show = False
                 self._shown = True
-            elif idx == 10 and self._step_pending_show:
+            elif idx == 11 and self._step_pending_show:
                 self._step_pending_show = False
                 self._shown = True
-            elif idx == 12 and self._step_pending_show and draw_count <= 3:
+            elif idx == 13 and self._step_pending_show and draw_count <= 3:
                 # Show once influence has visibly dropped (starting draw_count is 4)
                 self._step_pending_show = False
                 self._shown = True
@@ -509,22 +546,22 @@ class TutorialManager:
                     f"When Influence reaches 0, you'll be ejected.\n\n"
                     f"Choose an Agenda and click Confirm."
                 )
-            elif idx == 13 and self._step_pending_show and draw_count <= 2:
+            elif idx == 14 and self._step_pending_show and draw_count <= 2:
                 # Show only when the player is truly on their last agenda choice
                 self._step_pending_show = False
                 self._shown = True
 
         elif event_type == "ejection_phase_started":
-            if idx == 14 and self._step_pending_show:
+            if idx == 15 and self._step_pending_show:
                 self._step_pending_show = False
                 self._shown = True
 
         elif event_type == "vagrant_phase_started":
             # If guidance was contested/lost last turn, the player is Vagrant again and
-            # the tutorial is stuck at step 8 pending (agenda_phase_started never fires
-            # for a Vagrant player). Revert to step 6 so they know to guide again.
-            if idx == 8 and self._step_pending_show:
-                self._advance_to(6)
+            # the tutorial is stuck at step 9 pending (agenda_phase_started never fires
+            # for a Vagrant player). Revert to step 7 so they know to guide again.
+            if idx == 9 and self._step_pending_show:
+                self._advance_to(7)
 
         elif event_type == "war_erupted":
             if (self.first_time_triggers_enabled
