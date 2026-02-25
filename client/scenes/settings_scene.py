@@ -1,0 +1,77 @@
+"""Settings scene: fullscreen toggle and other preferences."""
+
+import pygame
+from shared.constants import SCREEN_WIDTH, SCREEN_HEIGHT
+from client.renderer.ui_renderer import Button
+
+
+class SettingsScene:
+    def __init__(self, app):
+        self.app = app
+        self.font = pygame.font.SysFont("consolas", 16)
+        self.title_font = pygame.font.SysFont("consolas", 36)
+        self.small_font = pygame.font.SysFont("consolas", 14)
+
+        cx = SCREEN_WIDTH // 2
+        self.back_button = Button(
+            pygame.Rect(cx - 80, SCREEN_HEIGHT - 100, 160, 44),
+            "Back", (70, 70, 90)
+        )
+
+        # Checkbox rect for fullscreen toggle
+        self.checkbox_rect = pygame.Rect(cx - 110, SCREEN_HEIGHT // 2 - 16, 22, 22)
+        self.label_rect = pygame.Rect(cx - 80, SCREEN_HEIGHT // 2 - 16, 200, 22)
+
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEMOTION:
+            self.back_button.update(event.pos)
+
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self.app.set_scene("menu")
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            # Clicking checkbox or its label toggles fullscreen
+            toggle_rect = pygame.Rect(
+                self.checkbox_rect.x, self.checkbox_rect.y,
+                self.label_rect.right - self.checkbox_rect.x,
+                self.checkbox_rect.height
+            )
+            if toggle_rect.collidepoint(event.pos):
+                self.app.toggle_fullscreen()
+            elif self.back_button.clicked(event.pos):
+                self.app.set_scene("menu")
+
+    def update(self, dt):
+        pass
+
+    def render(self, screen: pygame.Surface):
+        screen.fill((15, 15, 25))
+
+        title = self.title_font.render("Settings", True, (200, 180, 140))
+        screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 80))
+
+        cx = SCREEN_WIDTH // 2
+        cy = SCREEN_HEIGHT // 2
+
+        # Fullscreen checkbox
+        cb = self.checkbox_rect
+        pygame.draw.rect(screen, (40, 40, 55), cb, border_radius=3)
+        pygame.draw.rect(screen, (100, 100, 140), cb, 1, border_radius=3)
+        if self.app.fullscreen:
+            # Draw X inside checkbox
+            margin = 4
+            pygame.draw.line(screen, (180, 220, 180),
+                             (cb.x + margin, cb.y + margin),
+                             (cb.right - margin, cb.bottom - margin), 2)
+            pygame.draw.line(screen, (180, 220, 180),
+                             (cb.right - margin, cb.y + margin),
+                             (cb.x + margin, cb.bottom - margin), 2)
+
+        label = self.font.render("Fullscreen", True, (200, 200, 220))
+        screen.blit(label, (cb.right + 10, cb.y + (cb.height - label.get_height()) // 2))
+
+        hint = self.small_font.render("F11 to toggle fullscreen from any screen", True, (90, 90, 110))
+        screen.blit(hint, (cx - hint.get_width() // 2, cy + 40))
+
+        self.back_button.draw(screen, self.font)

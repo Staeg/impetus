@@ -10,6 +10,8 @@ from client.scenes.menu import MenuScene
 from client.scenes.lobby import LobbyScene
 from client.scenes.game_scene import GameScene
 from client.scenes.results import ResultsScene
+from client.scenes.settings_scene import SettingsScene
+from client.settings import load_settings, save_settings
 
 
 class App:
@@ -17,7 +19,9 @@ class App:
 
     def __init__(self, server_host: str = DEFAULT_HOST, server_port: int = DEFAULT_PORT):
         pygame.init()
-        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        settings = load_settings()
+        self.fullscreen: bool = settings.get("fullscreen", True)
+        self.screen = self._apply_display_mode()
         pygame.display.set_caption(TITLE)
         pygame.key.set_repeat(400, 35)
         self.clock = pygame.time.Clock()
@@ -35,11 +39,24 @@ class App:
         self._init_scenes()
         self.set_scene("menu")
 
+    def _apply_display_mode(self) -> pygame.Surface:
+        if self.fullscreen:
+            return pygame.display.set_mode(
+                (SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN | pygame.SCALED
+            )
+        return pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+
+    def toggle_fullscreen(self):
+        self.fullscreen = not self.fullscreen
+        self.screen = self._apply_display_mode()
+        save_settings({"fullscreen": self.fullscreen})
+
     def _init_scenes(self):
         self.scenes["menu"] = MenuScene(self)
         self.scenes["lobby"] = LobbyScene(self)
         self.scenes["game"] = GameScene(self)
         self.scenes["results"] = ResultsScene(self)
+        self.scenes["settings"] = SettingsScene(self)
 
     def set_scene(self, scene_name: str):
         self.current_scene = self.scenes.get(scene_name)
@@ -70,6 +87,9 @@ class App:
                 if event.type == pygame.QUIT:
                     self.running = False
                     break
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+                    self.toggle_fullscreen()
+                    continue
                 if self.current_scene:
                     self.current_scene.handle_event(event)
 

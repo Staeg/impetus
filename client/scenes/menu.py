@@ -44,6 +44,10 @@ class MenuScene:
             pygame.Rect(cx - 120, cy + 110, 240, 50),
             "Join Game", (60, 80, 130)
         )
+        self.settings_button = Button(
+            pygame.Rect(cx - 120, cy + 180, 240, 50),
+            "Settings", (60, 60, 80)
+        )
 
         self.entering_name = True
         self.entering_code = False
@@ -62,6 +66,7 @@ class MenuScene:
             self.tutorial_button.update(event.pos)
             self.host_button.update(event.pos)
             self.join_button.update(event.pos)
+            self.settings_button.update(event.pos)
 
         if event.type == pygame.KEYDOWN:
             is_paste = (event.key == pygame.K_v and
@@ -142,6 +147,8 @@ class MenuScene:
             elif self.join_button.clicked(event.pos):
                 self.entering_code = True
                 self.room_code = ""
+            elif self.settings_button.clicked(event.pos):
+                self.app.set_scene("settings")
 
     def _apply_server_address(self):
         addr = self.server_address.strip()
@@ -284,6 +291,7 @@ class MenuScene:
         self.tutorial_button.draw(screen, self.font)
         self.host_button.draw(screen, self.font)
         self.join_button.draw(screen, self.font)
+        self.settings_button.draw(screen, self.font)
 
         if self.error_message:
             err = self.small_font.render(self.error_message, True, (255, 100, 100))
