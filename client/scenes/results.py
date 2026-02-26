@@ -1,5 +1,6 @@
 """End-of-game scoreboard."""
 
+from __future__ import annotations
 import pygame
 from shared.constants import SCREEN_WIDTH, SCREEN_HEIGHT
 

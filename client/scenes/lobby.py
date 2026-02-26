@@ -1,5 +1,6 @@
 """Pre-game lobby: player list, ready state, host controls."""
 
+from __future__ import annotations
 import pygame
 from shared.constants import MessageType, SCREEN_WIDTH, SCREEN_HEIGHT
 from client.renderer.ui_renderer import Button, draw_dotted_underline

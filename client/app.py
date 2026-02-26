@@ -1,10 +1,13 @@
 """Main PyGame loop, scene manager, event dispatch."""
 
+from __future__ import annotations
+import asyncio
+import sys
 import pygame
 from shared.constants import (
     SCREEN_WIDTH, SCREEN_HEIGHT, FPS, TITLE, MessageType, DEFAULT_HOST, DEFAULT_PORT,
 )
-from client.local_server import LocalServer
+from client.local_transport import LocalTransport
 from client.network import NetworkClient
 from client.scenes.menu import MenuScene
 from client.scenes.lobby import LobbyScene
@@ -31,7 +34,7 @@ class App:
         self.server_port = server_port
         self.network = NetworkClient()
         self.my_spirit_id = ""
-        self.local_server: LocalServer | None = None
+        self.local_transport: LocalTransport | None = None
         self.tutorial_mode: bool = False
 
         self.scenes: dict = {}
@@ -40,7 +43,11 @@ class App:
         self.set_scene("menu")
 
     def _apply_display_mode(self) -> pygame.Surface:
-        flags = pygame.SCALED
+        if sys.platform == "emscripten":
+            # SCALED conflicts with the CSS resize handler in WASM; use 0.
+            flags = 0
+        else:
+            flags = pygame.SCALED
         if self.fullscreen:
             flags |= pygame.FULLSCREEN
         return pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), flags)
@@ -48,7 +55,8 @@ class App:
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
         pygame.display.toggle_fullscreen()
-        save_settings({"fullscreen": self.fullscreen})
+        if sys.platform != "emscripten":
+            save_settings({"fullscreen": self.fullscreen})
 
     def _init_scenes(self):
         self.scenes["menu"] = MenuScene(self)
@@ -60,24 +68,25 @@ class App:
     def set_scene(self, scene_name: str):
         self.current_scene = self.scenes.get(scene_name)
 
-    def start_local_server(self) -> int:
-        """Start an embedded server on a free loopback port and return the port."""
-        self.local_server = LocalServer()
-        port = self.local_server.start()
-        self.server_host = "127.0.0.1"
-        self.server_port = port
-        return port
+    def start_local_transport(self) -> None:
+        if self.local_transport:
+            self.local_transport.stop()
+        transport = LocalTransport()
+        transport.start()
+        self.local_transport = transport
+        self.network = transport
 
-    def stop_local_server(self):
-        if self.local_server:
-            self.local_server.stop()
-            self.local_server = None
+    def stop_local_transport(self) -> None:
+        if self.local_transport:
+            self.local_transport.stop()
+            self.local_transport = None
+        self.network = NetworkClient()
 
     def connect_to_server(self):
         if not self.network.connected:
             self.network.connect(self.server_host, self.server_port)
 
-    def run(self):
+    async def run(self):
         while self.running:
             dt = self.clock.tick(FPS) / 1000.0
 
@@ -105,9 +114,10 @@ class App:
                 self.current_scene.render(self.screen)
 
             pygame.display.flip()
+            await asyncio.sleep(0)
 
         self.network.disconnect()
-        self.stop_local_server()
+        self.stop_local_transport()
         pygame.quit()
 
     def _handle_network_message(self, msg_type: MessageType, payload: dict):

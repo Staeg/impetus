@@ -7,8 +7,13 @@ import uuid
 import string
 import random
 from typing import Optional
-import websockets
-from websockets.asyncio.server import serve, ServerConnection
+try:
+    import websockets
+    from websockets.asyncio.server import serve, ServerConnection
+except ImportError:
+    websockets = None  # type: ignore
+    serve = None  # type: ignore
+    ServerConnection = None  # type: ignore
 
 from shared.constants import MessageType, Phase, SubPhase, AgendaType, VP_TO_WIN
 from shared.protocol import create_message, parse_message
@@ -134,8 +139,9 @@ class GameServer:
                                 {"message": "Server error processing action"}))
                 else:
                     await ws.send(create_message(MessageType.ERROR, {"message": "Not in a room"}))
-        except websockets.exceptions.ConnectionClosed:
-            pass
+        except Exception as e:
+            if not (websockets and isinstance(e, websockets.exceptions.ConnectionClosed)):
+                raise
         finally:
             if room_code and spirit_id:
                 room = self.rooms.get(room_code)
@@ -834,6 +840,7 @@ class GameServer:
         }))
 
     async def run(self):
+        from websockets.asyncio.server import serve
         async with serve(self.handle_connection, self.host, self.port):
             print(f"Server running on ws://{self.host}:{self.port}")
             await asyncio.Future()  # run forever

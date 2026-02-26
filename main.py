@@ -9,35 +9,43 @@ Usage:
 
 import sys
 import asyncio
+import pygame  # noqa: F401 — must be top-level so Pygbag pre-loads pygame-wasm
 
 
-def run_server(host: str = "localhost", port: int = 8765):
-    from server.server import main as server_main
-    print(f"Starting Impetus server on {host}:{port}")
-    asyncio.run(server_main(host, port))
-
-
-def run_client(host: str = "localhost", port: int = 8765):
-    from client.app import App
-    app = App(server_host=host, server_port=port)
-    app.run()
-
-
-def main():
+async def main():
     args = sys.argv[1:]
 
     if not args or args[0] == "client":
         host = args[1] if len(args) > 1 else "localhost"
         port = int(args[2]) if len(args) > 2 else 8765
-        run_client(host, port)
+        try:
+            print("[main] importing App")
+            from client.app import App
+            print("[main] creating App")
+            app = App(server_host=host, server_port=port)
+            print("[main] starting run loop")
+            await app.run()
+            print("[main] run loop ended")
+        except Exception:
+            import traceback
+            tb = traceback.format_exc()
+            print(tb)
+            # In WASM, show error as a browser alert so it's always visible
+            if sys.platform == "emscripten":
+                try:
+                    import js
+                    js.alert("Impetus error:\n" + tb[-800:])
+                except Exception:
+                    pass
     elif args[0] == "server":
+        from server.server import main as server_main
         host = args[1] if len(args) > 1 else "localhost"
         port = int(args[2]) if len(args) > 2 else 8765
-        run_server(host, port)
+        print(f"Starting Impetus server on {host}:{port}")
+        await server_main(host, port)
     else:
         print(__doc__)
         sys.exit(1)
 
 
-if __name__ == "__main__":
-    main()
+asyncio.run(main())

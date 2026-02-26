@@ -1,5 +1,6 @@
 """Main menu scene: host/join options."""
 
+from __future__ import annotations
 import pygame
 from shared.constants import MessageType, SCREEN_WIDTH, SCREEN_HEIGHT, DEFAULT_PORT
 from client.renderer.ui_renderer import Button
@@ -168,8 +169,7 @@ class MenuScene:
 
     def _start_single_player(self):
         self.app.tutorial_mode = False
-        self.app.start_local_server()
-        self.app.connect_to_server()
+        self.app.start_local_transport()
         self.app.network.send(MessageType.JOIN_GAME, {
             "player_name": self.player_name.strip(),
         })
@@ -183,8 +183,7 @@ class MenuScene:
         if lobby:
             lobby._tutorial_ready_sent = False
             lobby._tutorial_start_sent = False
-        self.app.start_local_server()
-        self.app.connect_to_server()
+        self.app.start_local_transport()
         self.app.network.send(MessageType.JOIN_GAME, {
             "player_name": self.player_name.strip(),
         })

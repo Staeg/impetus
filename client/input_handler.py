@@ -1,5 +1,6 @@
 """Mouse/keyboard mapping, hex picking, UI interaction."""
 
+from __future__ import annotations
 import pygame
 from shared.hex_utils import pixel_to_axial
 

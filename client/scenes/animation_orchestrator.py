@@ -1,5 +1,6 @@
 """Animation orchestration: creation and rendering of agenda/effect animations."""
 
+from __future__ import annotations
 import math
 import pygame
 from shared.constants import (

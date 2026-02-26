@@ -1,5 +1,6 @@
 """Load and cache agenda card images from graphics/ folder."""
 
+from __future__ import annotations
 import os
 import sys
 import pygame

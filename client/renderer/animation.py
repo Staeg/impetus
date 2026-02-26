@@ -1,5 +1,6 @@
 """Simple animation and tween system."""
 
+from __future__ import annotations
 import time
 
 

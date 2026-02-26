@@ -1,5 +1,6 @@
 """HUD, cards, faction info panels, phase indicators, event log."""
 
+from __future__ import annotations
 import math
 import pygame
 from shared.constants import (

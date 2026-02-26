@@ -6,7 +6,10 @@ import threading
 import queue
 import time
 from typing import Optional
-import websockets
+try:
+    import websockets
+except ImportError:
+    websockets = None  # type: ignore
 
 from shared.constants import MessageType
 from shared.protocol import create_message, parse_message
@@ -61,7 +64,9 @@ class NetworkClient:
                                 print(f"[net] Received: {msg_type.value}")
                             except Exception as e:
                                 print(f"[net] Parse error: {e}")
-                    except websockets.exceptions.ConnectionClosed:
+                    except Exception as e:
+                        if not (websockets and isinstance(e, websockets.exceptions.ConnectionClosed)):
+                            raise  # noqa: re-raise non-ConnectionClosed errors
                         print("[net] Connection closed")
                     finally:
                         self._connected = False

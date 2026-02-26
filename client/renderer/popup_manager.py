@@ -1,5 +1,6 @@
 """Pinnable popup system with nested hover regions."""
 
+from __future__ import annotations
 import dataclasses
 import pygame
 from client.renderer.ui_renderer import _wrap_text, _render_rich_line_with_keywords

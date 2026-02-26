@@ -1,5 +1,6 @@
 """Hex grid drawing, territory coloring, borders, idols."""
 
+from __future__ import annotations
 import pygame
 import math
 from shared.hex_utils import axial_to_pixel, hex_vertices, hex_neighbors

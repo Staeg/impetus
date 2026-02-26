@@ -24,6 +24,9 @@ def load_settings() -> dict:
 
 
 def save_settings(data: dict) -> None:
+    import sys
+    if sys.platform == "emscripten":
+        return  # No persistent storage in WASM
     path = _settings_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
