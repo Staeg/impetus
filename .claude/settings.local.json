@@ -29,7 +29,20 @@
       "Bash(git -C \"C:\\\\Users\\\\Stag\\\\impetus\" push origin v1.14 v1.15 v1.16)",
       "Bash(gh release create:*)",
       "Bash(find:*)",
-      "Bash(sort:*)"
+      "Bash(sort:*)",
+      "Bash(grep:*)",
+      "Bash(git status:*)",
+      "Bash(git stash:*)",
+      "Bash(turn\" explanation with a reference to the Contested hover region.:*)",
+      "Bash(cd:)",
+      "Bash(grep:)",
+      "Bash(git branch:*)",
+      "Bash(gh release:*)",
+      "Bash(git remote:*)",
+      "Bash(echo:*)",
+      "Bash(git config:*)",
+      "Bash(winget install:*)",
+      "Bash(export:*)"
     ]
   }
 }
