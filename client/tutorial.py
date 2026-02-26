@@ -200,15 +200,14 @@ class TutorialManager:
             ),
             # Step 10 (was 9): modifiers (shown immediately after step 9 Continue; hard-blocking)
             TutorialStep(
-                title="Modifiers and Habitats",
+                title="Modifiers",
                 text=(
-                    "Each Faction starts with Change modifiers based on their Habitat — "
+                    "Each Faction starts with 2 Change modifiers, indicated by a + on Agendas — "
                     "see the modifier icons on each faction's ribbon section.\n\n"
                     "Modifiers permanently increase the power of a specific Agenda. "
-                    "On the left, your Guided Faction's cards show these modifiers with a +."
                 ),
                 button_label="Continue",
-                highlights=["ribbon", "agenda_cards_area"],
+                highlights=["agenda_cards", "pool_icons"],
             ),
             # Step 11 (was 10): agenda resolution (pending: agenda_phase_started via _refire; game_confirm)
             TutorialStep(
@@ -468,19 +467,18 @@ class TutorialManager:
         elif action_type == "tooltip_hovered":
             if idx == 3 and not self.action_satisfied:
                 self._hover_freeze_done.add("hovered")
-                if self._hover_freeze_done >= {"hovered", "frozen", "unfrozen"}:
-                    self.action_satisfied = True
 
         elif action_type == "tooltip_frozen":
+            # Only fires when a tooltip was actually pinned (try_pin succeeded).
             if idx == 3 and not self.action_satisfied:
                 self._hover_freeze_done.add("frozen")
-                if self._hover_freeze_done >= {"hovered", "frozen", "unfrozen"}:
+                if self._hover_freeze_done >= {"frozen", "unfrozen"}:
                     self.action_satisfied = True
 
         elif action_type == "tooltip_unfrozen":
             if idx == 3 and not self.action_satisfied:
                 self._hover_freeze_done.add("unfrozen")
-                if self._hover_freeze_done >= {"hovered", "frozen", "unfrozen"}:
+                if self._hover_freeze_done >= {"frozen", "unfrozen"}:
                     self.action_satisfied = True
 
         elif action_type == "vagrant_submitted":
@@ -716,6 +714,14 @@ class TutorialManager:
             elif key == "guidance_btns":
                 for rkey, rect in self.exposed_rects.items():
                     if rkey.startswith("guidance_btn_"):
+                        self._draw_glow_rect(screen, rect, color, pulse_alpha)
+            elif key == "pool_icons":
+                for rkey, rect in self.exposed_rects.items():
+                    if rkey.startswith("pool_icons_"):
+                        self._draw_glow_rect(screen, rect, color, pulse_alpha)
+            elif key == "agenda_cards":
+                for rkey, rect in self.exposed_rects.items():
+                    if rkey.startswith("agenda_card_"):
                         self._draw_glow_rect(screen, rect, color, pulse_alpha)
 
     def _draw_glow_rect(self, screen: pygame.Surface,

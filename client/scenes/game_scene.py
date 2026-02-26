@@ -114,6 +114,14 @@ _WAR_RESOLVES_TOOLTIP = (
     "lose 1 gold."
 )
 
+_BATTLEGROUND_TOOLTIP = (
+    "Two neighboring hexes — one belonging to each Faction — staked in the War. "
+    "The winning Faction claims the enemy's Battleground hex.\n\n"
+    "If a Faction is Guided, its Spirit chooses which of its own hexes to stake. "
+    "If both Factions are Guided, each picks the enemy's side; "
+    "incompatible picks are randomized."
+)
+
 _GOLD_TOOLTIP = "Resource used to pay for Expand Agendas. Cannot go below 0."
 
 _TRADE_AGENDA_TOOLTIP = "Trade\n+1 gold, +1 gold for every other Faction playing Trade this turn.\n+1 Regard with each other Faction playing Trade this turn."
@@ -144,7 +152,10 @@ _GUIDANCE_HOVER_REGIONS = [
     HoverRegion("Gold", _GOLD_TOOLTIP, sub_regions=[]),
     HoverRegion("gold", _GOLD_TOOLTIP, sub_regions=[]),
     HoverRegion("War", _WAR_TOOLTIP, sub_regions=[
-        HoverRegion("resolves", _WAR_RESOLVES_TOOLTIP, sub_regions=[]),
+        HoverRegion("Battleground", _BATTLEGROUND_TOOLTIP, sub_regions=[]),
+        HoverRegion("resolves", _WAR_RESOLVES_TOOLTIP, sub_regions=[
+            HoverRegion("Battleground", _BATTLEGROUND_TOOLTIP, sub_regions=[]),
+        ]),
     ]),
     HoverRegion("modifier", _MODIFIER_TOOLTIP, sub_regions=[
         HoverRegion("Trade", _TRADE_AGENDA_TOOLTIP, sub_regions=[]),
@@ -155,12 +166,18 @@ _GUIDANCE_HOVER_REGIONS = [
 ]
 
 _WAR_HOVER_REGIONS = [
-    HoverRegion("resolves", _WAR_RESOLVES_TOOLTIP, sub_regions=[]),
+    HoverRegion("Battleground", _BATTLEGROUND_TOOLTIP, sub_regions=[]),
+    HoverRegion("resolves", _WAR_RESOLVES_TOOLTIP, sub_regions=[
+        HoverRegion("Battleground", _BATTLEGROUND_TOOLTIP, sub_regions=[]),
+    ]),
 ]
 
 _RIBBON_WAR_HOVER_REGIONS = [
     HoverRegion("War", _WAR_TOOLTIP, sub_regions=[
-        HoverRegion("resolves", _WAR_RESOLVES_TOOLTIP, sub_regions=[]),
+        HoverRegion("Battleground", _BATTLEGROUND_TOOLTIP, sub_regions=[]),
+        HoverRegion("resolves", _WAR_RESOLVES_TOOLTIP, sub_regions=[
+            HoverRegion("Battleground", _BATTLEGROUND_TOOLTIP, sub_regions=[]),
+        ]),
     ]),
 ]
 
@@ -780,8 +797,8 @@ class GameScene:
                 if self.tutorial:
                     self.tutorial.notify_action("tooltip_unfrozen", {})
             else:
-                self._try_pin_hovered_tooltip(event.pos)
-                if self.tutorial:
+                pinned = self._try_pin_hovered_tooltip(event.pos)
+                if self.tutorial and pinned:
                     self.tutorial.notify_action("tooltip_frozen", {})
 
     def _handle_action_button(self, text: str):
@@ -1740,9 +1757,12 @@ class GameScene:
                     self.hovered_ejection_keyword = keyword
                     return
 
-    def _try_pin_hovered_tooltip(self, mouse_pos):
-        """Pin the currently active tooltip from the registry as a popup."""
-        self.tooltip_registry.try_pin(self.popup_manager, self.small_font, SCREEN_WIDTH)
+    def _try_pin_hovered_tooltip(self, mouse_pos) -> bool:
+        """Pin the currently active tooltip from the registry as a popup.
+
+        Returns True if a tooltip was successfully pinned, False if nothing was active.
+        """
+        return self.tooltip_registry.try_pin(self.popup_manager, self.small_font, SCREEN_WIDTH)
 
     def _count_idol_vp_for_faction(self, faction_id: str):
         """Count total VP per event type from idols in a faction's territory.
@@ -2567,12 +2587,16 @@ class GameScene:
                 tut_rects[f"ribbon_{fid}"] = r
             for btn, fid in zip(self.faction_buttons, self.faction_button_ids):
                 tut_rects[f"guidance_btn_{fid}"] = btn.rect
+            for fid, r in self.pool_icon_rects.items():
+                tut_rects[f"pool_icons_{fid}"] = r
             if self.agenda_hand:
                 card_rects = self._calc_left_choice_card_rects(len(self.agenda_hand))
                 tut_rects["agenda_cards_area"] = pygame.Rect(
                     card_rects[0].x, card_rects[0].y,
                     card_rects[0].w, card_rects[-1].bottom - card_rects[0].y,
                 )
+                for i, r in enumerate(card_rects):
+                    tut_rects[f"agenda_card_{i}"] = r
             for fid, r in self.ribbon_war_rects.items():
                 tut_rects[f"ribbon_war_{fid}"] = r
             if self.ui_renderer.panel_war_rect:
@@ -2838,6 +2862,28 @@ class GameScene:
         "over ones without Idols."
     )
 
+    def _draw_submit_button(self, screen):
+        """Draw the submit button, applying tutorial-blocking override if active.
+
+        Call this after setting submit_button.enabled/tooltip for the current phase.
+        If the tutorial is currently blocking submit, the button is greyed out with
+        a "Follow the tutorial for now!" hover tooltip regardless of game-state.
+        Also handles tooltip rendering so call sites don't need to repeat it.
+        """
+        if not self.submit_button:
+            return
+        if self.tutorial and self.tutorial.is_blocking_submit():
+            self.submit_button.enabled = False
+            self.submit_button.tooltip = "Follow the tutorial for now!"
+            self.submit_button.tooltip_always = True
+        self.submit_button.draw(screen, self.font)
+        if (self.submit_button.tooltip and self.submit_button.hovered
+                and (not self.submit_button.enabled or self.submit_button.tooltip_always)):
+            self.tooltip_registry.offer(TooltipDescriptor(
+                self.submit_button.tooltip, _GUIDANCE_HOVER_REGIONS,
+                self.submit_button.rect.centerx, self.submit_button.rect.top,
+            ))
+
     def _render_vagrant_ui(self, screen):
         # Draw "Guidance" title
         if self.guidance_title_rect and self.faction_buttons:
@@ -2953,13 +2999,7 @@ class GameScene:
             elif not can_swell:
                 self.submit_button.tooltip = None
 
-            self.submit_button.draw(screen, self.font)
-            if (self.submit_button.tooltip and self.submit_button.hovered
-                    and (not self.submit_button.enabled or self.submit_button.tooltip_always)):
-                self.tooltip_registry.offer(TooltipDescriptor(
-                    self.submit_button.tooltip, _GUIDANCE_HOVER_REGIONS,
-                    self.submit_button.rect.centerx, self.submit_button.rect.top,
-                ))
+            self._draw_submit_button(screen)
 
     def _get_current_faction_modifiers(self) -> dict:
         """Get the change_modifiers for the current player's guided faction."""
@@ -2998,7 +3038,7 @@ class GameScene:
 
         if self.submit_button:
             self.submit_button.enabled = self.selected_agenda_index >= 0
-            self.submit_button.draw(screen, self.font)
+            self._draw_submit_button(screen)
 
     def _render_change_ui(self, screen):
         if not self.change_cards:
@@ -3125,7 +3165,7 @@ class GameScene:
                 "Choose a different Agenda to add."
                 if same_type else None
             )
-            self.submit_button.draw(screen, self.font)
+            self._draw_submit_button(screen)
 
     def _render_battleground_ui(self, screen):
         """Render the battleground choice instruction panel."""
@@ -3209,7 +3249,7 @@ class GameScene:
             else:
                 self.submit_button.tooltip = None
                 self.submit_button.tooltip_always = False
-            self.submit_button.draw(screen, self.font)
+            self._draw_submit_button(screen)
 
     def _render_expand_choice_ui(self, screen):
         faction_name = faction_full_name(self.expand_choice_faction)
@@ -3231,7 +3271,7 @@ class GameScene:
             else:
                 self.submit_button.tooltip = None
                 self.submit_button.tooltip_always = False
-            self.submit_button.draw(screen, self.font)
+            self._draw_submit_button(screen)
 
     def _render_spoils_ui(self, screen):
         if not self.spoils_entries:
@@ -3296,13 +3336,7 @@ class GameScene:
                 self.submit_button.tooltip_always = True
             else:
                 self.submit_button.tooltip = None
-            self.submit_button.draw(screen, self.font)
-            if (self.submit_button.tooltip and self.submit_button.hovered
-                    and (not self.submit_button.enabled or self.submit_button.tooltip_always)):
-                self.tooltip_registry.offer(TooltipDescriptor(
-                    self.submit_button.tooltip, _GUIDANCE_HOVER_REGIONS,
-                    self.submit_button.rect.centerx, self.submit_button.rect.top,
-                ))
+            self._draw_submit_button(screen)
 
     def _render_spoils_change_ui(self, screen):
         if not self.spoils_change_entries:
@@ -3366,10 +3400,4 @@ class GameScene:
                 self.submit_button.tooltip_always = True
             else:
                 self.submit_button.tooltip = None
-            self.submit_button.draw(screen, self.font)
-            if (self.submit_button.tooltip and self.submit_button.hovered
-                    and (not self.submit_button.enabled or self.submit_button.tooltip_always)):
-                self.tooltip_registry.offer(TooltipDescriptor(
-                    self.submit_button.tooltip, _GUIDANCE_HOVER_REGIONS,
-                    self.submit_button.rect.centerx, self.submit_button.rect.top,
-                ))
+            self._draw_submit_button(screen)
