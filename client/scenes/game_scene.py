@@ -246,6 +246,14 @@ class GameScene:
         self.spoils_nav_left_rect: pygame.Rect | None = None
         self.spoils_nav_right_rect: pygame.Rect | None = None
 
+        # In-game menu (top-right)
+        self._ingame_menu_open: bool = False
+        self._ingame_menu_confirm_exit: bool = False
+        self._ingame_menu_btn_rect: pygame.Rect | None = None
+        self._ingame_menu_item_rects: list[tuple[str, pygame.Rect]] = []
+        self._ingame_confirm_yes_rect: pygame.Rect | None = None
+        self._ingame_confirm_no_rect: pygame.Rect | None = None
+
         # UI buttons
         self.action_buttons: list[Button] = []
         self.remove_buttons: list[Button] = []
@@ -457,7 +465,7 @@ class GameScene:
             _cur_event_log_h = _EVENT_LOG_H_ENLARGED if self.event_log_enlarged else _EVENT_LOG_H
             _cur_faction_panel_h = _FACTION_PANEL_MAX_H + _EVENT_LOG_H - _cur_event_log_h
             _event_log_y = 102 + _cur_faction_panel_h + 4 + _SPIRIT_PANEL_MAX_H + 4
-            log_rect = pygame.Rect(_FACTION_PANEL_X, _event_log_y, _PANEL_W, _cur_event_log_h)
+            log_rect = getattr(self, '_event_log_render_rect', None) or pygame.Rect(_FACTION_PANEL_X, _event_log_y, _PANEL_W, _cur_event_log_h)
             mx, my = pygame.mouse.get_pos()
             if log_rect.collidepoint(mx, my):
                 visible_count = (_cur_event_log_h - 26) // 16
@@ -528,6 +536,35 @@ class GameScene:
                 self.tutorial.notify_action("tooltip_hovered", {})
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            # In-game menu: confirm exit dialog takes priority
+            if self._ingame_menu_confirm_exit:
+                if self._ingame_confirm_yes_rect and self._ingame_confirm_yes_rect.collidepoint(event.pos):
+                    self.app.set_scene("menu")
+                    return
+                if self._ingame_confirm_no_rect and self._ingame_confirm_no_rect.collidepoint(event.pos):
+                    self._ingame_menu_confirm_exit = False
+                    return
+                return  # swallow all clicks while confirm is open
+            # In-game menu button toggle
+            if self._ingame_menu_btn_rect and self._ingame_menu_btn_rect.collidepoint(event.pos):
+                self._ingame_menu_open = not self._ingame_menu_open
+                return
+            # In-game menu items (when open)
+            if self._ingame_menu_open:
+                for label, rect in self._ingame_menu_item_rects:
+                    if rect.collidepoint(event.pos):
+                        self._ingame_menu_open = False
+                        if label == "settings":
+                            settings_scene = self.app.scenes.get("settings")
+                            if settings_scene:
+                                settings_scene.return_scene = "game"
+                            self.app.set_scene("settings")
+                        elif label == "exit":
+                            self._ingame_menu_confirm_exit = True
+                        return
+                # Click outside menu: close it
+                self._ingame_menu_open = False
+
             # Tutorial input gate: let tutorial consume/block clicks first
             if self.tutorial:
                 consumed = self.tutorial.handle_click(event.pos)
@@ -1289,7 +1326,9 @@ class GameScene:
         }
         # Place idol buttons below guidance buttons on the left side
         n_factions = len(self.faction_buttons)
-        idol_start_y = _BTN_START_Y + n_factions * _BTN_STEP_Y + 16
+        last_guidance_bottom = _BTN_START_Y + (n_factions - 1) * _BTN_STEP_Y + _BTN_H
+        idol_title_y = last_guidance_bottom + 10
+        idol_start_y = idol_title_y + 28  # title height (22) + 6px gap
         self.idol_buttons = []
         for i, it in enumerate(IdolType):
             colors = {
@@ -1306,7 +1345,6 @@ class GameScene:
             self.idol_buttons.append(btn)
         # Set up idol title rect (same center x as guidance)
         title_w = 130
-        idol_title_y = idol_start_y - 24
         self.idol_title_rect = pygame.Rect(
             _GUIDANCE_CENTER_X - title_w // 2, idol_title_y, title_w, 22
         )
@@ -2114,10 +2152,19 @@ class GameScene:
                 max_height=_SPIRIT_PANEL_MAX_H,
             )
 
-        # Draw event log (bottom of right column)
+        # Draw event log (bottom of right column); auto-widen when enlarged
+        if self.event_log_enlarged and self.event_log:
+            _sm_font = self.ui_renderer.small_font
+            _max_msg_w = max((_sm_font.size(t)[0] for t in self.event_log), default=0)
+            _elog_w = min(SCREEN_WIDTH - 4, _max_msg_w + 32)
+            _elog_x = SCREEN_WIDTH - _elog_w - 2
+        else:
+            _elog_w = _PANEL_W
+            _elog_x = _FACTION_PANEL_X
+        self._event_log_render_rect = pygame.Rect(_elog_x, _event_log_y, _elog_w, _cur_event_log_h)
         self.ui_renderer.draw_event_log(
             screen, self.event_log,
-            _FACTION_PANEL_X, _event_log_y, _PANEL_W, _cur_event_log_h,
+            _elog_x, _event_log_y, _elog_w, _cur_event_log_h,
             scroll_offset=self.event_log_scroll_offset,
             highlight_log_idx=self.highlighted_log_index,
             h_scroll_offset=self.event_log_h_scroll_offset,
@@ -2340,6 +2387,9 @@ class GameScene:
         # Pinned popups (drawn on top of everything)
         self.popup_manager.render(screen, self.small_font)
 
+        # In-game menu button and dropdown (always on top)
+        self._render_ingame_menu(screen)
+
     def _render_game_over_panel(self, screen: pygame.Surface):
         """Draw the final scores panel on the left side of the screen."""
         if not self.game_over_data:
@@ -2392,6 +2442,66 @@ class GameScene:
 
         hint = self.small_font.render("Esc → menu", True, (120, 120, 145))
         screen.blit(hint, (panel_x + 10, panel_y + panel_h - 17))
+
+    def _render_ingame_menu(self, screen: pygame.Surface):
+        """Draw the in-game menu button and dropdown overlay."""
+        btn_w, btn_h = 70, 26
+        btn_x = SCREEN_WIDTH - btn_w - 6
+        btn_y = 7
+        btn_rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+        self._ingame_menu_btn_rect = btn_rect
+
+        # Button background
+        btn_bg = (55, 55, 75) if not self._ingame_menu_open else (75, 75, 100)
+        pygame.draw.rect(screen, btn_bg, btn_rect, border_radius=4)
+        pygame.draw.rect(screen, (100, 100, 130), btn_rect, 1, border_radius=4)
+        label = self.small_font.render("\u2630 Menu", True, (190, 190, 215))
+        screen.blit(label, (btn_rect.x + (btn_w - label.get_width()) // 2,
+                             btn_rect.y + (btn_h - label.get_height()) // 2))
+
+        # Dropdown items
+        if self._ingame_menu_open:
+            items = [("settings", "Settings"), ("exit", "Exit to Main Menu")]
+            item_w = 160
+            item_h = 28
+            drop_x = SCREEN_WIDTH - item_w - 6
+            drop_y = btn_rect.bottom + 2
+            drop_rect = pygame.Rect(drop_x, drop_y, item_w, len(items) * item_h + 4)
+            pygame.draw.rect(screen, (30, 30, 45), drop_rect, border_radius=4)
+            pygame.draw.rect(screen, (90, 90, 120), drop_rect, 1, border_radius=4)
+            mx, my = pygame.mouse.get_pos()
+            self._ingame_menu_item_rects = []
+            for i, (key, text) in enumerate(items):
+                ir = pygame.Rect(drop_x + 2, drop_y + 2 + i * item_h, item_w - 4, item_h)
+                self._ingame_menu_item_rects.append((key, ir))
+                if ir.collidepoint(mx, my):
+                    pygame.draw.rect(screen, (60, 60, 85), ir, border_radius=3)
+                surf = self.small_font.render(text, True, (200, 200, 220))
+                screen.blit(surf, (ir.x + 10, ir.y + (item_h - surf.get_height()) // 2))
+
+        # Confirm exit dialog
+        if self._ingame_menu_confirm_exit:
+            dlg_w, dlg_h = 280, 100
+            dlg_x = SCREEN_WIDTH // 2 - dlg_w // 2
+            dlg_y = SCREEN_HEIGHT // 2 - dlg_h // 2
+            dlg_rect = pygame.Rect(dlg_x, dlg_y, dlg_w, dlg_h)
+            pygame.draw.rect(screen, (20, 20, 35), dlg_rect, border_radius=6)
+            pygame.draw.rect(screen, (130, 110, 60), dlg_rect, 2, border_radius=6)
+            title_surf = self.font.render("Exit to main menu?", True, (220, 200, 120))
+            screen.blit(title_surf, (dlg_x + (dlg_w - title_surf.get_width()) // 2, dlg_y + 14))
+            btn_y2 = dlg_y + 56
+            yes_rect = pygame.Rect(dlg_x + 30, btn_y2, 90, 30)
+            no_rect = pygame.Rect(dlg_x + dlg_w - 120, btn_y2, 90, 30)
+            pygame.draw.rect(screen, (100, 50, 50), yes_rect, border_radius=4)
+            pygame.draw.rect(screen, (50, 80, 50), no_rect, border_radius=4)
+            yes_surf = self.font.render("Yes", True, (230, 180, 180))
+            no_surf = self.font.render("No", True, (180, 220, 180))
+            screen.blit(yes_surf, (yes_rect.x + (yes_rect.w - yes_surf.get_width()) // 2,
+                                   yes_rect.y + (yes_rect.h - yes_surf.get_height()) // 2))
+            screen.blit(no_surf, (no_rect.x + (no_rect.w - no_surf.get_width()) // 2,
+                                  no_rect.y + (no_rect.h - no_surf.get_height()) // 2))
+            self._ingame_confirm_yes_rect = yes_rect
+            self._ingame_confirm_no_rect = no_rect
 
     def _build_idol_tooltip_text(self, idol):
         idol_type = idol.type

@@ -20,7 +20,7 @@ class App:
     def __init__(self, server_host: str = DEFAULT_HOST, server_port: int = DEFAULT_PORT):
         pygame.init()
         settings = load_settings()
-        self.fullscreen: bool = settings.get("fullscreen", True)
+        self.fullscreen: bool = settings.get("fullscreen", False)
         self.screen = self._apply_display_mode()
         pygame.display.set_caption(TITLE)
         pygame.key.set_repeat(400, 35)
@@ -40,15 +40,14 @@ class App:
         self.set_scene("menu")
 
     def _apply_display_mode(self) -> pygame.Surface:
+        flags = pygame.SCALED
         if self.fullscreen:
-            return pygame.display.set_mode(
-                (SCREEN_WIDTH, SCREEN_HEIGHT), pygame.FULLSCREEN | pygame.SCALED
-            )
-        return pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+            flags |= pygame.FULLSCREEN
+        return pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), flags)
 
     def toggle_fullscreen(self):
         self.fullscreen = not self.fullscreen
-        self.screen = self._apply_display_mode()
+        pygame.display.toggle_fullscreen()
         save_settings({"fullscreen": self.fullscreen})
 
     def _init_scenes(self):

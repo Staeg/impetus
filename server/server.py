@@ -307,6 +307,9 @@ class GameServer:
                     await self._broadcast_waiting(room)
                     if room.game_state.all_inputs_received():
                         await self._resolve_and_advance(room)
+                    else:
+                        # In tutorial mode AIs wait for humans; trigger their submissions now
+                        await self._resolve_ai_inputs(room)
 
         elif msg_type == MessageType.SUBMIT_AGENDA_CHOICE:
             if room.game_state and room.game_state.phase == Phase.AGENDA_PHASE:
@@ -476,8 +479,21 @@ class GameServer:
         """Submit actions on behalf of AI spirits and trigger resolution if complete."""
         gs = room.game_state
         if room.tutorial_mode and gs.phase == Phase.VAGRANT_PHASE:
-            # Sequential AI vagrant actions with faction exclusion to prevent contention
+            # In tutorial mode: wait for all human players to submit before assigning
+            # AI factions, so we can exclude human choices and prevent contention.
+            human_spirit_ids = set(gs.spirits.keys()) - room.ai_spirit_ids
+            humans_pending = [
+                sid for sid in human_spirit_ids
+                if gs.needs_input(sid) and sid not in gs.pending_actions
+            ]
+            if humans_pending:
+                return  # Wait for humans to submit first
+            # Collect human-chosen factions so AIs avoid them
             taken: set[str] = set()
+            for sid in human_spirit_ids:
+                gt = gs.pending_actions.get(sid, {}).get("guide_target")
+                if gt:
+                    taken.add(gt)
             for sid in sorted(list(room.ai_spirit_ids)):
                 if gs.needs_input(sid) and sid not in gs.pending_actions:
                     action = ai.get_ai_vagrant_action(gs, sid, excluded_factions=taken)

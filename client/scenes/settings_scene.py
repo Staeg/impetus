@@ -13,6 +13,7 @@ class SettingsScene:
         self.font = get_font(16)
         self.title_font = get_font(36)
         self.small_font = get_font(14)
+        self.return_scene: str = "menu"  # where Back/Escape navigates to
 
         cx = SCREEN_WIDTH // 2
         self.back_button = Button(
@@ -30,7 +31,7 @@ class SettingsScene:
 
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
-                self.app.set_scene("menu")
+                self._go_back()
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # Clicking checkbox or its label toggles fullscreen
@@ -42,7 +43,12 @@ class SettingsScene:
             if toggle_rect.collidepoint(event.pos):
                 self.app.toggle_fullscreen()
             elif self.back_button.clicked(event.pos):
-                self.app.set_scene("menu")
+                self._go_back()
+
+    def _go_back(self):
+        dest = self.return_scene
+        self.return_scene = "menu"  # reset for next time
+        self.app.set_scene(dest)
 
     def update(self, dt):
         pass

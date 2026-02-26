@@ -20,7 +20,7 @@ def load_settings() -> dict:
         with open(path, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception:
-        return {"fullscreen": True}
+        return {"fullscreen": False}
 
 
 def save_settings(data: dict) -> None:
