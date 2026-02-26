@@ -2,6 +2,8 @@
 
 import dataclasses
 import pygame
+from client.renderer.ui_renderer import _wrap_text, _render_rich_line_with_keywords
+import client.theme as theme
 
 # --- Tooltip placement scoring ---
 _WEIGHT_NON_TEXT = 1
@@ -188,29 +190,6 @@ class PinnedPopup:
         self.max_width = max_width
 
 
-def _wrap_text(text: str, font: pygame.font.Font, max_width: int) -> list[str]:
-    """Word-wrap text to fit within max_width pixels."""
-    lines = []
-    for paragraph in text.split('\n'):
-        if not paragraph.strip():
-            lines.append('')
-            continue
-        words = paragraph.split()
-        if not words:
-            lines.append('')
-            continue
-        current_line = words[0]
-        for word in words[1:]:
-            test_line = current_line + ' ' + word
-            if font.size(test_line)[0] <= max_width:
-                current_line = test_line
-            else:
-                lines.append(current_line)
-                current_line = word
-        lines.append(current_line)
-    return lines
-
-
 def _draw_plain_tooltip(surface: pygame.Surface, font: pygame.font.Font,
                         text: str, anchor_x: int, anchor_y: int,
                         max_width: int = 350, below: bool = False):
@@ -219,7 +198,7 @@ def _draw_plain_tooltip(surface: pygame.Surface, font: pygame.font.Font,
     if not lines:
         return
     line_h = font.get_linesize()
-    rendered = [font.render(line, True, (255, 220, 150)) for line in lines]
+    rendered = [font.render(line, True, theme.TEXT_TOOLTIP) for line in lines]
     content_w = max(s.get_width() for s in rendered)
     tip_w = content_w + 16
     tip_h = len(lines) * line_h + 12
@@ -231,74 +210,10 @@ def _draw_plain_tooltip(surface: pygame.Surface, font: pygame.font.Font,
     )
 
     tip_rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
-    pygame.draw.rect(surface, (40, 40, 50), tip_rect, border_radius=4)
-    pygame.draw.rect(surface, (150, 150, 100), tip_rect, 1, border_radius=4)
+    pygame.draw.rect(surface, theme.BG_TOOLTIP, tip_rect, border_radius=4)
+    pygame.draw.rect(surface, theme.BORDER_TOOLTIP, tip_rect, 1, border_radius=4)
     for i, surf in enumerate(rendered):
         surface.blit(surf, (tip_x + 8, tip_y + 6 + i * line_h))
-
-
-def _render_rich_line_with_keywords(surface, font, line, x, y,
-                                    keywords: list[str],
-                                    normal_color, keyword_color):
-    """Render a line with keyword highlighting and dotted underlines."""
-    if not keywords:
-        surf = font.render(line, True, normal_color)
-        surface.blit(surf, (x, y))
-        return
-
-    # Find all keyword occurrences, then keep non-overlapping occurrences.
-    occurrences = []
-    for kw in keywords:
-        start = 0
-        while True:
-            pos = line.find(kw, start)
-            if pos < 0:
-                break
-            occurrences.append((pos, pos + len(kw), kw))
-            start = pos + len(kw)
-
-    if not occurrences:
-        surf = font.render(line, True, normal_color)
-        surface.blit(surf, (x, y))
-        return
-
-    occurrences.sort(key=lambda o: o[0])
-    filtered = []
-    last_end = 0
-    for seg_start, seg_end, kw in occurrences:
-        if seg_start >= last_end:
-            filtered.append((seg_start, seg_end, kw))
-            last_end = seg_end
-
-    cursor_x = x
-    pos = 0
-    line_h = font.get_linesize()
-    for seg_start, seg_end, _ in filtered:
-        if seg_start > pos:
-            normal_text = line[pos:seg_start]
-            surf = font.render(normal_text, True, normal_color)
-            surface.blit(surf, (cursor_x, y))
-            cursor_x += surf.get_width()
-
-        kw_text = line[seg_start:seg_end]
-        surf = font.render(kw_text, True, keyword_color)
-        surface.blit(surf, (cursor_x, y))
-
-        underline_y = y + line_h - 2
-        ux = cursor_x
-        ux_end = cursor_x + surf.get_width()
-        while ux < ux_end:
-            dot_end = min(ux + 2, ux_end)
-            pygame.draw.line(surface, keyword_color, (ux, underline_y), (dot_end, underline_y), 1)
-            ux += 5
-
-        cursor_x += surf.get_width()
-        pos = seg_end
-
-    if pos < len(line):
-        normal_text = line[pos:]
-        surf = font.render(normal_text, True, normal_color)
-        surface.blit(surf, (cursor_x, y))
 
 
 def draw_multiline_tooltip_with_regions(surface: pygame.Surface, font: pygame.font.Font,
@@ -325,8 +240,8 @@ def draw_multiline_tooltip_with_regions(surface: pygame.Surface, font: pygame.fo
     )
 
     tip_rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
-    pygame.draw.rect(surface, (40, 40, 50), tip_rect, border_radius=4)
-    pygame.draw.rect(surface, (150, 150, 100), tip_rect, 1, border_radius=4)
+    pygame.draw.rect(surface, theme.BG_TOOLTIP, tip_rect, border_radius=4)
+    pygame.draw.rect(surface, theme.BORDER_TOOLTIP, tip_rect, 1, border_radius=4)
 
     keywords = [region.keyword for region in hover_regions]
     text_x = tip_x + 8
@@ -336,8 +251,8 @@ def draw_multiline_tooltip_with_regions(surface: pygame.Surface, font: pygame.fo
         _render_rich_line_with_keywords(
             surface, font, line, text_x, y,
             keywords=keywords,
-            normal_color=(255, 220, 150),
-            keyword_color=(100, 220, 210),
+            normal_color=theme.TEXT_TOOLTIP,
+            keyword_color=theme.TEXT_KEYWORD,
         )
 
 
@@ -465,14 +380,14 @@ class PopupManager:
 
     def render(self, surface: pygame.Surface, font: pygame.font.Font):
         """Draw all pinned popups and transient keyword hover tooltip."""
-        normal_color = (255, 220, 150)
-        keyword_color = (100, 220, 210)
-        keyword_hover_color = (140, 255, 245)
+        normal_color = theme.TEXT_TOOLTIP
+        keyword_color = theme.TEXT_KEYWORD
+        keyword_hover_color = theme.TEXT_KEYWORD_HOV
 
         for popup in self._stack:
             # Background
-            pygame.draw.rect(surface, (40, 40, 50), popup.rect, border_radius=4)
-            pygame.draw.rect(surface, (150, 150, 100), popup.rect, 1,
+            pygame.draw.rect(surface, theme.BG_TOOLTIP, popup.rect, border_radius=4)
+            pygame.draw.rect(surface, theme.BORDER_TOOLTIP, popup.rect, 1,
                              border_radius=4)
 
             line_h = font.get_linesize()

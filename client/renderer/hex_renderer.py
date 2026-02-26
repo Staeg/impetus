@@ -6,6 +6,7 @@ from shared.hex_utils import axial_to_pixel, hex_vertices, hex_neighbors
 from shared.constants import (
     FACTION_COLORS, NEUTRAL_COLOR, HEX_SIZE, IdolType,
 )
+from client.renderer.font_cache import get_font
 
 
 # One shape per spirit index (0-4 unique, 5+ wraps).
@@ -90,7 +91,7 @@ class HexRenderer:
 
     def _get_font(self, size=14):
         if self._font is None:
-            self._font = pygame.font.SysFont("consolas", size)
+            self._font = get_font(size)
         return self._font
 
     def draw_hex_grid(self, surface: pygame.Surface, hex_ownership: dict,

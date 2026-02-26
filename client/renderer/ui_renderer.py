@@ -9,6 +9,8 @@ from shared.constants import (
 from client.faction_names import faction_full_name
 from client.renderer.assets import agenda_ribbon_icons
 from client.renderer.hex_renderer import draw_spirit_symbol
+from client.renderer.font_cache import get_font
+import client.theme as theme
 
 
 def _wrap_text(text: str, font: "pygame.font.Font", max_width: int) -> list[str]:
@@ -45,6 +47,142 @@ def draw_dotted_underline(surface: "pygame.Surface", x: int, y: int, width: int,
         cx += dot_len + gap_len
 
 
+def _render_rich_line_with_keywords(surface, font, line, x, y,
+                                    keywords: list[str],
+                                    normal_color, keyword_color):
+    """Render a line with keyword highlighting and dotted underlines."""
+    if not keywords:
+        surf = font.render(line, True, normal_color)
+        surface.blit(surf, (x, y))
+        return
+
+    # Find all keyword occurrences, then keep non-overlapping occurrences.
+    occurrences = []
+    for kw in keywords:
+        start = 0
+        while True:
+            pos = line.find(kw, start)
+            if pos < 0:
+                break
+            occurrences.append((pos, pos + len(kw), kw))
+            start = pos + len(kw)
+
+    if not occurrences:
+        surf = font.render(line, True, normal_color)
+        surface.blit(surf, (x, y))
+        return
+
+    occurrences.sort(key=lambda o: o[0])
+    filtered = []
+    last_end = 0
+    for seg_start, seg_end, kw in occurrences:
+        if seg_start >= last_end:
+            filtered.append((seg_start, seg_end, kw))
+            last_end = seg_end
+
+    cursor_x = x
+    pos = 0
+    line_h = font.get_linesize()
+    for seg_start, seg_end, _ in filtered:
+        if seg_start > pos:
+            normal_text = line[pos:seg_start]
+            surf = font.render(normal_text, True, normal_color)
+            surface.blit(surf, (cursor_x, y))
+            cursor_x += surf.get_width()
+
+        kw_text = line[seg_start:seg_end]
+        surf = font.render(kw_text, True, keyword_color)
+        surface.blit(surf, (cursor_x, y))
+
+        underline_y = y + line_h - 2
+        ux = cursor_x
+        ux_end = cursor_x + surf.get_width()
+        while ux < ux_end:
+            dot_end = min(ux + 2, ux_end)
+            pygame.draw.line(surface, keyword_color, (ux, underline_y), (dot_end, underline_y), 1)
+            ux += 5
+
+        cursor_x += surf.get_width()
+        pos = seg_end
+
+    if pos < len(line):
+        normal_text = line[pos:]
+        surf = font.render(normal_text, True, normal_color)
+        surface.blit(surf, (cursor_x, y))
+
+
+def render_rich_lines(surface: "pygame.Surface", font: "pygame.font.Font",
+                      lines: list[str], x: int, y: int,
+                      keywords: list[str], hovered_keyword: str | None,
+                      normal_color: tuple, keyword_color: tuple,
+                      hovered_keyword_color: tuple) -> "dict[str, list[pygame.Rect]]":
+    """Render wrapped lines with keyword underline styling; return keyword rects."""
+    keyword_rects: dict[str, list[pygame.Rect]] = {k: [] for k in keywords}
+    line_h = font.get_linesize()
+
+    for line_idx, line in enumerate(lines):
+        cy = y + line_idx * line_h
+        if not keywords:
+            surface.blit(font.render(line, True, normal_color), (x, cy))
+            continue
+
+        occurrences = []
+        for kw in keywords:
+            start = 0
+            while True:
+                pos = line.find(kw, start)
+                if pos < 0:
+                    break
+                occurrences.append((pos, pos + len(kw), kw))
+                start = pos + len(kw)
+
+        if not occurrences:
+            surface.blit(font.render(line, True, normal_color), (x, cy))
+            continue
+
+        occurrences.sort(key=lambda o: o[0])
+        filtered = []
+        last_end = 0
+        for seg_start, seg_end, kw in occurrences:
+            if seg_start >= last_end:
+                filtered.append((seg_start, seg_end, kw))
+                last_end = seg_end
+
+        cursor_x = x
+        pos = 0
+        for seg_start, seg_end, kw in filtered:
+            if seg_start > pos:
+                normal_text = line[pos:seg_start]
+                surf = font.render(normal_text, True, normal_color)
+                surface.blit(surf, (cursor_x, cy))
+                cursor_x += surf.get_width()
+
+            kw_text = line[seg_start:seg_end]
+            color = hovered_keyword_color if kw == hovered_keyword else keyword_color
+            surf = font.render(kw_text, True, color)
+            surface.blit(surf, (cursor_x, cy))
+            kw_rect = pygame.Rect(cursor_x, cy, surf.get_width(), line_h)
+            keyword_rects[kw].append(kw_rect)
+
+            underline_y = cy + line_h - 2
+            ux = cursor_x
+            ux_end = cursor_x + surf.get_width()
+            while ux < ux_end:
+                dot_end = min(ux + 2, ux_end)
+                pygame.draw.line(surface, color, (ux, underline_y), (dot_end, underline_y), 1)
+                ux += 5
+
+            cursor_x += surf.get_width()
+            pos = seg_end
+
+        if pos < len(line):
+            tail = line[pos:]
+            surf = font.render(tail, True, normal_color)
+            surface.blit(surf, (cursor_x, cy))
+
+    return keyword_rects
+
+
 def draw_multiline_tooltip(surface: "pygame.Surface", font: "pygame.font.Font",
                            text: str, anchor_x: int, anchor_y: int,
                            max_width: int = 350, below: bool = False):
@@ -56,7 +194,7 @@ def draw_multiline_tooltip(surface: "pygame.Surface", font: "pygame.font.Font",
     if not lines:
         return
     line_h = font.get_linesize()
-    rendered = [font.render(line, True, (255, 220, 150)) for line in lines]
+    rendered = [font.render(line, True, theme.TEXT_TOOLTIP) for line in lines]
     content_w = max(s.get_width() for s in rendered)
     tip_w = content_w + 16
     tip_h = len(lines) * line_h + 12
@@ -69,8 +207,8 @@ def draw_multiline_tooltip(surface: "pygame.Surface", font: "pygame.font.Font",
     )
 
     tip_rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
-    pygame.draw.rect(surface, (40, 40, 50), tip_rect, border_radius=4)
-    pygame.draw.rect(surface, (150, 150, 100), tip_rect, 1, border_radius=4)
+    pygame.draw.rect(surface, theme.BG_TOOLTIP, tip_rect, border_radius=4)
+    pygame.draw.rect(surface, theme.BORDER_TOOLTIP, tip_rect, 1, border_radius=4)
     for i, surf in enumerate(rendered):
         surface.blit(surf, (tip_x + 8, tip_y + 6 + i * line_h))
 
@@ -166,34 +304,34 @@ class UIRenderer:
         self.event_log_expand_rect: pygame.Rect | None = None
 
     def _get_font(self, size=16):
-        return pygame.font.SysFont("consolas", size)
+        return get_font(size)
 
     @property
     def font(self):
         if self._font is None:
-            self._font = self._get_font(16)
+            self._font = get_font(16)
         return self._font
 
     @property
     def small_font(self):
         if self._small_font is None:
-            self._small_font = self._get_font(13)
+            self._small_font = get_font(13)
         return self._small_font
 
     @property
     def title_font(self):
         if self._title_font is None:
-            self._title_font = self._get_font(24)
+            self._title_font = get_font(24)
         return self._title_font
 
     def draw_hud(self, surface: pygame.Surface, phase: str, turn: int,
                  spirits: dict, my_spirit_id: str):
         """Draw the top HUD bar: phase, turn, VP totals."""
         bar_rect = pygame.Rect(0, 0, surface.get_width(), 40)
-        pygame.draw.rect(surface, (20, 20, 30), bar_rect)
-        pygame.draw.line(surface, (60, 60, 80), (0, 40), (surface.get_width(), 40))
+        pygame.draw.rect(surface, theme.BG_HUD, bar_rect)
+        pygame.draw.line(surface, theme.BORDER_PANEL, (0, 40), (surface.get_width(), 40))
 
-        phase_text = self.font.render(f"Turn {turn} | {phase.replace('_', ' ').title()}", True, (200, 200, 220))
+        phase_text = self.font.render(f"Turn {turn} | {phase.replace('_', ' ').title()}", True, theme.TEXT_HIGHLIGHT)
         surface.blit(phase_text, (10, 10))
 
         # Build spirit index map for sigil lookup (sorted for stability)
@@ -203,7 +341,7 @@ class UIRenderer:
         x = 300
         self.vp_hover_rects.clear()
         for sid, spirit in spirits.items():
-            color = (255, 255, 100) if sid == my_spirit_id else (180, 180, 200)
+            color = theme.TEXT_SPIRIT_NAME if sid == my_spirit_id else theme.TEXT_NORMAL
             name = spirit.get("name", sid[:6])
             vp = spirit.get("victory_points", 0)
             faction_id = spirit.get("guided_faction")
@@ -261,8 +399,8 @@ class UIRenderer:
         cell_w = sw // len(faction_order) if faction_order else sw
 
         # Background
-        pygame.draw.rect(surface, (15, 15, 22), pygame.Rect(0, strip_y, sw, strip_h))
-        pygame.draw.line(surface, (40, 40, 55), (0, strip_y + strip_h),
+        pygame.draw.rect(surface, theme.BG_OVERVIEW, pygame.Rect(0, strip_y, sw, strip_h))
+        pygame.draw.line(surface, theme.BG_INPUT, (0, strip_y + strip_h),
                          (sw, strip_y + strip_h))
 
         agenda_colors = {
@@ -446,10 +584,10 @@ class UIRenderer:
         """Render a +X or -Y delta chip. Returns chip width."""
         if delta > 0:
             chip_text = f"+{delta}"
-            chip_color = (80, 220, 80)
+            chip_color = theme.DELTA_POS
         else:
             chip_text = f"{delta}"
-            chip_color = (255, 90, 90)
+            chip_color = theme.DELTA_NEG
 
         is_highlighted = highlight_log_idx is not None and log_index == highlight_log_idx
         text_surf = font.render(chip_text, True, chip_color)
@@ -556,7 +694,7 @@ class UIRenderer:
             display_h = min(panel_h, surface.get_height() - y - 4)
         panel_rect = pygame.Rect(x, y, width, display_h)
         self.faction_panel_rect = panel_rect
-        pygame.draw.rect(surface, (30, 30, 40), panel_rect, border_radius=4)
+        pygame.draw.rect(surface, theme.BG_PANEL, panel_rect, border_radius=4)
         pygame.draw.rect(surface, color, panel_rect, 2, border_radius=4)
 
         old_clip = surface.get_clip()
@@ -588,11 +726,11 @@ class UIRenderer:
         if gold_changes:
             gold_delta_total = self._sum_numeric_deltas(gold_changes)
             old_gold = gold - gold_delta_total
-            label_surf = self.small_font.render("Gold: ", True, (180, 180, 200))
+            label_surf = self.small_font.render("Gold: ", True, theme.TEXT_NORMAL)
             surface.blit(label_surf, (x + 10, dy))
             cx = x + 10 + label_surf.get_width()
             cx += self._render_strikethrough(
-                surface, self.small_font, str(old_gold), (180, 180, 200), (cx, dy))
+                surface, self.small_font, str(old_gold), theme.TEXT_NORMAL, (cx, dy))
             cx += 4
             for ch in gold_changes:
                 cx += self._render_delta_chip(
@@ -602,7 +740,7 @@ class UIRenderer:
             new_surf = self.small_font.render(str(gold), True, (180, 220, 255))
             surface.blit(new_surf, (cx, dy))
         else:
-            text = self.small_font.render(f"Gold: {gold}", True, (180, 180, 200))
+            text = self.small_font.render(f"Gold: {gold}", True, theme.TEXT_NORMAL)
             surface.blit(text, (x + 10, dy))
         dy += 18
 
@@ -612,11 +750,11 @@ class UIRenderer:
             terr_now = len(territories)
             terr_delta_total = self._sum_numeric_deltas(terr_changes)
             old_terr = terr_now - terr_delta_total
-            label_surf = self.small_font.render("Territories: ", True, (180, 180, 200))
+            label_surf = self.small_font.render("Territories: ", True, theme.TEXT_NORMAL)
             surface.blit(label_surf, (x + 10, dy))
             cx = x + 10 + label_surf.get_width()
             cx += self._render_strikethrough(
-                surface, self.small_font, str(old_terr), (180, 180, 200), (cx, dy))
+                surface, self.small_font, str(old_terr), theme.TEXT_NORMAL, (cx, dy))
             cx += 4
             for ch in terr_changes:
                 cx += self._render_delta_chip(
@@ -626,7 +764,7 @@ class UIRenderer:
             new_surf = self.small_font.render(str(terr_now), True, (180, 220, 255))
             surface.blit(new_surf, (cx, dy))
         else:
-            text = self.small_font.render(f"Territories: {len(territories)}", True, (180, 180, 200))
+            text = self.small_font.render(f"Territories: {len(territories)}", True, theme.TEXT_NORMAL)
             surface.blit(text, (x + 10, dy))
         dy += 18
 
@@ -636,11 +774,11 @@ class UIRenderer:
         guided_text_w = 0
         if guide_changes:
             ch = guide_changes[-1]  # latest change
-            label_surf = self.small_font.render("Guided by: ", True, (180, 180, 200))
+            label_surf = self.small_font.render("Guided by: ", True, theme.TEXT_NORMAL)
             surface.blit(label_surf, (x + 10, dy))
             cx = x + 10 + label_surf.get_width()
             cx += self._render_strikethrough(
-                surface, self.small_font, ch.old_value or "none", (180, 180, 200), (cx, dy))
+                surface, self.small_font, ch.old_value or "none", theme.TEXT_NORMAL, (cx, dy))
             cx += 4
             new_surf = self.small_font.render(ch.new_value or "none", True, (180, 220, 255))
             surface.blit(new_surf, (cx, dy))
@@ -650,7 +788,7 @@ class UIRenderer:
             surface.blit(text, (x + 10, dy))
             guided_text_w = text.get_width()
         else:
-            text = self.small_font.render(f"Guided by: {guiding_name}", True, (180, 180, 200))
+            text = self.small_font.render(f"Guided by: {guiding_name}", True, theme.TEXT_NORMAL)
             surface.blit(text, (x + 10, dy))
             guided_text_w = text.get_width()
         self.panel_guided_rect = pygame.Rect(x + 10, guided_line_y, guided_text_w, 16)
@@ -665,11 +803,11 @@ class UIRenderer:
         worship_text_w = 0
         if worship_changes:
             ch = worship_changes[-1]
-            label_surf = self.small_font.render("Worshipping: ", True, (180, 180, 200))
+            label_surf = self.small_font.render("Worshipping: ", True, theme.TEXT_NORMAL)
             surface.blit(label_surf, (x + 10, dy))
             cx = x + 10 + label_surf.get_width()
             cx += self._render_strikethrough(
-                surface, self.small_font, ch.old_value or "none", (180, 180, 200), (cx, dy))
+                surface, self.small_font, ch.old_value or "none", theme.TEXT_NORMAL, (cx, dy))
             cx += 4
             new_surf = self.small_font.render(ch.new_value or "none", True, (180, 220, 255))
             surface.blit(new_surf, (cx, dy))
@@ -679,7 +817,7 @@ class UIRenderer:
             surface.blit(text, (x + 10, dy))
             worship_text_w = text.get_width()
         else:
-            text = self.small_font.render(f"Worshipping: {worship_name}", True, (180, 180, 200))
+            text = self.small_font.render(f"Worshipping: {worship_name}", True, theme.TEXT_NORMAL)
             surface.blit(text, (x + 10, dy))
             worship_text_w = text.get_width()
         self.panel_worship_rect = pygame.Rect(x + 10, worship_line_y, worship_text_w, 16)
@@ -700,9 +838,9 @@ class UIRenderer:
                 if regard_changes:
                     regard_delta_total = self._sum_numeric_deltas(regard_changes)
                     old_regard = val - regard_delta_total
-                    r_old_color = (100, 255, 100) if old_regard > 0 else (255, 100, 100) if old_regard < 0 else (180, 180, 200)
-                    r_new_color = (100, 255, 100) if val > 0 else (255, 100, 100) if val < 0 else (180, 180, 200)
-                    label_surf = self.small_font.render(f"  {other_name}: ", True, (180, 180, 200))
+                    r_old_color = (100, 255, 100) if old_regard > 0 else (255, 100, 100) if old_regard < 0 else theme.TEXT_NORMAL
+                    r_new_color = (100, 255, 100) if val > 0 else (255, 100, 100) if val < 0 else theme.TEXT_NORMAL
+                    label_surf = self.small_font.render(f"  {other_name}: ", True, theme.TEXT_NORMAL)
                     surface.blit(label_surf, (x + 10, dy))
                     cx = x + 10 + label_surf.get_width()
                     cx += self._render_strikethrough(
@@ -716,7 +854,7 @@ class UIRenderer:
                     new_surf = self.small_font.render(f"{val:+d}", True, r_new_color)
                     surface.blit(new_surf, (cx, dy))
                 else:
-                    r_color = (100, 255, 100) if val > 0 else (255, 100, 100) if val < 0 else (180, 180, 200)
+                    r_color = (100, 255, 100) if val > 0 else (255, 100, 100) if val < 0 else theme.TEXT_NORMAL
                     text = self.small_font.render(f"  {other_name}: {val:+d}", True, r_color)
                     surface.blit(text, (x + 10, dy))
                 dy += 18
@@ -844,7 +982,7 @@ class UIRenderer:
 
         display_h = min(panel_h, max_height) if max_height else panel_h
         panel_rect = pygame.Rect(x, y, width, display_h)
-        pygame.draw.rect(surface, (30, 30, 40), panel_rect, border_radius=4)
+        pygame.draw.rect(surface, theme.BG_PANEL, panel_rect, border_radius=4)
         pygame.draw.rect(surface, (192, 192, 192), panel_rect, 2, border_radius=4)
 
         old_clip = surface.get_clip()
@@ -856,7 +994,7 @@ class UIRenderer:
         name_surf = self.font.render(name, True, (255, 255, 100))
         surface.blit(name_surf, (x + 10, dy))
         # VP to the right
-        vp_surf = self.small_font.render(f"{vp} VP", True, (200, 200, 220))
+        vp_surf = self.small_font.render(f"{vp} VP", True, theme.TEXT_HIGHLIGHT)
         surface.blit(vp_surf, (x + width - 10 - vp_surf.get_width(), dy + 2))
         # Identity symbol in header (always, vagrant or guiding) — silver
         if spirit_index_map is not None:
@@ -872,7 +1010,7 @@ class UIRenderer:
         if guided_faction:
             faction_color = tuple(FACTION_COLORS.get(guided_faction, (150, 150, 150)))
             faction_name = faction_full_name(guided_faction)
-            label_surf = self.small_font.render("Guiding: ", True, (180, 180, 200))
+            label_surf = self.small_font.render("Guiding: ", True, theme.TEXT_NORMAL)
             surface.blit(label_surf, (x + 10, dy))
             value_surf = self.small_font.render(faction_name, True, faction_color)
             surface.blit(value_surf, (x + 10 + label_surf.get_width(), dy))
@@ -887,7 +1025,7 @@ class UIRenderer:
 
         # Influence circles
         influence_line_y = dy
-        inf_label = self.small_font.render("Influence ", True, (180, 180, 200))
+        inf_label = self.small_font.render("Influence ", True, theme.TEXT_NORMAL)
         surface.blit(inf_label, (x + 10, dy))
         circle_r = 7
         cx_start = x + 10 + inf_label.get_width()
@@ -918,7 +1056,7 @@ class UIRenderer:
             draw_dotted_underline(surface, x + 10, dy + 14, aff_label.get_width() - 1)
             affinity_rect = pygame.Rect(x + 10, dy, aff_label.get_width(), 16)
             ax = x + 10 + aff_label.get_width()
-            hab_color = tuple(FACTION_COLORS.get(habitat_affinity, (180, 180, 200)))
+            hab_color = tuple(FACTION_COLORS.get(habitat_affinity, theme.TEXT_NORMAL))
             if habitat_affinity:
                 hab_name = FACTION_DISPLAY_NAMES.get(habitat_affinity, habitat_affinity)
                 hab_surf = self.small_font.render(hab_name, True, hab_color)
@@ -935,7 +1073,7 @@ class UIRenderer:
                      if (fd.get("race") if isinstance(fd, dict) else getattr(fd, "race", "")) == race_affinity),
                     None
                 )
-                race_color = tuple(FACTION_COLORS.get(race_faction_id, (180, 180, 200))) if race_faction_id else hab_color
+                race_color = tuple(FACTION_COLORS.get(race_faction_id, theme.TEXT_NORMAL)) if race_faction_id else hab_color
                 race_surf = self.small_font.render(race_affinity, True, race_color)
                 surface.blit(race_surf, (ax, dy))
             dy += 18

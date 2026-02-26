@@ -12,7 +12,12 @@ from shared.constants import (
 from shared.hex_utils import axial_to_pixel
 from client.faction_names import faction_full_name, update_faction_races
 from client.renderer.hex_renderer import HexRenderer
-from client.renderer.ui_renderer import UIRenderer, Button, build_agenda_tooltip, build_modifier_tooltip, draw_dotted_underline
+from client.renderer.ui_renderer import (
+    UIRenderer, Button, build_agenda_tooltip, build_modifier_tooltip,
+    draw_dotted_underline, _wrap_text, render_rich_lines,
+)
+from client.renderer.font_cache import get_font
+import client.theme as theme
 from client.renderer.animation import AnimationManager, TextAnimation, IdolBeamAnimation
 from client.renderer.assets import load_assets, agenda_card_images
 from client.input_handler import InputHandler
@@ -53,6 +58,12 @@ _BTN_START_Y = 129
 
 # Vertical center of the playable hex map area (between ribbon and submit button)
 _MAP_CENTER_Y = (_TITLE_Y + SCREEN_HEIGHT - 60) // 2  # = (102+740)//2 = 421
+
+# Card picker dimensions
+_CARD_W = 110
+_CARD_H = 145         # vertical (left-panel) card pickers
+_CARD_SPACING = 5
+_CARD_H_TALL = 170    # taller layout used by _calc_card_rects
 
 _INFLUENCE_TOOLTIP = (
     "The number of additional Agenda cards a Spirit draws when "
@@ -179,6 +190,7 @@ class GameScene:
         self.spirits: dict = {}
         self.wars: list = []
         self.all_idols: list = []
+        self._render_idols_cache: list = []   # built in render(), reused by _update_idol_hover
         self.hex_ownership: dict[tuple[int, int], str | None] = {}
         # Deferred display state: lags behind real state while animations play
         self._display_hex_ownership: dict[tuple[int, int], str | None] | None = None
@@ -338,13 +350,13 @@ class GameScene:
     @property
     def font(self):
         if self._font is None:
-            self._font = pygame.font.SysFont("consolas", 16)
+            self._font = get_font(16)
         return self._font
 
     @property
     def small_font(self):
         if self._small_font is None:
-            self._small_font = pygame.font.SysFont("consolas", 13)
+            self._small_font = get_font(13)
         return self._small_font
 
     def _update_state_from_snapshot(self, data: dict):
@@ -1301,19 +1313,17 @@ class GameScene:
 
     def _calc_card_rects(self, count: int, start_x: int = 20, y: int = 125,
                          centered: bool = False) -> list[pygame.Rect]:
-        card_w, card_h = 110, 170
         spacing = 10
         if centered:
-            total_w = count * (card_w + spacing) - spacing
+            total_w = count * (_CARD_W + spacing) - spacing
             start_x = SCREEN_WIDTH // 2 - total_w // 2
-        return [pygame.Rect(start_x + i * (card_w + spacing), y, card_w, card_h)
+        return [pygame.Rect(start_x + i * (_CARD_W + spacing), y, _CARD_W, _CARD_H_TALL)
                 for i in range(count)]
 
     def _calc_left_choice_card_rects(self, count: int, y: int = _CHOICE_CARD_Y) -> list[pygame.Rect]:
         """Card rects stacked vertically in the left panel."""
-        card_w, card_h, spacing = 110, 145, 5
-        card_x = max(20, (_HEX_MAP_LEFT_X - card_w) // 2)
-        return [pygame.Rect(card_x, y + i * (card_h + spacing), card_w, card_h)
+        card_x = max(20, (_HEX_MAP_LEFT_X - _CARD_W) // 2)
+        return [pygame.Rect(card_x, y + i * (_CARD_H + _CARD_SPACING), _CARD_W, _CARD_H)
                 for i in range(count)]
 
     def _update_guided_hex_hover(self, mouse_pos):
@@ -1345,23 +1355,7 @@ class GameScene:
 
     def _update_idol_hover(self, mouse_pos):
         """Check if mouse is hovering over a placed idol on the hex map."""
-        if not self.all_idols:
-            self.hovered_idol = None
-            self.idol_tooltip_spirit_rects = []
-            return
-        # Build render idols the same way as render()
-        render_idols = []
-        for idol_data in self.all_idols:
-            if isinstance(idol_data, dict):
-                render_idols.append(type('Idol', (), {
-                    'type': IdolType(idol_data['type']),
-                    'position': type('Pos', (), {
-                        'q': idol_data['position']['q'],
-                        'r': idol_data['position']['r'],
-                    })(),
-                    'owner_spirit': idol_data.get('owner_spirit'),
-                })())
-        if not render_idols:
+        if not self._render_idols_cache:
             self.hovered_idol = None
             self.idol_tooltip_spirit_rects = []
             return
@@ -1369,7 +1363,7 @@ class GameScene:
             sid: i for i, sid in enumerate(sorted(self.spirits.keys()))
         }
         self.hovered_idol = self.hex_renderer.get_idol_at_screen(
-            mouse_pos[0], mouse_pos[1], render_idols,
+            mouse_pos[0], mouse_pos[1], self._render_idols_cache,
             self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT,
             spirit_index_map,
         )
@@ -1930,7 +1924,7 @@ class GameScene:
         set_ui_rects(rects)
 
     def render(self, screen: pygame.Surface):
-        screen.fill((10, 10, 18))
+        screen.fill(theme.BG_SCREEN)
 
         # Parse idol data for rendering
         render_idols = []
@@ -1944,6 +1938,7 @@ class GameScene:
                     })(),
                     'owner_spirit': idol_data.get('owner_spirit'),
                 })())
+        self._render_idols_cache = render_idols
 
         # Parse wars for rendering (use display state if available)
         render_wars = []
@@ -2350,9 +2345,9 @@ class GameScene:
         if not self.game_over_data:
             return
         if self._game_over_bold_font is None:
-            self._game_over_bold_font = pygame.font.SysFont("consolas", 16, bold=True)
+            self._game_over_bold_font = get_font(16, bold=True)
         if self._game_over_win_font is None:
-            self._game_over_win_font = pygame.font.SysFont("consolas", 20, bold=True)
+            self._game_over_win_font = get_font(20, bold=True)
 
         winners = self.game_over_data.get("winners", [])
         scores = self.game_over_data.get("scores", {})
@@ -2374,7 +2369,7 @@ class GameScene:
         pygame.draw.rect(screen, (130, 130, 170),
                          pygame.Rect(panel_x, panel_y, panel_w, panel_h), 1, border_radius=4)
 
-        header = self.font.render("Final Scores", True, (220, 220, 240))
+        header = self.font.render("Final Scores", True, theme.TEXT_BRIGHT)
         screen.blit(header, (panel_x + 10, panel_y + 8))
 
         y = panel_y + 30
@@ -2472,7 +2467,7 @@ class GameScene:
         tooltip_text, clickable_spirits = self._build_idol_tooltip_text(self.hovered_idol)
         mx, my = pygame.mouse.get_pos()
         max_width = 350
-        lines = self._wrap_lines(tooltip_text, self.small_font, max_width)
+        lines = _wrap_text(tooltip_text, self.small_font, max_width)
         line_h = self.small_font.get_linesize()
         rendered_widths = [self.small_font.size(line)[0] for line in lines]
         content_w = max(rendered_widths) if rendered_widths else 0
@@ -2485,15 +2480,15 @@ class GameScene:
             tip_x = SCREEN_WIDTH - 4 - tip_w
         tip_y = my - tip_h - 4
         tip_rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
-        pygame.draw.rect(screen, (40, 40, 50), tip_rect, border_radius=4)
-        pygame.draw.rect(screen, (150, 150, 100), tip_rect, 1, border_radius=4)
+        pygame.draw.rect(screen, theme.BG_TOOLTIP, tip_rect, border_radius=4)
+        pygame.draw.rect(screen, theme.BORDER_TOOLTIP, tip_rect, 1, border_radius=4)
 
         keyword_names = list(dict.fromkeys(clickable_spirits.values()))
-        name_rects = self._render_rich_lines(
+        name_rects = render_rich_lines(
             screen, self.small_font, lines, tip_x + 8, tip_y + 6,
             keywords=keyword_names,
             hovered_keyword=None,
-            normal_color=(255, 220, 150),
+            normal_color=theme.TEXT_TOOLTIP,
             keyword_color=(140, 220, 255),
             hovered_keyword_color=(140, 220, 255),
         )
@@ -2537,7 +2532,7 @@ class GameScene:
     def _render_vagrant_ui(self, screen):
         # Draw "Guidance" title
         if self.guidance_title_rect and self.faction_buttons:
-            title_surf = self.font.render("Guidance", True, (200, 200, 220))
+            title_surf = self.font.render("Guidance", True, theme.TEXT_HIGHLIGHT)
             tx = self.guidance_title_rect.centerx - title_surf.get_width() // 2
             ty = self.guidance_title_rect.y
             screen.blit(title_surf, (tx, ty))
@@ -2546,7 +2541,7 @@ class GameScene:
 
         # Draw "Idol placement" title
         if self.idol_title_rect and self.idol_buttons:
-            title_surf = self.font.render("Idol placement", True, (200, 200, 220))
+            title_surf = self.font.render("Idol placement", True, theme.TEXT_HIGHLIGHT)
             tx = self.idol_title_rect.centerx - title_surf.get_width() // 2
             ty = self.idol_title_rect.y
             screen.blit(title_surf, (tx, ty))
@@ -2618,7 +2613,7 @@ class GameScene:
             if self.selected_hex:
                 parts.append(f"Hex: ({self.selected_hex[0]}, {self.selected_hex[1]})")
             if parts:
-                text = self.font.render(" | ".join(parts), True, (200, 200, 220))
+                text = self.font.render(" | ".join(parts), True, theme.TEXT_HIGHLIGHT)
                 screen.blit(text, (20, self.submit_button.rect.top - text.get_height() - 4))
 
             # Disabled tooltip: explain what's still needed
@@ -2675,7 +2670,7 @@ class GameScene:
             start_x = card_rects[0].x if card_rects else 20
             start_y = card_rects[0].y if card_rects else _CHOICE_CARD_Y
 
-            title = self.font.render(f"Choose agenda for {faction_name}:", True, (220, 220, 240))
+            title = self.font.render(f"Choose agenda for {faction_name}:", True, theme.TEXT_BRIGHT)
             title_x = max(4, start_x + 2)
             screen.blit(title, (title_x, 102))
 
@@ -2711,7 +2706,7 @@ class GameScene:
         start_x = card_rects[0].x if card_rects else 20
         start_y = card_rects[0].y if card_rects else _CHOICE_CARD_Y
 
-        title = self.font.render(f"Choose modifier for {faction_name}:", True, (200, 200, 220))
+        title = self.font.render(f"Choose modifier for {faction_name}:", True, theme.TEXT_HIGHLIGHT)
         screen.blit(title, (max(4, start_x + 2), 102))
 
         modifiers = self._get_current_faction_modifiers()
@@ -2734,7 +2729,7 @@ class GameScene:
         keywords = ["Influence", "Agenda pool"]
         text_x = 20
         max_text_width = max(220, _HEX_MAP_LEFT_X - 30)
-        lines = self._wrap_lines(title_text, self.font, max_text_width)
+        lines = _wrap_text(title_text, self.font, max_text_width)
         line_h = self.font.get_linesize()
         title_h = len(lines) * line_h
         buttons_top = min(
@@ -2745,13 +2740,13 @@ class GameScene:
         first_label_y = buttons_top - line_h - 8
         text_bottom_limit = first_label_y - 8
         text_y = max(96, text_bottom_limit - title_h)
-        self.ejection_keyword_rects = self._render_rich_lines(
+        self.ejection_keyword_rects = render_rich_lines(
             screen, self.font, lines, text_x, text_y,
             keywords=keywords,
             hovered_keyword=self.hovered_ejection_keyword,
-            normal_color=(200, 200, 220),
-            keyword_color=(100, 220, 210),
-            hovered_keyword_color=(140, 255, 245),
+            normal_color=theme.TEXT_HIGHLIGHT,
+            keyword_color=theme.TEXT_KEYWORD,
+            hovered_keyword_color=theme.TEXT_KEYWORD_HOV,
         )
 
         # Section labels
@@ -2822,97 +2817,6 @@ class GameScene:
                 if same_type else None
             )
             self.submit_button.draw(screen, self.font)
-
-    def _wrap_lines(self, text: str, font: pygame.font.Font, max_width: int) -> list[str]:
-        """Simple word-wrap utility for inline UI text blocks."""
-        lines = []
-        for paragraph in text.split("\n"):
-            if not paragraph.strip():
-                lines.append("")
-                continue
-            words = paragraph.split()
-            current = words[0]
-            for word in words[1:]:
-                candidate = f"{current} {word}"
-                if font.size(candidate)[0] <= max_width:
-                    current = candidate
-                else:
-                    lines.append(current)
-                    current = word
-            lines.append(current)
-        return lines
-
-    def _render_rich_lines(self, surface: pygame.Surface, font: pygame.font.Font,
-                           lines: list[str], x: int, y: int,
-                           keywords: list[str], hovered_keyword: str | None,
-                           normal_color: tuple[int, int, int],
-                           keyword_color: tuple[int, int, int],
-                           hovered_keyword_color: tuple[int, int, int]) -> dict[str, list[pygame.Rect]]:
-        """Render wrapped lines with keyword underline styling and return keyword rects."""
-        keyword_rects: dict[str, list[pygame.Rect]] = {k: [] for k in keywords}
-        line_h = font.get_linesize()
-
-        for line_idx, line in enumerate(lines):
-            cy = y + line_idx * line_h
-            if not keywords:
-                surface.blit(font.render(line, True, normal_color), (x, cy))
-                continue
-
-            occurrences = []
-            for kw in keywords:
-                start = 0
-                while True:
-                    pos = line.find(kw, start)
-                    if pos < 0:
-                        break
-                    occurrences.append((pos, pos + len(kw), kw))
-                    start = pos + len(kw)
-
-            if not occurrences:
-                surface.blit(font.render(line, True, normal_color), (x, cy))
-                continue
-
-            occurrences.sort(key=lambda o: o[0])
-            filtered = []
-            last_end = 0
-            for seg_start, seg_end, kw in occurrences:
-                if seg_start >= last_end:
-                    filtered.append((seg_start, seg_end, kw))
-                    last_end = seg_end
-
-            cursor_x = x
-            pos = 0
-            for seg_start, seg_end, kw in filtered:
-                if seg_start > pos:
-                    normal_text = line[pos:seg_start]
-                    surf = font.render(normal_text, True, normal_color)
-                    surface.blit(surf, (cursor_x, cy))
-                    cursor_x += surf.get_width()
-
-                kw_text = line[seg_start:seg_end]
-                color = hovered_keyword_color if kw == hovered_keyword else keyword_color
-                surf = font.render(kw_text, True, color)
-                surface.blit(surf, (cursor_x, cy))
-                kw_rect = pygame.Rect(cursor_x, cy, surf.get_width(), line_h)
-                keyword_rects[kw].append(kw_rect)
-
-                underline_y = cy + line_h - 2
-                ux = cursor_x
-                ux_end = cursor_x + surf.get_width()
-                while ux < ux_end:
-                    dot_end = min(ux + 2, ux_end)
-                    pygame.draw.line(surface, color, (ux, underline_y), (dot_end, underline_y), 1)
-                    ux += 5
-
-                cursor_x += surf.get_width()
-                pos = seg_end
-
-            if pos < len(line):
-                tail = line[pos:]
-                surf = font.render(tail, True, normal_color)
-                surface.blit(surf, (cursor_x, cy))
-
-        return keyword_rects
 
     def _render_spoils_ui(self, screen):
         if not self.spoils_entries:

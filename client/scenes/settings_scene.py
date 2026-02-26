@@ -3,14 +3,16 @@
 import pygame
 from shared.constants import SCREEN_WIDTH, SCREEN_HEIGHT
 from client.renderer.ui_renderer import Button
+from client.renderer.font_cache import get_font
+import client.theme as theme
 
 
 class SettingsScene:
     def __init__(self, app):
         self.app = app
-        self.font = pygame.font.SysFont("consolas", 16)
-        self.title_font = pygame.font.SysFont("consolas", 36)
-        self.small_font = pygame.font.SysFont("consolas", 14)
+        self.font = get_font(16)
+        self.title_font = get_font(36)
+        self.small_font = get_font(14)
 
         cx = SCREEN_WIDTH // 2
         self.back_button = Button(
@@ -46,9 +48,9 @@ class SettingsScene:
         pass
 
     def render(self, screen: pygame.Surface):
-        screen.fill((15, 15, 25))
+        screen.fill(theme.BG_MENU)
 
-        title = self.title_font.render("Settings", True, (200, 180, 140))
+        title = self.title_font.render("Settings", True, theme.TITLE_TEXT)
         screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 80))
 
         cx = SCREEN_WIDTH // 2
@@ -56,19 +58,19 @@ class SettingsScene:
 
         # Fullscreen checkbox
         cb = self.checkbox_rect
-        pygame.draw.rect(screen, (40, 40, 55), cb, border_radius=3)
-        pygame.draw.rect(screen, (100, 100, 140), cb, 1, border_radius=3)
+        pygame.draw.rect(screen, theme.BG_INPUT, cb, border_radius=3)
+        pygame.draw.rect(screen, theme.BORDER_INPUT, cb, 1, border_radius=3)
         if self.app.fullscreen:
             # Draw X inside checkbox
             margin = 4
-            pygame.draw.line(screen, (180, 220, 180),
+            pygame.draw.line(screen, theme.CHECKBOX_FILL,
                              (cb.x + margin, cb.y + margin),
                              (cb.right - margin, cb.bottom - margin), 2)
-            pygame.draw.line(screen, (180, 220, 180),
+            pygame.draw.line(screen, theme.CHECKBOX_FILL,
                              (cb.right - margin, cb.y + margin),
                              (cb.x + margin, cb.bottom - margin), 2)
 
-        label = self.font.render("Fullscreen", True, (200, 200, 220))
+        label = self.font.render("Fullscreen", True, theme.TEXT_HIGHLIGHT)
         screen.blit(label, (cb.right + 10, cb.y + (cb.height - label.get_height()) // 2))
 
         hint = self.small_font.render("F11 to toggle fullscreen from any screen", True, (90, 90, 110))

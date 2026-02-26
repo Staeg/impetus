@@ -3,6 +3,8 @@
 import pygame
 from shared.constants import MessageType, SCREEN_WIDTH, SCREEN_HEIGHT, DEFAULT_PORT
 from client.renderer.ui_renderer import Button
+from client.renderer.font_cache import get_font
+import client.theme as theme
 
 
 def _get_clipboard():
@@ -21,9 +23,9 @@ def _get_clipboard():
 class MenuScene:
     def __init__(self, app):
         self.app = app
-        self.font = pygame.font.SysFont("consolas", 16)
-        self.title_font = pygame.font.SysFont("consolas", 36)
-        self.small_font = pygame.font.SysFont("consolas", 14)
+        self.font = get_font(16)
+        self.title_font = get_font(36)
+        self.small_font = get_font(14)
 
         cx = SCREEN_WIDTH // 2
         cy = SCREEN_HEIGHT // 2
@@ -215,24 +217,24 @@ class MenuScene:
         pass
 
     def render(self, screen: pygame.Surface):
-        screen.fill((15, 15, 25))
+        screen.fill(theme.BG_MENU)
 
-        title = self.title_font.render("IMPETUS", True, (200, 180, 140))
+        title = self.title_font.render("IMPETUS", True, theme.TITLE_TEXT)
         screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 80))
 
-        subtitle = self.small_font.render("A game of spirits and factions", True, (120, 120, 140))
+        subtitle = self.small_font.render("A game of spirits and factions", True, theme.TEXT_DIM)
         screen.blit(subtitle, (SCREEN_WIDTH // 2 - subtitle.get_width() // 2, 125))
 
         if self.entering_name:
-            prompt = self.font.render("Enter your name:", True, (180, 180, 200))
+            prompt = self.font.render("Enter your name:", True, theme.TEXT_NORMAL)
             screen.blit(prompt, (SCREEN_WIDTH // 2 - prompt.get_width() // 2, 220))
 
             name_rect = pygame.Rect(SCREEN_WIDTH // 2 - 120, 250, 240, 36)
-            pygame.draw.rect(screen, (40, 40, 55), name_rect, border_radius=4)
-            pygame.draw.rect(screen, (100, 100, 140), name_rect, 1, border_radius=4)
+            pygame.draw.rect(screen, theme.BG_INPUT, name_rect, border_radius=4)
+            pygame.draw.rect(screen, theme.BORDER_INPUT, name_rect, 1, border_radius=4)
 
-            name_text = self.font.render(self.player_name, True, (220, 220, 240))
-            cursor = self.font.render("|", True, (220, 220, 240))
+            name_text = self.font.render(self.player_name, True, theme.TEXT_BRIGHT)
+            cursor = self.font.render("|", True, theme.TEXT_BRIGHT)
             screen.blit(name_text, (name_rect.x + 8, name_rect.y + 8))
             screen.blit(cursor, (name_rect.x + 8 + name_text.get_width() - 1, name_rect.y + 8))
 
@@ -241,14 +243,14 @@ class MenuScene:
             return
 
         if self.entering_host_code:
-            prompt = self.font.render("Choose a room code:", True, (180, 180, 200))
+            prompt = self.font.render("Choose a room code:", True, theme.TEXT_NORMAL)
             screen.blit(prompt, (SCREEN_WIDTH // 2 - prompt.get_width() // 2, 220))
 
             code_rect = pygame.Rect(SCREEN_WIDTH // 2 - 80, 250, 160, 36)
-            pygame.draw.rect(screen, (40, 40, 55), code_rect, border_radius=4)
-            pygame.draw.rect(screen, (100, 100, 140), code_rect, 1, border_radius=4)
+            pygame.draw.rect(screen, theme.BG_INPUT, code_rect, border_radius=4)
+            pygame.draw.rect(screen, theme.BORDER_INPUT, code_rect, 1, border_radius=4)
 
-            code_text = self.font.render(self.host_code + "|", True, (220, 220, 240))
+            code_text = self.font.render(self.host_code + "|", True, theme.TEXT_BRIGHT)
             screen.blit(code_text, (code_rect.x + 8, code_rect.y + 8))
 
             hint = self.small_font.render("Press Enter to host, Esc to cancel", True, (100, 100, 120))
@@ -256,14 +258,14 @@ class MenuScene:
             return
 
         if self.entering_code:
-            prompt = self.font.render("Enter room code:", True, (180, 180, 200))
+            prompt = self.font.render("Enter room code:", True, theme.TEXT_NORMAL)
             screen.blit(prompt, (SCREEN_WIDTH // 2 - prompt.get_width() // 2, 220))
 
             code_rect = pygame.Rect(SCREEN_WIDTH // 2 - 80, 250, 160, 36)
-            pygame.draw.rect(screen, (40, 40, 55), code_rect, border_radius=4)
-            pygame.draw.rect(screen, (100, 100, 140), code_rect, 1, border_radius=4)
+            pygame.draw.rect(screen, theme.BG_INPUT, code_rect, border_radius=4)
+            pygame.draw.rect(screen, theme.BORDER_INPUT, code_rect, 1, border_radius=4)
 
-            code_text = self.font.render(self.room_code + "|", True, (220, 220, 240))
+            code_text = self.font.render(self.room_code + "|", True, theme.TEXT_BRIGHT)
             screen.blit(code_text, (code_rect.x + 8, code_rect.y + 8))
 
             hint = self.small_font.render("Press Enter to join, Esc to cancel", True, (100, 100, 120))
@@ -279,12 +281,12 @@ class MenuScene:
         screen.blit(server_label, (SCREEN_WIDTH // 2 - 140, 203))
 
         server_rect = pygame.Rect(SCREEN_WIDTH // 2 - 80, 198, 220, 28)
-        border_color = (140, 140, 180) if self.entering_server else (70, 70, 90)
-        pygame.draw.rect(screen, (30, 30, 42), server_rect, border_radius=4)
+        border_color = theme.BORDER_INPUT_ACTIVE if self.entering_server else (70, 70, 90)
+        pygame.draw.rect(screen, theme.BG_INPUT_DARK, server_rect, border_radius=4)
         pygame.draw.rect(screen, border_color, server_rect, 1, border_radius=4)
 
         display_addr = self.server_address + ("|" if self.entering_server else "")
-        addr_text = self.small_font.render(display_addr, True, (180, 180, 200))
+        addr_text = self.small_font.render(display_addr, True, theme.TEXT_NORMAL)
         screen.blit(addr_text, (server_rect.x + 6, server_rect.y + 6))
 
         self.single_player_button.draw(screen, self.font)
@@ -294,5 +296,5 @@ class MenuScene:
         self.settings_button.draw(screen, self.font)
 
         if self.error_message:
-            err = self.small_font.render(self.error_message, True, (255, 100, 100))
+            err = self.small_font.render(self.error_message, True, theme.TEXT_ERROR)
             screen.blit(err, (SCREEN_WIDTH // 2 - err.get_width() // 2, SCREEN_HEIGHT - 60))
