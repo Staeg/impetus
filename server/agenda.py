@@ -9,7 +9,8 @@ def resolve_agendas(factions: dict, hex_map, agenda_choices: dict[str, AgendaTyp
                     wars: list, events: list, is_spoils: bool = False,
                     spoils_conquests: dict = None,
                     normal_trade_factions: list[str] = None,
-                    faction_counts: dict[str, int] = None):
+                    faction_counts: dict[str, int] = None,
+                    guided_expand_choices: dict[str, tuple] = None):
     """Resolve all agenda choices in the correct order.
 
     Args:
@@ -22,6 +23,7 @@ def resolve_agendas(factions: dict, hex_map, agenda_choices: dict[str, AgendaTyp
         spoils_conquests: dict of faction_id -> hex coord (or list of coords) for spoils expand targets
         normal_trade_factions: factions that traded normally this turn (for spoils trade)
         faction_counts: dict of faction_id -> int, how many times each faction plays this agenda type (for spoils duplicates). Defaults to 1 for all.
+        guided_expand_choices: dict of faction_id -> (q, r) for guided spirit expand hex choices (non-spoils only)
     """
     faction_counts = faction_counts or {}
     for agenda_type in AGENDA_RESOLUTION_ORDER:
@@ -39,7 +41,8 @@ def resolve_agendas(factions: dict, hex_map, agenda_choices: dict[str, AgendaTyp
             _resolve_trade(factions, playing_factions, events, is_spoils,
                           normal_trade_factions or [], type_counts)
         elif agenda_type == AgendaType.EXPAND:
-            _resolve_expand(factions, hex_map, playing_factions, events, is_spoils, spoils_conquests, type_counts)
+            _resolve_expand(factions, hex_map, playing_factions, events, is_spoils,
+                           spoils_conquests, type_counts, guided_expand_choices)
         elif agenda_type == AgendaType.CHANGE:
             _resolve_change(factions, playing_factions, events, is_spoils, type_counts)
 
@@ -209,14 +212,67 @@ def _resolve_trade(factions, playing_factions, events, is_spoils,
 
 
 def _resolve_expand(factions, hex_map, playing_factions, events, is_spoils,
-                    spoils_conquests: dict = None, faction_counts=None):
-    """Expand: spend gold equal to territory count to claim a random neutral hex.
+                    spoils_conquests: dict = None, faction_counts=None,
+                    guided_expand_choices: dict = None):
+    """Expand: spend gold equal to territory count to claim a neutral hex.
     If can't afford or no hexes available, +1 gold instead.
+
+    For normal Expand: guided spirits have pre-chosen their target hex via
+    guided_expand_choices (faction_id -> (q, r)). Non-guided factions pick
+    randomly. All targets are collected first, then contest detection runs:
+    if two or more factions target the same hex, all fail.
 
     For spoils: take the loser's battleground hex instead of paying gold.
     spoils_conquests maps faction_id -> list of hex coords to claim.
     """
     faction_counts = faction_counts or {}
+    guided_expand_choices = guided_expand_choices or {}
+
+    if is_spoils:
+        # Spoils path: unchanged
+        for fid in playing_factions:
+            faction = factions[fid]
+            expand_discount = faction.change_modifiers.get(ChangeModifierTarget.EXPAND, 0)
+            expand_fail_bonus = 1 + expand_discount
+            territory_count = len(hex_map.get_faction_territories(fid))
+            cost = max(0, territory_count - expand_discount)
+
+            if spoils_conquests and fid in spoils_conquests:
+                targets = spoils_conquests[fid]
+                if not isinstance(targets, list):
+                    targets = [targets]
+                for target in targets:
+                    hex_map.claim_hex(target, fid)
+                    faction.territories_gained_this_turn += 1
+                    events.append({
+                        "type": "expand_spoils",
+                        "faction": fid,
+                        "hex": {"q": target[0], "r": target[1]},
+                    })
+                continue
+
+            target = hex_map.get_random_reachable_neutral(fid)
+            if target is not None and faction.gold >= cost:
+                faction.gold -= cost
+                hex_map.claim_hex(target, fid)
+                faction.territories_gained_this_turn += 1
+                events.append({
+                    "type": "expand",
+                    "faction": fid,
+                    "hex": {"q": target[0], "r": target[1]},
+                    "cost": cost,
+                })
+            else:
+                faction.add_gold(expand_fail_bonus)
+                events.append({
+                    "type": "expand_failed",
+                    "faction": fid,
+                    "gold_gained": expand_fail_bonus,
+                })
+        return
+
+    # Normal expand: collect all targets simultaneously, then detect contests.
+    expand_info = {}  # faction_id -> (target, expand_fail_bonus, cost)
     for fid in playing_factions:
         faction = factions[fid]
         expand_discount = faction.change_modifiers.get(ChangeModifierTarget.EXPAND, 0)
@@ -224,23 +280,31 @@ def _resolve_expand(factions, hex_map, playing_factions, events, is_spoils,
         territory_count = len(hex_map.get_faction_territories(fid))
         cost = max(0, territory_count - expand_discount)
 
-        if is_spoils and spoils_conquests and fid in spoils_conquests:
-            # Spoils expand: take the target hex(es)
-            targets = spoils_conquests[fid]
-            if not isinstance(targets, list):
-                targets = [targets]
-            for target in targets:
-                hex_map.claim_hex(target, fid)
-                faction.territories_gained_this_turn += 1
-                events.append({
-                    "type": "expand_spoils",
-                    "faction": fid,
-                    "hex": {"q": target[0], "r": target[1]},
-                })
-            continue
+        if fid in guided_expand_choices:
+            target = guided_expand_choices[fid]
+        else:
+            target = hex_map.get_random_reachable_neutral(fid)
 
-        target = hex_map.get_random_reachable_neutral(fid)
-        if target is not None and faction.gold >= cost:
+        expand_info[fid] = (target, expand_fail_bonus, cost)
+
+    # Contest detection: if two or more factions target the same hex, all fail.
+    hex_claims: dict[tuple, list[str]] = {}
+    for fid, (target, _, cost) in expand_info.items():
+        if target is not None and factions[fid].gold >= cost:
+            hex_claims.setdefault(target, []).append(fid)
+    contested_fids = {
+        fid
+        for claimants in hex_claims.values()
+        if len(claimants) > 1
+        for fid in claimants
+    }
+
+    # Apply results
+    for fid in playing_factions:
+        faction = factions[fid]
+        target, expand_fail_bonus, cost = expand_info[fid]
+
+        if target is not None and faction.gold >= cost and fid not in contested_fids:
             faction.gold -= cost
             hex_map.claim_hex(target, fid)
             faction.territories_gained_this_turn += 1
@@ -252,11 +316,14 @@ def _resolve_expand(factions, hex_map, playing_factions, events, is_spoils,
             })
         else:
             faction.add_gold(expand_fail_bonus)
-            events.append({
+            evt = {
                 "type": "expand_failed",
                 "faction": fid,
                 "gold_gained": expand_fail_bonus,
-            })
+            }
+            if fid in contested_fids:
+                evt["contested"] = True
+            events.append(evt)
 
 
 def _resolve_change(factions, playing_factions, events, is_spoils=False, faction_counts=None):

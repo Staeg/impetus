@@ -92,6 +92,9 @@ class GameState:
         self._stored_agenda_choices: dict[str, AgendaType] = {}
         self._guided_change_factions: list[str] = []
         self._guided_change_modifiers: dict[str, str] = {}
+        # Guided expand hex choices (spirit_id -> faction_id pending, spirit_id -> (q,r) chosen)
+        self.expand_pending: dict[str, str] = {}
+        self.expand_chosen: dict[str, tuple] = {}
         # Faction display order (left-to-right by starting hex x-position)
         self.faction_order: list[str] = list(FACTION_NAMES)
 
@@ -742,6 +745,48 @@ class GameState:
         """Check if there are still pending Change choices (separate from ejection)."""
         return bool(self.change_pending)
 
+    def prepare_expand_choices(self) -> None:
+        """Identify guided Expand factions whose spirit should choose a target hex.
+
+        Called after prepare_change_choices() has set _stored_agenda_choices.
+        Sets expand_pending: spirit_id -> faction_id for factions where expansion
+        is possible (reachable hex exists AND faction can afford the cost).
+        Non-guided factions and those that can't expand are handled automatically
+        during resolution.
+        """
+        from shared.constants import ChangeModifierTarget
+        self.expand_pending.clear()
+        for fid, at in self._stored_agenda_choices.items():
+            if at != AgendaType.EXPAND:
+                continue
+            faction = self.factions[fid]
+            if not faction.guiding_spirit:
+                continue
+            spirit_id = faction.guiding_spirit
+            expand_discount = faction.change_modifiers.get(ChangeModifierTarget.EXPAND, 0)
+            territory_count = len(self.hex_map.get_faction_territories(fid))
+            cost = max(0, territory_count - expand_discount)
+            reachable = self.hex_map.get_reachable_neutral_hexes(fid)
+            if not reachable or faction.gold < cost:
+                continue
+            self.expand_pending[spirit_id] = fid
+
+    def has_pending_expand_choices(self) -> bool:
+        """Check if any guided spirits still need to submit an expand hex choice."""
+        return bool(self.expand_pending)
+
+    def submit_expand_choice(self, spirit_id: str, q: int, r: int) -> Optional[str]:
+        """Submit the expand target hex for a guided spirit. Returns error or None."""
+        if spirit_id not in self.expand_pending:
+            return "No expand choice pending"
+        faction_id = self.expand_pending[spirit_id]
+        reachable = self.hex_map.get_reachable_neutral_hexes(faction_id)
+        if (q, r) not in reachable:
+            return f"Hex ({q},{r}) is not a reachable neutral hex for this faction"
+        self.expand_chosen[spirit_id] = (q, r)
+        del self.expand_pending[spirit_id]
+        return None
+
     def submit_change_choice(self, spirit_id: str, card_index: int) -> tuple[Optional[str], list[dict]]:
         """Submit the change card choice for guiding spirits. Returns (error, events)."""
         if spirit_id not in self.change_pending:
@@ -768,15 +813,23 @@ class GameState:
         return None, events
 
     def resolve_agenda_phase_after_changes(self) -> list[dict]:
-        """Resolve all agendas after Change choices have been submitted.
+        """Resolve all agendas after expand and Change choices have been submitted.
 
         Uses stored agenda_choices from prepare_change_choices().
         Guided change factions already had their modifier applied, so exclude
         them from the Change resolution in resolve_agendas.
+        Guided expand factions have pre-chosen their target hex in expand_chosen.
         """
         events = []
         agenda_choices = self._stored_agenda_choices
         guided_change = self._guided_change_factions
+
+        # Build faction_id -> hex mapping for guided expand choices
+        guided_expand_choices = {}
+        for spirit_id, hex_coord in self.expand_chosen.items():
+            spirit = self.spirits.get(spirit_id)
+            if spirit and spirit.guided_faction:
+                guided_expand_choices[spirit.guided_faction] = hex_coord
 
         # Build resolution choices excluding guided change factions
         # (their modifier was already applied via submit_change_choice)
@@ -787,7 +840,8 @@ class GameState:
             resolve_choices[fid] = at
 
         resolve_agendas(self.factions, self.hex_map, resolve_choices,
-                       self.wars, events)
+                       self.wars, events,
+                       guided_expand_choices=guided_expand_choices)
 
         # Add visual change events for guided change factions.
         # The modifier was already applied; this puts them in the
@@ -802,6 +856,7 @@ class GameState:
                     "modifier": modifier,
                 })
         self._guided_change_modifiers = {}
+        self.expand_chosen.clear()
 
         self._finalize_agenda_phase(events)
 
@@ -814,10 +869,18 @@ class GameState:
 
         Handles both prepare and resolve in one step. Used when called
         directly (e.g. from tests or when no change choices are needed).
+        Expand choices are auto-resolved randomly (no interactive sub-phase).
         """
         if not self._stored_agenda_choices:
             # Need to prepare first (direct call path)
             events = self.prepare_change_choices()
+            # Auto-resolve guided expand choices (non-interactive direct path)
+            self.prepare_expand_choices()
+            for spirit_id, faction_id in list(self.expand_pending.items()):
+                reachable = list(self.hex_map.get_reachable_neutral_hexes(faction_id))
+                if reachable:
+                    self.expand_chosen[spirit_id] = random.choice(reachable)
+                del self.expand_pending[spirit_id]
             if self.change_pending:
                 # Change choices needed - can't resolve yet
                 return events
@@ -1156,6 +1219,8 @@ class GameState:
         self._stored_agenda_choices = {}
         self._guided_change_factions = []
         self._guided_change_modifiers = {}
+        self.expand_pending.clear()
+        self.expand_chosen.clear()
 
         self.turn += 1
         self.phase = Phase.VAGRANT_PHASE

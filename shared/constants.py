@@ -82,6 +82,7 @@ class SubPhase(str, Enum):
     SPOILS_CHOICE        = "spoils_choice"
     SPOILS_CHANGE_CHOICE = "spoils_change_choice"
     BATTLEGROUND_CHOICE  = "battleground_choice"
+    EXPAND_CHOICE        = "expand_choice"
 
 
 class AgendaType(str, Enum):
@@ -144,6 +145,7 @@ class MessageType(str, Enum):
     SUBMIT_SPOILS_CHOICE = "submit_spoils_choice"
     SUBMIT_SPOILS_CHANGE_CHOICE = "submit_spoils_change_choice"
     SUBMIT_BATTLEGROUND_CHOICE = "submit_battleground_choice"
+    SUBMIT_EXPAND_CHOICE       = "submit_expand_choice"
     # Server -> Client
     LOBBY_STATE = "lobby_state"
     GAME_START = "game_start"

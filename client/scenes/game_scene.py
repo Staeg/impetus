@@ -118,7 +118,7 @@ _GOLD_TOOLTIP = "Resource used to pay for Expand Agendas. Cannot go below 0."
 
 _TRADE_AGENDA_TOOLTIP = "Trade\n+1 gold, +1 gold for every other Faction playing Trade this turn.\n+1 Regard with each other Faction playing Trade this turn."
 _STEAL_AGENDA_TOOLTIP = "Steal\n-1 Regard with and -1 gold to all neighbors. +1 gold for each gold lost. War erupts at -2 Regard."
-_EXPAND_AGENDA_TOOLTIP = "Expand\nSpend gold equal to territories to claim a neutral hex. If unavailable or lacking gold, +1 gold instead. Idol hexes prioritized."
+_EXPAND_AGENDA_TOOLTIP = "Expand\nGuided: choose a reachable neutral hex to claim (cost = territories). If multiple Spirits pick the same hex, both fail. Unguided: random. If unavailable or lacking gold, +1 gold instead."
 
 _MODIFIER_TOOLTIP = (
     "Permanently improves a specific Agenda when used by the Faction implementing the modifier. "
@@ -255,9 +255,14 @@ class GameScene:
         self.battleground_selections: dict[str, Any] = {}  # war_id -> pair_index or (q,r)
         self.battleground_display_index: int = 0
         self.battleground_selectable_hexes: set[tuple] = set()
+        self.battleground_selected_hexes: set[tuple] = set()  # both hexes of current selection
         self.battleground_hex_to_choice: dict[tuple, Any] = {}  # hex -> pair_index or (q,r)
         self.battleground_nav_left_rect: pygame.Rect | None = None
         self.battleground_nav_right_rect: pygame.Rect | None = None
+
+        # Expand choice state
+        self.expand_choice_hexes: set[tuple] = set()
+        self.expand_choice_faction: str = ""
 
         # In-game menu (top-right)
         self._ingame_menu_open: bool = False
@@ -803,8 +808,15 @@ class GameScene:
             if hex_coord in self.battleground_selectable_hexes:
                 idx = min(self.battleground_display_index,
                           len(self.battleground_choice_wars) - 1)
-                war_id = self.battleground_choice_wars[idx]["war_id"]
-                self.battleground_selections[war_id] = self.battleground_hex_to_choice[hex_coord]
+                wc = self.battleground_choice_wars[idx]
+                war_id = wc["war_id"]
+                choice = self.battleground_hex_to_choice[hex_coord]
+                self.battleground_selections[war_id] = choice
+                self.selected_hex = hex_coord
+                self._update_battleground_selected_hexes(wc, choice)
+            return
+        if self.phase == SubPhase.EXPAND_CHOICE:
+            if hex_coord in self.expand_choice_hexes:
                 self.selected_hex = hex_coord
             return
         if self.phase == Phase.VAGRANT_PHASE.value and self.hex_ownership.get(hex_coord) is None:
@@ -899,25 +911,17 @@ class GameScene:
                     {"card_indices": [e.selected for e in self.spoils_change_entries]})
                 self.spoils_change_entries = []
                 self.has_submitted = True
-        elif self.phase == SubPhase.BATTLEGROUND_CHOICE:
-            if len(self.battleground_selections) >= len(self.battleground_choice_wars):
-                choices = []
-                for wc in self.battleground_choice_wars:
-                    sel = self.battleground_selections.get(wc["war_id"])
-                    if sel is None:
-                        return  # shouldn't happen but be safe
-                    if wc["mode"] == "full":
-                        choices.append({"war_id": wc["war_id"], "pair_index": sel})
-                    else:
-                        choices.append({"war_id": wc["war_id"],
-                                        "hex": {"q": sel[0], "r": sel[1]}})
-                self.app.network.send(MessageType.SUBMIT_BATTLEGROUND_CHOICE,
-                    {"choices": choices})
-                self.battleground_choice_wars = []
-                self.battleground_selections = {}
-                self.battleground_selectable_hexes = set()
+        elif self.phase == SubPhase.EXPAND_CHOICE:
+            if self.selected_hex:
+                q, r = self.selected_hex
+                self.app.network.send(MessageType.SUBMIT_EXPAND_CHOICE, {"q": q, "r": r})
+                self.expand_choice_hexes = set()
+                self.expand_choice_faction = ""
                 self.selected_hex = None
                 self.has_submitted = True
+        elif self.phase == SubPhase.BATTLEGROUND_CHOICE:
+            if len(self.battleground_selections) >= len(self.battleground_choice_wars):
+                self._do_submit_battleground()
 
     def _submit_card_choice(self, index: int, msg_type: MessageType, card_attr: str):
         self.app.network.send(msg_type, {"card_index": index})
@@ -949,7 +953,10 @@ class GameScene:
         self.battleground_selections = {}
         self.battleground_display_index = 0
         self.battleground_selectable_hexes = set()
+        self.battleground_selected_hexes = set()
         self.battleground_hex_to_choice = {}
+        self.expand_choice_hexes = set()
+        self.expand_choice_faction = ""
 
     def handle_network(self, msg_type, payload):
         handler = self._net_handlers.get(msg_type)
@@ -979,7 +986,7 @@ class GameScene:
         needs_input = action not in ("none", "") or phase in (
             SubPhase.CHANGE_CHOICE, SubPhase.SPOILS_CHOICE,
             SubPhase.SPOILS_CHANGE_CHOICE, SubPhase.EJECTION_CHOICE,
-            SubPhase.BATTLEGROUND_CHOICE)
+            SubPhase.BATTLEGROUND_CHOICE, SubPhase.EXPAND_CHOICE)
         should_defer = (
             needs_input
             and (
@@ -1008,7 +1015,8 @@ class GameScene:
     def _process_phase_result(self, payload):
         active_sub_phase = self.phase if self.phase in (
             SubPhase.CHANGE_CHOICE, SubPhase.SPOILS_CHOICE, SubPhase.SPOILS_CHANGE_CHOICE,
-            SubPhase.EJECTION_CHOICE, SubPhase.BATTLEGROUND_CHOICE) else None
+            SubPhase.EJECTION_CHOICE, SubPhase.BATTLEGROUND_CHOICE,
+            SubPhase.EXPAND_CHOICE) else None
         # Snapshot display state before updating so animations render old state
         events = payload.get("events", [])
         _ANIM_ORDER = {
@@ -1036,6 +1044,8 @@ class GameScene:
         elif active_sub_phase == SubPhase.EJECTION_CHOICE and self.ejection_pending:
             self.phase = active_sub_phase
         elif active_sub_phase == SubPhase.BATTLEGROUND_CHOICE and self.battleground_choice_wars:
+            self.phase = active_sub_phase
+        elif active_sub_phase == SubPhase.EXPAND_CHOICE and self.expand_choice_hexes:
             self.phase = active_sub_phase
         # Log events (consolidate agenda play + resolution into one line)
         self._log_events_batch(events)
@@ -1250,6 +1260,17 @@ class GameScene:
             "Confirm", (60, 130, 60)
         )
 
+    def _setup_expand_choice_ui(self):
+        """Set up state for the expand_choice sub-phase."""
+        hexes = self.phase_options.get("hexes", [])
+        self.expand_choice_hexes = {(h["q"], h["r"]) for h in hexes}
+        self.expand_choice_faction = self.phase_options.get("faction", "")
+        self.selected_hex = None
+        self.submit_button = Button(
+            pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
+            "Confirm", (60, 130, 60)
+        )
+
     def _setup_battleground_choice_ui(self):
         """Set up state for the battleground_choice sub-phase."""
         wars = self.phase_options.get("wars", [])
@@ -1261,12 +1282,32 @@ class GameScene:
             pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
             "Confirm", (60, 130, 60)
         )
+        # Auto-select any war with only one possible choice
+        for wc in self.battleground_choice_wars:
+            if wc["war_id"] in self.battleground_selections:
+                continue
+            if wc["mode"] == "full":
+                pairs = wc.get("pairs", [])
+                if len(pairs) == 1:
+                    self.battleground_selections[wc["war_id"]] = 0
+            else:
+                enemy_hexes = wc.get("enemy_hexes", [])
+                if len(enemy_hexes) == 1:
+                    h = enemy_hexes[0]
+                    self.battleground_selections[wc["war_id"]] = (h["q"], h["r"])
+        # Update highlight for the displayed war after auto-selection
+        self._refresh_battleground_hex_sets()
+        # If all wars were auto-selected, submit immediately (no interaction needed)
+        if (self.battleground_choice_wars
+                and len(self.battleground_selections) >= len(self.battleground_choice_wars)):
+            self._do_submit_battleground()
 
     def _refresh_battleground_hex_sets(self):
         """Rebuild the selectable hex set for the currently displayed war."""
         self.battleground_selectable_hexes = set()
         self.battleground_hex_to_choice = {}
         if not self.battleground_choice_wars:
+            self.battleground_selected_hexes = set()
             return
         idx = min(self.battleground_display_index, len(self.battleground_choice_wars) - 1)
         wc = self.battleground_choice_wars[idx]
@@ -1286,6 +1327,47 @@ class GameScene:
                 coord = (h["q"], h["r"])
                 self.battleground_selectable_hexes.add(coord)
                 self.battleground_hex_to_choice[coord] = coord
+        # Reflect any existing selection for this war as the selected-pair highlight
+        existing = self.battleground_selections.get(wc["war_id"])
+        self._update_battleground_selected_hexes(wc, existing)
+
+    def _update_battleground_selected_hexes(self, wc: dict, choice):
+        """Update battleground_selected_hexes to reflect the chosen pair/hex."""
+        if choice is None:
+            self.battleground_selected_hexes = set()
+            return
+        if wc["mode"] == "full":
+            pairs = wc.get("pairs", [])
+            if isinstance(choice, int) and 0 <= choice < len(pairs):
+                pair = pairs[choice]
+                ha = (pair["hex_a"]["q"], pair["hex_a"]["r"])
+                hb = (pair["hex_b"]["q"], pair["hex_b"]["r"])
+                self.battleground_selected_hexes = {ha, hb}
+            else:
+                self.battleground_selected_hexes = set()
+        else:
+            self.battleground_selected_hexes = {choice}
+
+    def _do_submit_battleground(self):
+        """Send the battleground choice to the server and reset state."""
+        choices = []
+        for wc in self.battleground_choice_wars:
+            sel = self.battleground_selections.get(wc["war_id"])
+            if sel is None:
+                return
+            if wc["mode"] == "full":
+                choices.append({"war_id": wc["war_id"], "pair_index": sel})
+            else:
+                choices.append({"war_id": wc["war_id"],
+                                "hex": {"q": sel[0], "r": sel[1]}})
+        self.app.network.send(MessageType.SUBMIT_BATTLEGROUND_CHOICE,
+            {"choices": choices})
+        self.battleground_choice_wars = []
+        self.battleground_selections = {}
+        self.battleground_selectable_hexes = set()
+        self.battleground_selected_hexes = set()
+        self.selected_hex = None
+        self.has_submitted = True
 
     def _setup_phase_ui(self):
         """Build UI elements for the current phase."""
@@ -1315,6 +1397,7 @@ class GameScene:
             SubPhase.SPOILS_CHANGE_CHOICE: self._setup_spoils_change_choice_ui,
             SubPhase.EJECTION_CHOICE:      self._setup_ejection_choice_ui,
             SubPhase.BATTLEGROUND_CHOICE:  self._setup_battleground_choice_ui,
+            SubPhase.EXPAND_CHOICE:        self._setup_expand_choice_ui,
         }
         if self.phase in _SUB_PHASE_SETUP:
             _SUB_PHASE_SETUP[self.phase]()
@@ -2104,9 +2187,12 @@ class GameScene:
         hex_own = self.display_hex_ownership
         highlight = None
 
-        # Battleground choice: highlight selectable hexes
+        # Battleground choice: highlight selectable hexes (excluding the selected pair)
         if self.phase == SubPhase.BATTLEGROUND_CHOICE and self.battleground_selectable_hexes:
-            highlight = self.battleground_selectable_hexes
+            highlight = self.battleground_selectable_hexes - self.battleground_selected_hexes
+        # Expand choice: highlight reachable neutral hexes
+        elif self.phase == SubPhase.EXPAND_CHOICE and self.expand_choice_hexes:
+            highlight = self.expand_choice_hexes
 
         # Compute preview idol (post-confirm or pre-confirm)
         render_preview_idol = self.preview_idol
@@ -2136,6 +2222,7 @@ class GameScene:
             self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT,
             idols=render_idols, wars=render_wars,
             selected_hex=self.selected_hex,
+            selected_hexes=self.battleground_selected_hexes or None,
             highlight_hexes=highlight,
             spirit_index_map=spirit_index_map,
             preview_idol=render_preview_idol,
@@ -2306,6 +2393,8 @@ class GameScene:
             self._render_spoils_change_ui(screen)
         elif self.phase == SubPhase.BATTLEGROUND_CHOICE:
             self._render_battleground_ui(screen)
+        elif self.phase == SubPhase.EXPAND_CHOICE:
+            self._render_expand_choice_ui(screen)
 
         # Register UI rects for tooltip placement scoring
         self._register_ui_rects_for_tooltips()
@@ -3116,6 +3205,28 @@ class GameScene:
             self.submit_button.enabled = all_chosen
             if not all_chosen:
                 self.submit_button.tooltip = "Select a hex for each war first."
+                self.submit_button.tooltip_always = True
+            else:
+                self.submit_button.tooltip = None
+                self.submit_button.tooltip_always = False
+            self.submit_button.draw(screen, self.font)
+
+    def _render_expand_choice_ui(self, screen):
+        faction_name = faction_full_name(self.expand_choice_faction)
+        title = self.font.render(f"Expand: {faction_name}", True, theme.TEXT_HIGHLIGHT)
+        screen.blit(title, (20, 102))
+
+        instruction = "Click a highlighted hex to choose where to expand."
+        lines = _wrap_text(instruction, self.font, 220)
+        line_h = self.font.get_linesize()
+        for i, line in enumerate(lines):
+            surf = self.font.render(line, True, theme.TEXT_NORMAL)
+            screen.blit(surf, (20, 130 + i * line_h))
+
+        if self.submit_button:
+            self.submit_button.enabled = self.selected_hex is not None
+            if not self.submit_button.enabled:
+                self.submit_button.tooltip = "Select a hex first."
                 self.submit_button.tooltip_always = True
             else:
                 self.submit_button.tooltip = None

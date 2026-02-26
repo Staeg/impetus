@@ -33,8 +33,8 @@ Each Faction starts with 1 of each Agenda in their pool. The pool is static — 
 
 * Steal: \-1 Regard with and \-1 gold to all neighbors. \+1 gold to this Faction for each gold lost by neighbors. Then a War erupts with any neighboring Factions who have \-2 Regard or less with this Faction.
 * Trade: \+1 gold, \+1 gold for every other Faction playing Trade this turn. \+1 Regard with each other Faction playing Trade this turn.
-* Expand: spend gold equal to the number of this Faction’s territories to claim a random new one; if none are available or it lacks gold, \+1 gold instead.  
-  * If there are any neutral Territories with Idols in them within reach: the Faction chooses at random between those territories.  
+* Expand: spend gold equal to the number of this Faction’s territories to claim a reachable neutral hex; if none are available or it lacks gold, \+1 gold instead.
+  * If the Faction is Guided, its Spirit chooses which hex to claim. Guided Expands resolve first; if two Spirits pick the same hex, both fail and receive \+1 gold instead. Unguided Factions pick at random (preferring Idol hexes).
 * Change: draw a card from the Change modifier deck, then shuffle it back in.  
   * If guided, the Spirit draws additional cards equal to their current Influence and chooses 1 among them to modify.
 

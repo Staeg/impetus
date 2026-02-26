@@ -31,8 +31,8 @@
   * Agendas are resolved in order (but each step is simultaneous):
     * Trade: \+1 gold, \+1 gold for every other Faction playing Trade this turn. \+1 Regard with each other Faction playing Trade this turn.
     * Steal: \-1 Regard with and \-1 gold to all neighbors. \+1 gold to this Faction for each gold lost by neighbors. Then a War erupts with any neighboring Factions who have \-2 Regard or less with this Faction.
-    * Expand: spend gold equal to the number of this Faction's territories to claim a random new one; if none are available or it lacks gold, \+1 gold instead.
-      * If there are any neutral Territories with Idols in them within reach: the Faction chooses at random between those territories.
+    * Expand: spend gold equal to the number of this Faction's territories to claim a reachable neutral hex; if none are available or it lacks gold, \+1 gold instead.
+      * If the Faction is Guided, its Spirit chooses which hex to claim (interactive `expand_choice` sub-phase, resolved before non-Guided Expands but simultaneously with other Guided Expands). If two Spirits choose the same hex, both fail (contested — each receives the expand\_failed gold bonus). Unguided Factions target a random reachable hex (preferring Idol hexes).
     * Change: draw a card from the Change modifier deck, then shuffle it back in.  
       * If guided, the Spirit draws additional cards equal to their current Influence and chooses 1 among them.
   * Any Spirits with 0 Influence currently Guiding a Faction are ejected; they replace one Agenda card in that Faction's Agenda pool with another of their choice (pool size stays the same)

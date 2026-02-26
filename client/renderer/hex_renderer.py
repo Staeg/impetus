@@ -97,7 +97,8 @@ class HexRenderer:
     def draw_hex_grid(self, surface: pygame.Surface, hex_ownership: dict,
                       camera, screen_w: int, screen_h: int,
                       idols: list = None, wars: list = None,
-                      selected_hex=None, highlight_hexes=None,
+                      selected_hex=None, selected_hexes: set = None,
+                      highlight_hexes=None,
                       spirit_index_map: dict = None,
                       preview_idol: tuple = None,
                       faction_spirit_index: dict = None,
@@ -117,6 +118,9 @@ class HexRenderer:
             faction_worship: dict of faction_id -> spirit index for worship symbols near idols
         """
         font = self._get_font()
+
+        # Overlay surface for semi-transparent hex tints (collected, then blitted once)
+        overlay = pygame.Surface((screen_w, screen_h), pygame.SRCALPHA)
 
         for (q, r), owner in hex_ownership.items():
             # Get screen coordinates
@@ -151,16 +155,25 @@ class HexRenderer:
                     sr = math.dist(screen_verts[0], (sx, sy))
                     draw_spirit_symbol(surface, sx, sy, sr, sidx, (0, 0, 0))
 
-            # Draw border
+            # Draw border + queue overlay tint
             border_color = (40, 40, 40)
+            border_width = 1
             if (q, r) == selected_hex:
                 border_color = (255, 255, 255)
-                pygame.draw.polygon(surface, border_color, screen_verts, 3)
+                border_width = 4
+                pygame.draw.polygon(overlay, (255, 255, 255, 55), screen_verts)
+            elif selected_hexes and (q, r) in selected_hexes:
+                border_color = (255, 200, 50)
+                border_width = 4
+                pygame.draw.polygon(overlay, (255, 200, 50, 55), screen_verts)
             elif highlight_hexes and (q, r) in highlight_hexes:
-                border_color = (200, 200, 255)
-                pygame.draw.polygon(surface, border_color, screen_verts, 2)
-            else:
-                pygame.draw.polygon(surface, border_color, screen_verts, 1)
+                border_color = (0, 210, 255)
+                border_width = 3
+                pygame.draw.polygon(overlay, (0, 210, 255, 45), screen_verts)
+            pygame.draw.polygon(surface, border_color, screen_verts, border_width)
+
+        # Apply hex tint overlays
+        surface.blit(overlay, (0, 0))
 
         # Draw war arrows
         if wars:
