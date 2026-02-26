@@ -4,7 +4,8 @@
   "features": {
     "ghcr.io/devcontainers/features/desktop-lite:1": {
       "password": "impetus",
-      "webPort": "6080"
+      "webPort": "6080",
+      "resolution": "1366x900"
     }
   },
   "forwardPorts": [6080, 8765],
