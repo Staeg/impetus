@@ -321,6 +321,22 @@ class GameServer:
                     if room.game_state.all_inputs_received():
                         await self._handle_agenda_resolution(room)
 
+        elif msg_type == MessageType.SUBMIT_EXPAND_CHOICE:
+            if room.game_state:
+                q = int(payload.get("q", 0))
+                r = int(payload.get("r", 0))
+                error = room.game_state.submit_expand_choice(spirit_id, q, r)
+                if error:
+                    await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
+                elif not room.game_state.has_pending_expand_choices():
+                    # All expand choices received — proceed to change choices
+                    await self._handle_change_choices_after_expand(room)
+                else:
+                    waiting_for = list(room.game_state.expand_pending.keys())
+                    await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                        "players_remaining": waiting_for,
+                    }))
+
         elif msg_type == MessageType.SUBMIT_CHANGE_CHOICE:
             if room.game_state:
                 error, change_events = room.game_state.submit_change_choice(
@@ -544,10 +560,50 @@ class GameServer:
         }))
 
     async def _handle_agenda_resolution(self, room: GameRoom):
-        """Handle agenda phase after all inputs received: prepare changes first."""
+        """Handle agenda phase after all inputs received: prepare expand/change choices first."""
         gs = room.game_state
         change_events = gs.prepare_change_choices()
         await self._broadcast_phase_result(room, change_events)
+
+        if not hasattr(room, '_pending_change_events'):
+            room._pending_change_events = []
+
+        # Identify guided Expand factions that need a hex choice
+        gs.prepare_expand_choices()
+
+        # Auto-submit expand choices for AI spirits
+        for sid in list(room.ai_spirit_ids):
+            if sid in gs.expand_pending:
+                faction_id = gs.expand_pending[sid]
+                reachable = list(gs.hex_map.get_reachable_neutral_hexes(faction_id))
+                if reachable:
+                    chosen = ai.get_ai_expand_choice(reachable, gs.hex_map, sid)
+                    gs.submit_expand_choice(sid, chosen[0], chosen[1])
+
+        if gs.has_pending_expand_choices():
+            # Send expand_choice to each remaining human spirit
+            for spirit_id, faction_id in gs.expand_pending.items():
+                reachable = gs.hex_map.get_reachable_neutral_hexes(faction_id)
+                await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
+                    "phase": SubPhase.EXPAND_CHOICE,
+                    "turn": gs.turn,
+                    "options": {
+                        "faction": faction_id,
+                        "hexes": [{"q": h[0], "r": h[1]} for h in sorted(reachable)],
+                    },
+                }))
+            waiting_for = list(gs.expand_pending.keys())
+            await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                "players_remaining": waiting_for,
+            }))
+            return
+
+        # No expand choices pending — proceed to change choices
+        await self._handle_change_choices_after_expand(room)
+
+    async def _handle_change_choices_after_expand(self, room: GameRoom):
+        """Handle change choices (or auto-resolve and proceed to resolution)."""
+        gs = room.game_state
 
         if not hasattr(room, '_pending_change_events'):
             room._pending_change_events = []
@@ -575,13 +631,12 @@ class GameServer:
             }))
             return
 
-        # All change choices done (AI-only or none) — broadcast modifier events if any
+        # All choices done — broadcast modifier events if any, then resolve
         if room._pending_change_events:
             all_change_events = room._pending_change_events
             room._pending_change_events = []
             await self._broadcast_phase_result(room, all_change_events)
 
-        # Resolve immediately
         events = gs.resolve_agenda_phase_after_changes()
         await self._broadcast_phase_result(room, events)
         await self._auto_resolve_phases(room)

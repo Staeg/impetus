@@ -121,6 +121,27 @@ def get_ai_spoils_change_choice(change_pendings) -> list[int]:
     return [random.randrange(len(p.change_cards)) for p in change_pendings]
 
 
+def get_ai_expand_choice(reachable_hexes: list, hex_map=None, spirit_id: str = None) -> tuple:
+    """Choose expand target prioritizing: own idols > no idols > enemy idols only."""
+    if hex_map is None or spirit_id is None:
+        return random.choice(reachable_hexes)
+
+    own_idol = []
+    no_idol = []
+    enemy_only = []
+    for h in reachable_hexes:
+        idols_here = hex_map.get_idols_at_hex(h[0], h[1])
+        if any(i.owner_spirit == spirit_id for i in idols_here):
+            own_idol.append(h)
+        elif not idols_here:
+            no_idol.append(h)
+        else:
+            enemy_only.append(h)
+
+    pool = own_idol or no_idol or enemy_only
+    return random.choice(pool)
+
+
 def get_ai_battleground_choice(war_choices: list[dict]) -> list[dict]:
     """Random battleground selection — picks first valid option for each war."""
     result = []
