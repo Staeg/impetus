@@ -1,0 +1,27 @@
+{
+  "name": "Impetus",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "features": {
+    "ghcr.io/devcontainers/features/desktop-lite:1": {
+      "password": "impetus",
+      "webPort": "6080"
+    }
+  },
+  "forwardPorts": [6080, 8765],
+  "portsAttributes": {
+    "6080": {
+      "label": "Desktop (noVNC)",
+      "onAutoForward": "openBrowser"
+    },
+    "8765": {
+      "label": "Game Server (WebSocket)",
+      "onAutoForward": "silent"
+    }
+  },
+  "postCreateCommand": "pip install -r requirements.txt",
+  "containerEnv": {
+    "DISPLAY": ":1",
+    "PYGAME_HIDE_SUPPORT_PROMPT": "1"
+  },
+  "remoteUser": "vscode"
+}
