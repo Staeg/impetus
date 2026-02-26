@@ -44,7 +44,7 @@ Each Faction's Power baseline is equal to the number of Territories it controls.
 
 * War erupts whenever two neighboring Factions have \-2 Regard or lower after one or both of them resolve a Steal action.
 * After the Agenda Phase, all Ripe Wars from the previous turn are resolved first. Then all Wars that erupted this turn become Ripe.
-  * When a War becomes Ripe, a random border between two hexes owned by those two Factions is chosen as the Battleground.
+  * When a War becomes Ripe, a border between two adjacent hexes owned by those two Factions is chosen as the Battleground. If neither Faction is Guided, the pair is chosen at random. If one Faction is Guided, its Spirit freely picks any valid border hex pair as the Battleground. If both Factions are Guided, each Spirit picks one hex from the enemy Faction's border territory as their preferred side; if those hexes are mutually adjacent and form a valid pair, that pair is used — otherwise the Battleground is randomized.
 * All Ripe Wars are resolved simultaneously. Each Faction's Power is snapshotted from its territory count at the start of the War Phase, so territory changes from one war do not affect another war's Power calculations.
 * To determine the winner, both Factions roll a 6-sided die and add their Power.
 * Gold changes from all wars (losses and gains) are applied simultaneously after all wars are resolved.

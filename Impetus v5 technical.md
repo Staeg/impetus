@@ -44,7 +44,8 @@
   * Whoever is victorious draws a Spoils of War Agenda card from their Faction's pool. If the winning Faction is guided by a Spirit, the Spirit draws 1 \+ their Influence Spoils cards and chooses 1 among them.
   * All Spoils of War are collected into a batch and resolved simultaneously in standard agenda order (Trade → Steal → Expand → Change)
     * If two Spoils Expands target the same hex, the hex is contested and neither Faction gets it
-  * Any non-Ripe Wars become Ripe and a random Battleground is selected  
+  * Any non-Ripe Wars become Ripe and a Battleground is selected
+    * **Battleground Selection**: `hex_map.get_border_hex_pairs(faction_a, faction_b)` supplies valid adjacent hex pairs. If neither faction is guided, a pair is chosen at random (existing behaviour). If exactly one faction is guided, its spirit receives a `battleground_choice` PHASE\_START with `mode: "full"` and the full pairs list; they select by `pair_index`. If both are guided, each receives `mode: "enemy_side"` with the list of the opposing faction's unique border hexes; they each select one hex, and if the two chosen hexes form a valid adjacent pair the server uses it, otherwise falls back to random. The `SUBMIT_BATTLEGROUND_CHOICE` message carries `choices: [{war_id, pair_index}]` (full mode) or `choices: [{war_id, hex: {q,r}}]` (enemy\_side mode). Spoils resolution follows after all battleground choices are finalized.
 * Scoring
   * For each Faction that has any Spirit's Worship:
     * That Spirit gains 5 Victory Points for all Wars won this turn per Battle Idol in that Faction’s territory

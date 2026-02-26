@@ -16,7 +16,7 @@ def _would_gain_worship(game_state, spirit_id: str, faction_id: str) -> bool:
         spirit_id, faction_id)
     return new_idols >= current_idols
 
-AI_NAMES = ["Amadeus", "Brandon", "Catherine", "Dumisai", "Eudokia"]
+AI_NAMES = ["Amadeus", "Catherine", "Dumisai", "Eudokia", "Grem", "Hanno", "Ivah", "Kairos"]
 
 
 def assign_ai_names(count: int) -> list[str]:
@@ -119,3 +119,15 @@ def get_ai_spoils_choice(pending_list) -> list[int]:
 
 def get_ai_spoils_change_choice(change_pendings) -> list[int]:
     return [random.randrange(len(p.change_cards)) for p in change_pendings]
+
+
+def get_ai_battleground_choice(war_choices: list[dict]) -> list[dict]:
+    """Random battleground selection — picks first valid option for each war."""
+    result = []
+    for wc in war_choices:
+        if wc["mode"] == "full":
+            result.append({"war_id": wc["war_id"], "pair_index": 0})
+        else:
+            h = wc["enemy_hexes"][0]
+            result.append({"war_id": wc["war_id"], "hex": h})
+    return result

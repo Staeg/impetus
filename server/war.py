@@ -24,6 +24,11 @@ class War:
         self.is_ripe = True
         return True
 
+    def ripen_with_battleground(self, battleground: tuple) -> None:
+        """Ripen this war using an already-chosen battleground pair."""
+        self.battleground = battleground
+        self.is_ripe = True
+
     def resolve(self, power_a: int, power_b: int) -> dict:
         """Resolve this war using pre-computed power values.
 

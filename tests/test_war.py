@@ -86,3 +86,13 @@ class TestWar:
         # No gold side effects (no faction objects involved)
         assert result["total_a"] == result["roll_a"] + 10
         assert result["total_b"] == result["roll_b"] + 20
+
+    def test_ripen_with_battleground(self):
+        """ripen_with_battleground sets battleground directly and marks war ripe."""
+        war = War("mountain", "mesa")
+        assert war.is_ripe is False
+        assert war.battleground is None
+        chosen = ((1, -1), (1, 0))
+        war.ripen_with_battleground(chosen)
+        assert war.is_ripe is True
+        assert war.battleground == chosen
