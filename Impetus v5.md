@@ -11,11 +11,11 @@ You gain Victory Points whenever Factions which have your Idols and Worship win 
 All Spirits start in a Vagrant state.  
 All Factions start at 0 Regard with each other.
 
-* All Vagrant Spirits choose to Guide a Faction that is currently not Guided and, if they have not already placed an Idol during this vagrant stint, to place one of three Idol types on a neutral territory. If both options are available, they must do both. If only one option is available, they do that one.
+* All Vagrant Spirits choose to Guide a Faction that is currently not Guided and, if they have not already placed an Idol during this vagrant stint, to place one of three Idol types on any neutral hex on the map. If both options are available, they must do both. If only one option is available, they do that one.
   * A Spirit cannot Guide a Faction that Worships them.
   * These choices are made in secret and then resolved simultaneously.
   * Several Idols can end up on the same territory.
-  * If several Spirits try to Guide the same Faction, all of them waste their turn.
+  * If several Spirits try to Guide the same Faction, all of them waste their turn. Additionally, each contesting Spirit is blocked from targeting that Faction in the next Vagrant phase (guidance cooldown).
   * Successfully Guiding a Faction sets a Spirit's Influence to 3\.
 * All Spirits draw 1 Agenda card \+ however much Influence they have from the Guided Faction's Agenda pool, choose 1 of the drawn Agendas for their Guided Faction to play, then lose 1 Influence. Cards are sampled with replacement from the pool and are never removed, so duplicates are possible in a single draw.
   * This choice is made in secret, then revealed simultaneously.

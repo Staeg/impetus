@@ -113,11 +113,13 @@ The six factions start on the six hexes surrounding center (0,0). Center is empt
 The game progresses through a fixed sequence of phases each turn. The state machine drives the entire flow.
 
 ```
-LOBBY → SETUP → VAGRANT_PHASE → AGENDA_PHASE → WAR_PHASE → SCORING → CLEANUP ─┐
-                     ▲                                                          │
-                     └──────────────────────────────────────────────────────────┘
-                                    (loop until 100 VP)
+LOBBY ──(setup runs here)──► VAGRANT_PHASE → AGENDA_PHASE → WAR_PHASE → SCORING → CLEANUP ─┐
+                                   ▲                                                        │
+                                   └────────────────────────────────────────────────────────┘
+                                                  (loop until 100 VP)
 ```
+
+> **Note:** `Phase.SETUP` exists in the enum but the game never transitions into it. Setup logic (habitat modifiers + one automated turn) runs at the end of the LOBBY phase before the first VAGRANT_PHASE begins.
 
 Each phase:
 1. **Waits** for required player inputs (if any).
@@ -137,6 +139,8 @@ Phase details:
 | CLEANUP | None | Clear `played_agenda_this_turn` on each faction (no cards to return since the deck is a pool sampled with replacement). Advance turn counter. |
 
 The `GameState` object holds all mutable game data: the hex map, all factions, all spirits, current phase, pending wars, and the turn counter. It exposes methods like `submit_action(spirit_id, action)` and `resolve_current_phase()`.
+
+**Guidance cooldown:** If two or more spirits contest the same faction in the same Vagrant phase (all fail to guide), every contesting spirit is blocked from targeting that faction in the *next* Vagrant phase. Tracked in `guidance_cooldowns: dict[spirit_id, set[faction_id]]`; cleared at the start of each Vagrant phase.
 
 ### 3. Faction Model (`server/faction.py`)
 
@@ -180,6 +184,13 @@ Trade also grants bilateral regard between co-traders: each trading faction gain
 
 The Change modifier system is cumulative. A faction's Change modifiers permanently boost subsequent plays of that agenda type.
 
+**Agenda phase sub-phase sequencing:** Resolution does not begin immediately after choices are revealed. The server first collects interactive sub-choices from guided spirits before running `resolve_agendas()`:
+
+1. Reveal all agenda choices simultaneously (guided choices + random draws for unguided factions).
+2. Guided spirits playing **Change** receive a `change_choice` sub-phase (draw modifier cards, pick one). All Change picks are collected before continuing.
+3. Guided spirits playing **Expand** who can afford it and have valid hexes receive an `expand_choice` sub-phase (list of reachable neutral hexes, pick one). All Expand picks are collected before continuing.
+4. With all interactive picks in hand, `resolve_agendas()` runs in the standard order (Trade → Steal → Expand → Change). Guided Expand choices use the pre-submitted hexes; contest detection runs across all Expand factions simultaneously.
+
 Spoils of War agendas are collected and resolved in batch. After all wars are resolved, all spoils draws happen first: guided spirits draw 1 + influence spoils cards each, while non-guided factions auto-draw. Guided spirits submit all their war spoils choices at once (a list of card indices, one per war won). Non-guided auto-choices wait for all guided spirits to submit. Once all choices are in, all spoils resolve simultaneously via `finalize_all_spoils()` in the standard agenda order (Trade → Steal → Expand → Change). If two factions target the same hex via spoils Expand, neither gets it (contested — both receive the `expand_failed` gold bonus instead). If a chosen spoils card is Change, a follow-up modifier sub-choice is triggered (same batched pattern).
 
 ### 6. War System (`server/war.py`)
@@ -195,10 +206,10 @@ Multiple wars can exist simultaneously. A faction can be involved in multiple wa
 
 After each turn, for each faction with a spirit's Worship:
 - Count idols in that faction's territory (all idols, regardless of which spirit placed them)
-- Per Battle Idol: +0.5 VP for each war won this turn
-- Per Affluence Idol: +0.2 VP for each gold gained this turn
-- Per Spread Idol: +0.5 VP for each new territory gained this turn
-- Sum and **floor** the total, then add to the spirit's VP
+- Per Battle Idol: +5 VP for each war won this turn
+- Per Affluence Idol: +2 VP for each gold gained this turn
+- Per Spread Idol: +5 VP for each new territory gained this turn
+- Sum and add to the spirit's VP (no flooring — VP values are integers)
 
 Tracking "gold gained this turn" and "territories gained this turn" requires the game state to record deltas during resolution, not just final values.
 
@@ -222,21 +233,36 @@ Message types fall into two categories:
 | `ready` | Lobby | `{}` |
 | `submit_vagrant_action` | Vagrant phase | `{guide_target, idol_type, idol_q, idol_r}` (guide faction AND/OR place idol) |
 | `submit_agenda_choice` | Agenda phase | `{agenda_index}` (index into drawn hand) |
-| `submit_change_choice` | Agenda/Change sub-phase | `{card_index}` (index into drawn change cards) |
-| `submit_ejection_agenda` | Agenda/ejection sub-phase | `{remove_type, add_type}` (card type to remove and add to faction pool) |
-| `submit_spoils_choice` | War/spoils sub-phase | `{card_indices}` (list of indices, one per war won, into each drawn spoils hand) |
-| `submit_spoils_change_choice` | War/spoils Change sub-phase | `{card_index}` (index into drawn change cards) |
+| `submit_change_choice` | Agenda/change_choice sub-phase | `{card_index}` (index into drawn change modifier cards) |
+| `submit_expand_choice` | Agenda/expand_choice sub-phase | `{q, r}` (chosen neutral hex to expand into) |
+| `submit_ejection_agenda` | Agenda/ejection_choice sub-phase | `{remove_type, add_type}` (card type to remove and add to faction pool) |
+| `submit_battleground_choice` | War/battleground_choice sub-phase | `{choices: [{war_id, pair_index}]}` (full mode) or `{choices: [{war_id, hex: {q,r}}]}` (enemy_side mode) |
+| `submit_spoils_choice` | War/spoils_choice sub-phase | `{card_indices}` (list of indices, one per war won, into each drawn spoils hand) |
+| `submit_spoils_change_choice` | War/spoils_change_choice sub-phase | `{card_index}` (index into drawn change modifier cards) |
 
 **Server → Client:**
 | Type | When | Payload |
 |---|---|---|
 | `lobby_state` | Lobby updates | `{players, ready_states}` |
 | `game_start` | Game begins | `{full_initial_state}` |
-| `phase_start` | Each phase begins | `{phase, your_options}` (e.g., drawn agenda hand) |
+| `phase_start` | Each main phase or sub-phase begins | `{phase, your_options}` — see sub-phase payload table below |
 | `waiting_for` | Player submits | `{players_remaining}` |
 | `phase_result` | Phase resolves | `{events[], updated_state}` |
 | `game_over` | 100 VP reached | `{winner, final_scores}` |
 | `error` | Invalid action | `{message}` |
+
+**`phase_start` payload fields by phase/sub-phase:**
+
+| Phase / Sub-phase | `your_options` fields |
+|---|---|
+| `VAGRANT_PHASE` | `available_factions` (list of guideable faction ids), `worship_blocked` (faction ids the spirit worships), `contested_blocked` (faction ids on guidance cooldown for this spirit), `neutral_hexes` (list of `{q,r}` for idol placement — any neutral hex on the map), `idol_types` (list of placeable idol type names), `can_place_idol` (bool), `can_guide` (bool) |
+| `AGENDA_PHASE` | `hand` (list of agenda card names drawn), `influence` (current influence, for display) |
+| `change_choice` | `cards` (list of Change modifier card descriptions drawn) |
+| `expand_choice` | `faction` (faction id), `hexes` (list of `{q,r}` reachable neutral hexes the spirit may expand into) |
+| `ejection_choice` | `faction` (faction id), `agenda_pool` (current list of card types in pool), `agenda_types` (list of all valid card type names) |
+| `battleground_choice` | `wars` (list of war configs; each has `war_id`, `mode` (`"full"` or `"enemy_side"`), `pairs` (full mode: list of `[{q,r},{q,r}]` adjacent hex pairs) or `hexes` (enemy_side mode: list of `{q,r}` from opposing faction's border)) |
+| `spoils_choice` | `choices` (list of `{cards, loser}`, one entry per war won; `cards` is the drawn spoils hand for that war) |
+| `spoils_change_choice` | `cards` (list of Change modifier card descriptions, one per Change spoils drawn) |
 
 ### Information Hiding
 

@@ -19,15 +19,19 @@
   * Spirits choose their actions: if both Guidance and Idol placement are available, they must do both; otherwise they do whichever is available
     * A Spirit cannot Guide a Faction that Worships them
     * A Spirit can only place one Idol per vagrant stint (resets when they Guide or become Vagrant again)
+    * Idol placement is on any neutral hex anywhere on the map — there is no adjacency restriction
   * After all Spirits have confirmed their actions, reveal them
   * All Idols are placed
   * All Factions with only 1 Spirit trying to Guide them become Guided by that Spirit and that Spirit's Influence is set to 3
     * Worship changes are checked
-  * All Factions with \>1 Spirit trying to Guide them remain not Guided, and the Spirits remain Vagrant
+  * All Factions with \>1 Spirit trying to Guide them remain not Guided, and the Spirits remain Vagrant. Each contesting Spirit has that Faction added to their guidance cooldown set — they cannot target it in the next Vagrant phase. Cooldowns are cleared at the start of each Vagrant phase.
 * Agenda Phase
   * All Spirits currently Guiding a Faction draw 1 \+ \[their Influence\] Agenda cards from their Faction's pool (sampled with replacement; duplicates possible) and choose 1 of them
   * All choices are revealed and all non-Guided Factions draw a random Agenda card from their pool
   * All Spirits currently Guiding a Faction lose 1 Influence
+  * Before resolution begins, interactive sub-choices are collected from guided spirits:
+    * Guided spirits playing **Change** each receive a drawn set of modifier cards and pick one (`change_choice` sub-phase). All picks are collected before any resolution runs.
+    * Guided spirits playing **Expand** who can afford the cost and have at least one reachable neutral hex each receive the list of valid hexes and pick one (`expand_choice` sub-phase). All picks are collected before any resolution runs.
   * Agendas are resolved in order (but each step is simultaneous):
     * Trade: \+1 gold, \+1 gold for every other Faction playing Trade this turn. \+1 Regard with each other Faction playing Trade this turn.
     * Steal: \-1 Regard with and \-1 gold to all neighbors. \+1 gold to this Faction for each gold lost by neighbors. Then a War erupts with any neighboring Factions who have \-2 Regard or less with this Faction.
