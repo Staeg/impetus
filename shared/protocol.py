@@ -14,11 +14,12 @@ class C2S:
     SUBMIT_AGENDA_CHOICE        = "submit_agenda_choice"
     SUBMIT_CHANGE_CHOICE        = "submit_change_choice"
     SUBMIT_EJECTION_AGENDA      = "submit_ejection_agenda"
-    SUBMIT_SPOILS_CHOICE        = "submit_spoils_choice"
-    SUBMIT_SPOILS_CHANGE_CHOICE = "submit_spoils_change_choice"
-    SUBMIT_BATTLEGROUND_CHOICE  = "submit_battleground_choice"
-    SUBMIT_EXPAND_CHOICE        = "submit_expand_choice"
-    SUBMIT_RESPAWN_CHOICE       = "submit_respawn_choice"
+    SUBMIT_SPOILS_CHOICE         = "submit_spoils_choice"
+    SUBMIT_SPOILS_CHANGE_CHOICE  = "submit_spoils_change_choice"
+    SUBMIT_SPOILS_EXPAND_CHOICE  = "submit_spoils_expand_choice"
+    SUBMIT_WINNER_CHOICE         = "submit_winner_choice"
+    SUBMIT_EXPAND_CHOICE         = "submit_expand_choice"
+    SUBMIT_RESPAWN_CHOICE        = "submit_respawn_choice"
 
 
 class S2C:
@@ -38,7 +39,8 @@ class SubPhase:
     EJECTION_CHOICE      = "ejection_choice"
     SPOILS_CHOICE        = "spoils_choice"
     SPOILS_CHANGE_CHOICE = "spoils_change_choice"
-    BATTLEGROUND_CHOICE  = "battleground_choice"
+    SPOILS_EXPAND_CHOICE = "spoils_expand_choice"
+    WINNER_CHOICE        = "winner_choice"
     EXPAND_CHOICE        = "expand_choice"
     RESPAWN_CHOICE       = "respawn_choice"
 

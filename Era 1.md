@@ -98,34 +98,27 @@ Each Faction begins the game with a head start in Change modifiers based on thei
 
 Each Faction's **Power** equals the number of territories it controls.
 
-Wars have a two-turn lifecycle:
+Wars resolve **immediately** — a War that erupts during the Agenda Phase is resolved in that same turn's War Phase.
 
-1. **War erupts** at the end of a Steal resolution when two neighbouring Factions reach −2 Regard or lower.
-2. **War ripens** at the end of the same turn — a Battleground is selected (a pair of adjacent border hexes, one owned by each Faction).
-3. **War resolves** at the start of the *next* turn's War Phase.
-
-**Selecting the Battleground**:
-- If neither Faction is Guided: chosen at random.
-- If one Faction is Guided: that Spirit freely picks any valid border hex pair.
-- If both are Guided: each Spirit picks one of the enemy Faction's border hexes as their preferred side; if those two hexes are mutually adjacent they form the Battleground, otherwise it is randomised.
+**War erupts** at the end of a Steal resolution when two neighbouring Factions reach −2 Regard or lower.
 
 **Resolving the War**:
-All ripe Wars resolve simultaneously. Each Faction's Power is snapshotted at the start of the War Phase — territory changes from one War do not affect another's Power.
+All Wars resolve simultaneously. Each Faction's Power is snapshotted at the start of the War Phase — territory changes from one War do not affect another's Power.
 
-Both Factions roll a six-sided die and add their Power. The highest total wins. On a tie, both lose 1 gold and no Spoils are drawn.
+- **If exactly one Faction is Guided**: the Guiding Spirit decides which Faction wins.
+- **If both or neither Faction is Guided**: both Factions roll a six-sided die and add their Power. The highest total wins. On a tie, no Spoils are drawn.
+
+No gold is exchanged for winning or losing a War.
 
 **After the War**:
-- The **loser** loses 1 gold.
-- The **winner** gains 1 gold and draws a **Spoils of War** Agenda card from their pool.
+- The **winner** draws a **Spoils of War** Agenda card from their pool.
   - If Guided, the Spirit draws **1 + their Influence** Spoils cards and picks one.
 
 **Spoils resolution**: All Spoils are batched and resolved simultaneously in standard Agenda order (Trade → Steal → Expand → Change).
 
-- **Spoils Expand** works differently: instead of paying gold to take neutral territory, the winning Faction takes the hex on the loser's side of the Battleground. If two Factions both target the same hex this way, neither gets it.
+- **Spoils Expand** works differently: the winning Faction claims any territory belonging to the losing Faction. If Guided, the Spirit picks which territory. If unguided, a territory is chosen at random, prioritising hexes with the most Idols. If two Factions both target the same hex this way, neither gets it.
 - **Spoils Steal** can trigger new Wars.
 - **Spoils Trade** also gives the bonus gold and Regard to every Faction that played Trade normally this turn.
-
-Gold changes from all Wars (wins and losses) are applied simultaneously after all Wars resolve.
 
 ---
 

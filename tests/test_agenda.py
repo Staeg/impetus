@@ -253,7 +253,6 @@ class TestSpoilsChoices:
         war_results = [{
             "winner": "mountain",
             "loser": "mesa",
-            "battleground": None,
         }]
 
         pending, auto_choices = resolve_spoils(
@@ -333,20 +332,18 @@ class TestContestedSpoilsExpand:
         # Find a hex owned by mesa
         mesa_hexes = list(hm.get_faction_territories("mesa"))
         target_hex = mesa_hexes[0]
-        bg = [{"q": target_hex[0], "r": target_hex[1]}]
-
         all_spoils = [
             {
                 "winner": "mountain",
                 "loser": "mesa",
                 "agenda_type": AgendaType.EXPAND,
-                "battleground": bg,
+                "target_hex": target_hex,
             },
             {
                 "winner": "sand",
                 "loser": "mesa",
                 "agenda_type": AgendaType.EXPAND,
-                "battleground": bg,
+                "target_hex": target_hex,
             },
         ]
 
@@ -373,9 +370,9 @@ class TestMultipleSpoilsPerFaction:
 
         all_spoils = [
             {"winner": "mountain", "loser": "mesa",
-             "agenda_type": AgendaType.TRADE, "battleground": None},
+             "agenda_type": AgendaType.TRADE, "target_hex": None},
             {"winner": "mountain", "loser": "sand",
-             "agenda_type": AgendaType.TRADE, "battleground": None},
+             "agenda_type": AgendaType.TRADE, "target_hex": None},
         ]
 
         finalize_all_spoils(factions, hm, wars, events, all_spoils,
@@ -400,14 +397,11 @@ class TestMultipleSpoilsPerFaction:
         target1 = mesa_hexes[0]
         target2 = sand_hexes[0]
 
-        bg1 = [{"q": target1[0], "r": target1[1]}]
-        bg2 = [{"q": target2[0], "r": target2[1]}]
-
         all_spoils = [
             {"winner": "mountain", "loser": "mesa",
-             "agenda_type": AgendaType.EXPAND, "battleground": bg1},
+             "agenda_type": AgendaType.EXPAND, "target_hex": target1},
             {"winner": "mountain", "loser": "sand",
-             "agenda_type": AgendaType.EXPAND, "battleground": bg2},
+             "agenda_type": AgendaType.EXPAND, "target_hex": target2},
         ]
 
         finalize_all_spoils(factions, hm, wars, events, all_spoils,
@@ -431,9 +425,9 @@ class TestMultipleSpoilsPerFaction:
 
         all_spoils = [
             {"winner": "mountain", "loser": "mesa",
-             "agenda_type": AgendaType.TRADE, "battleground": None},
+             "agenda_type": AgendaType.TRADE, "target_hex": None},
             {"winner": "mountain", "loser": "sand",
-             "agenda_type": AgendaType.STEAL, "battleground": None},
+             "agenda_type": AgendaType.STEAL, "target_hex": None},
         ]
 
         finalize_all_spoils(factions, hm, wars, events, all_spoils,

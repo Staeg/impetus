@@ -20,38 +20,17 @@ from server.agenda import resolve_agendas, resolve_spoils, finalize_all_spoils
 from server.scoring import calculate_scoring
 
 
-def _pairs_to_dict(pairs: list) -> list[dict]:
-    """Convert border hex pairs to serializable dicts for the battleground_choice message."""
-    return [
-        {"hex_a": {"q": p[0][0], "r": p[0][1]}, "hex_b": {"q": p[1][0], "r": p[1][1]}}
-        for p in pairs
-    ]
-
-
-def _war_ripened_event(war) -> dict:
-    """Build a war_ripened event dict from a ripe War object."""
-    return {
-        "type": "war_ripened",
-        "war_id": war.war_id,
-        "faction_a": war.faction_a,
-        "faction_b": war.faction_b,
-        "battleground": [
-            {"q": war.battleground[0][0], "r": war.battleground[0][1]},
-            {"q": war.battleground[1][0], "r": war.battleground[1][1]},
-        ] if war.battleground else None,
-    }
-
-
 @dataclass
 class SpoilsPendingEntry:
     """Represents one pending spoils choice for a guided spirit."""
     winner: str
     loser: str
     cards: list          # list of AgendaType
-    battleground: Any = None
     chosen_card: Any = None
-    stage: str = ""      # SubPhase.CHANGE_CHOICE when awaiting modifier
+    stage: str = ""      # SubPhase.CHANGE_CHOICE or EXPAND_CHOICE when awaiting follow-up
     change_cards: list = field(default_factory=list)
+    expand_hexes: list = field(default_factory=list)  # available enemy territories for Expand choice
+    expand_target: Any = None  # chosen (q, r) tuple after spoils_expand_choice
 
 
 class GameState:
@@ -78,12 +57,9 @@ class GameState:
         self.spoils_pending: dict[str, list[SpoilsPendingEntry]] = {}
         # Auto-resolved spoils waiting for batch finalization
         self.auto_spoils_choices: list[dict] = []
-        # Battleground choice state (deferred ripening when guided factions are involved)
-        self.battleground_pending: dict[str, list[dict]] = {}
-        # spirit_id -> {war_id -> pair_index (full) or (q,r) tuple (enemy_side)}
-        self.battleground_submitted: dict[str, dict] = {}
-        self.battleground_wars_pending: list = []  # wars awaiting choice
-        self._war_results_for_spoils: list[dict] = []  # saved for after BG choices
+        # Winner choice state: one-guided wars where spirit picks who wins
+        self.winner_choice_pending: dict[str, list[dict]] = {}  # spirit_id -> list of war dicts
+        self._war_results_dice: list[dict] = []  # dice-resolved results saved while awaiting winner choices
         # Contested guidance cooldowns: spirit_id -> set of faction_ids blocked for 1 turn
         self.guidance_cooldowns: dict[str, set[str]] = {}
         # Tutorial mode: give human players priority in contested guidance on turn 2
@@ -188,10 +164,8 @@ class GameState:
             self.ejection_pending.clear()
             self.spoils_pending.clear()
             self.auto_spoils_choices.clear()
-            self.battleground_pending.clear()
-            self.battleground_submitted.clear()
-            self.battleground_wars_pending.clear()
-            self._war_results_for_spoils.clear()
+            self.winner_choice_pending.clear()
+            self._war_results_dice.clear()
 
             turn_results.append((events, self.get_snapshot()))
 
@@ -947,7 +921,7 @@ class GameState:
 
     def _resolve_war_phase(self) -> list[dict]:
         events = []
-        war_results = []
+        dice_results = []
 
         # Snapshot territory counts for simultaneous power calculation
         power_snapshot = {
@@ -955,100 +929,38 @@ class GameState:
             for fid in self.factions
         }
 
-        # Resolve all ripe wars using snapshotted power values
-        ripe_wars = [w for w in self.wars if w.is_ripe]
-        for war in ripe_wars:
-            result = war.resolve(power_snapshot[war.faction_a],
-                                 power_snapshot[war.faction_b])
-            war_results.append(result)
-            events.append({
-                "type": "war_resolved",
-                **result,
-            })
-            self.wars.remove(war)
-
-        # Apply gold changes simultaneously
-        gold_deltas: dict[str, int] = {}  # faction_id -> net gold change
-        for result in war_results:
-            winner = result.get("winner")
-            loser = result.get("loser")
-            if winner:
-                gold_deltas[winner] = gold_deltas.get(winner, 0) + 1
-                gold_deltas[loser] = gold_deltas.get(loser, 0) - 1
-                self.factions[winner].wars_won_this_turn += 1
-            else:
-                # Tie: both lose 1
-                fa, fb = result["faction_a"], result["faction_b"]
-                gold_deltas[fa] = gold_deltas.get(fa, 0) - 1
-                gold_deltas[fb] = gold_deltas.get(fb, 0) - 1
-
-        for fid, delta in gold_deltas.items():
-            faction = self.factions[fid]
-            if delta > 0:
-                faction.add_gold(delta)
-            elif delta < 0:
-                faction.gold = max(0, faction.gold + delta)
-
-        # Ripen pending wars — guided factions get to choose the battleground
-        pending_wars = [w for w in self.wars if not w.is_ripe]
-        for war in pending_wars:
-            border_pairs = self.hex_map.get_border_hex_pairs(war.faction_a, war.faction_b)
-            if not border_pairs:
-                self.wars.remove(war)  # factions no longer adjacent — cancel
-                continue
+        # Resolve all wars that erupted this turn
+        for war in list(self.wars):
             guided_a = self.factions[war.faction_a].guiding_spirit
             guided_b = self.factions[war.faction_b].guiding_spirit
-            if not guided_a and not guided_b:
-                # No guided factions — ripen randomly now (existing behaviour)
-                war.ripen_with_battleground(random.choice(border_pairs))
-                events.append(_war_ripened_event(war))
-            else:
-                # At least one guided faction — defer battleground choice
-                self.battleground_wars_pending.append(war)
-                if guided_a:
-                    if guided_b:
-                        # Each picks enemy side (B-side hexes for A to pick from)
-                        enemy_hexes_for_a = list({p[1] for p in border_pairs})
-                        entry = dict(
-                            war_id=war.war_id, mode="enemy_side",
-                            faction_a=war.faction_a, faction_b=war.faction_b,
-                            my_faction=war.faction_a, enemy_faction=war.faction_b,
-                            enemy_hexes=[{"q": h[0], "r": h[1]} for h in enemy_hexes_for_a],
-                        )
-                    else:
-                        # Only A guided — full pick
-                        entry = dict(
-                            war_id=war.war_id, mode="full",
-                            faction_a=war.faction_a, faction_b=war.faction_b,
-                            pairs=_pairs_to_dict(border_pairs),
-                        )
-                    self.battleground_pending.setdefault(guided_a, []).append(entry)
-                if guided_b:
-                    if guided_a:
-                        # Each picks enemy side (A-side hexes for B to pick from)
-                        enemy_hexes_for_b = list({p[0] for p in border_pairs})
-                        entry = dict(
-                            war_id=war.war_id, mode="enemy_side",
-                            faction_a=war.faction_a, faction_b=war.faction_b,
-                            my_faction=war.faction_b, enemy_faction=war.faction_a,
-                            enemy_hexes=[{"q": h[0], "r": h[1]} for h in enemy_hexes_for_b],
-                        )
-                    else:
-                        # Only B guided — full pick
-                        entry = dict(
-                            war_id=war.war_id, mode="full",
-                            faction_a=war.faction_a, faction_b=war.faction_b,
-                            pairs=_pairs_to_dict(border_pairs),
-                        )
-                    self.battleground_pending.setdefault(guided_b, []).append(entry)
 
-        # If any guided battleground choices are pending, save war_results and defer spoils
-        if self.battleground_wars_pending:
-            self._war_results_for_spoils = war_results
+            if (guided_a and not guided_b) or (guided_b and not guided_a):
+                # Exactly one faction is guided — that spirit picks the winner
+                spirit_id = guided_a or guided_b
+                guided_faction = war.faction_a if guided_a else war.faction_b
+                self.winner_choice_pending.setdefault(spirit_id, []).append({
+                    "war_id": war.war_id,
+                    "faction_a": war.faction_a,
+                    "faction_b": war.faction_b,
+                    "guided_faction": guided_faction,
+                })
+            else:
+                # Both or neither guided — dice formula
+                result = war.resolve(power_snapshot[war.faction_a],
+                                     power_snapshot[war.faction_b])
+                dice_results.append(result)
+                events.append({"type": "war_resolved", **result})
+                if result.get("winner"):
+                    self.factions[result["winner"]].wars_won_this_turn += 1
+                self.wars.remove(war)
+
+        # If winner choices are pending, save dice results and wait
+        if self.winner_choice_pending:
+            self._war_results_dice = dice_results
             return events
 
-        # No guided choices — proceed to spoils immediately
-        self._setup_spoils(war_results, events)
+        # No winner choices needed — proceed to spoils immediately
+        self._setup_spoils(dice_results, events)
         return events
 
     def _setup_spoils(self, war_results: list[dict], events: list[dict]) -> None:
@@ -1062,7 +974,6 @@ class GameState:
                 spirit_id: [
                     SpoilsPendingEntry(
                         winner=d["winner"], loser=d["loser"], cards=d["cards"],
-                        battleground=d.get("battleground"),
                     )
                     for d in entries
                 ]
@@ -1077,100 +988,52 @@ class GameState:
             self._finalize_spoils(events)
         # Otherwise stay in WAR_PHASE until spoils choices are submitted
 
-    def has_pending_battleground_choices(self) -> bool:
-        """Return True if any spirit still needs to submit a battleground choice."""
-        return bool(self.battleground_pending)
+    def has_pending_winner_choices(self) -> bool:
+        """Return True if any spirit still needs to submit a winner choice."""
+        return bool(self.winner_choice_pending)
 
-    def submit_battleground_choice(self, spirit_id: str, choices: list[dict]) -> tuple:
-        """Submit battleground choices for one spirit. Returns (error, events).
+    def submit_winner_choice(self, spirit_id: str, choices: list[dict]) -> tuple:
+        """Submit winner choices for one-guided wars. Returns (error, events).
 
-        choices: list of {war_id, pair_index} (full mode) or {war_id, hex: {q,r}} (enemy_side mode)
+        choices: list of {war_id, winner: faction_id}
         """
-        if spirit_id not in self.battleground_pending:
-            return "No battleground choice pending", []
+        if spirit_id not in self.winner_choice_pending:
+            return "No winner choice pending", []
 
-        pending_entries = self.battleground_pending[spirit_id]
+        pending_entries = self.winner_choice_pending[spirit_id]
         pending_by_war = {e["war_id"]: e for e in pending_entries}
 
         if len(choices) != len(pending_entries):
             return f"Expected {len(pending_entries)} choices, got {len(choices)}", []
 
-        submitted = {}
+        events = []
         for choice in choices:
             war_id = choice.get("war_id")
             if war_id not in pending_by_war:
                 return f"Unknown war_id {war_id}", []
             entry = pending_by_war[war_id]
-            if entry["mode"] == "full":
-                pair_index = choice.get("pair_index", 0)
-                if not isinstance(pair_index, int) or pair_index < 0 or pair_index >= len(entry["pairs"]):
-                    pair_index = 0
-                submitted[war_id] = pair_index
-            else:  # enemy_side
-                h = choice.get("hex", {})
-                submitted[war_id] = (h.get("q", 0), h.get("r", 0))
+            chosen_winner = choice.get("winner")
+            if chosen_winner not in (entry["faction_a"], entry["faction_b"]):
+                return f"Invalid winner {chosen_winner}", []
 
-        self.battleground_submitted[spirit_id] = submitted
-        del self.battleground_pending[spirit_id]
+            war = next((w for w in self.wars if w.war_id == war_id), None)
+            if war is None:
+                return f"War {war_id} not found", []
 
-        if not self.battleground_pending:
-            events = self.finalize_battleground_choices()
-            return None, events
-        return None, []
+            result = war.resolve_forced(chosen_winner, entry["guided_faction"])
+            self._war_results_dice.append(result)
+            events.append({"type": "war_resolved", **result})
+            if result.get("winner"):
+                self.factions[result["winner"]].wars_won_this_turn += 1
+            self.wars.remove(war)
 
-    def finalize_battleground_choices(self) -> list[dict]:
-        """Ripen all deferred wars using submitted choices, then set up spoils."""
-        from shared.hex_utils import hexes_are_adjacent
-        events = []
-        for war in self.battleground_wars_pending:
-            border_pairs = self.hex_map.get_border_hex_pairs(war.faction_a, war.faction_b)
-            if not border_pairs:
-                self.wars.remove(war)
-                continue
-            guided_a = self.factions[war.faction_a].guiding_spirit
-            guided_b = self.factions[war.faction_b].guiding_spirit
-            chosen = None
+        del self.winner_choice_pending[spirit_id]
 
-            if guided_a and not guided_b:
-                sub = self.battleground_submitted.get(guided_a, {})
-                idx = sub.get(war.war_id)
-                if isinstance(idx, int) and 0 <= idx < len(border_pairs):
-                    chosen = border_pairs[idx]
-            elif guided_b and not guided_a:
-                sub = self.battleground_submitted.get(guided_b, {})
-                idx = sub.get(war.war_id)
-                if isinstance(idx, int) and 0 <= idx < len(border_pairs):
-                    chosen = border_pairs[idx]
-            elif guided_a and guided_b:
-                # A picked an enemy (B-side) hex; B picked an enemy (A-side) hex
-                hex_b = self.battleground_submitted.get(guided_a, {}).get(war.war_id)
-                hex_a = self.battleground_submitted.get(guided_b, {}).get(war.war_id)
-                if hex_a and hex_b:
-                    q1, r1 = hex_a
-                    q2, r2 = hex_b
-                    if hexes_are_adjacent(q1, r1, q2, r2):
-                        pair_ab = (hex_a, hex_b)
-                        pair_ba = (hex_b, hex_a)
-                        if pair_ab in border_pairs:
-                            chosen = pair_ab
-                        elif pair_ba in border_pairs:
-                            chosen = pair_ba
+        if not self.winner_choice_pending:
+            self._setup_spoils(self._war_results_dice, events)
+            self._war_results_dice = []
 
-            if chosen is None:
-                chosen = random.choice(border_pairs)
-
-            war.ripen_with_battleground(chosen)
-            events.append(_war_ripened_event(war))
-
-        # Resolve spoils for the saved war_results
-        self._setup_spoils(self._war_results_for_spoils, events)
-
-        # Reset battleground state
-        self.battleground_wars_pending.clear()
-        self.battleground_pending.clear()
-        self.battleground_submitted.clear()
-        self._war_results_for_spoils = []
-        return events
+        return None, events
 
     def _resolve_scoring(self) -> list[dict]:
         # Check worship for all guided factions before scoring
@@ -1234,10 +1097,8 @@ class GameState:
         self.ejection_pending.clear()
         self.spoils_pending.clear()
         self.auto_spoils_choices.clear()
-        self.battleground_pending.clear()
-        self.battleground_submitted.clear()
-        self.battleground_wars_pending.clear()
-        self._war_results_for_spoils.clear()
+        self.winner_choice_pending.clear()
+        self._war_results_dice.clear()
         self._stored_agenda_choices = {}
         self._guided_change_factions = []
         self._guided_change_modifiers = {}
@@ -1265,6 +1126,7 @@ class GameState:
 
         events = []
         change_needed = False
+        expand_needed = False
         # Process all choices, recording them on the pending entries
         for i in range(len(pending_list) - 1, -1, -1):
             pending = pending_list[i]
@@ -1288,15 +1150,22 @@ class GameState:
                 pending.stage = SubPhase.CHANGE_CHOICE
                 pending.change_cards = change_cards
                 change_needed = True
+            elif chosen == AgendaType.EXPAND:
+                # Spirit must choose which enemy territory to conquer
+                enemy_territories = list(self.hex_map.get_faction_territories(pending.loser))
+                if enemy_territories:
+                    pending.stage = SubPhase.SPOILS_EXPAND_CHOICE
+                    pending.expand_hexes = enemy_territories
+                    expand_needed = True
 
-        if not change_needed:
+        if not change_needed and not expand_needed:
             # All choices made, collect for batch finalization
             for pending in pending_list:
                 self.auto_spoils_choices.append({
                     "winner": pending.winner,
                     "loser": pending.loser,
                     "agenda_type": pending.chosen_card,
-                    "battleground": pending.battleground,
+                    "target_hex": None,
                 })
             del self.spoils_pending[spirit_id]
 
@@ -1327,19 +1196,63 @@ class GameState:
             faction = self.factions[winner]
             faction.add_change_modifier(chosen)
             pending.chosen_card = AgendaType.CHANGE
+            pending.stage = ""
             events.append({
                 "type": "change",
                 "faction": winner,
                 "modifier": chosen.value,
             })
 
-        # All changes resolved — collect for batch finalization
+        # Check if any Expand choices are still pending
+        expand_pendings = [p for p in pending_list if p.stage == SubPhase.SPOILS_EXPAND_CHOICE]
+        if expand_pendings:
+            return None, events  # stay pending — expand choices still needed
+
+        # All sub-choices resolved — collect for batch finalization
         for pending in pending_list:
+            target_hex = pending.expand_target if pending.chosen_card == AgendaType.EXPAND else None
             self.auto_spoils_choices.append({
                 "winner": pending.winner,
                 "loser": pending.loser,
                 "agenda_type": pending.chosen_card if pending.chosen_card is not None else AgendaType.CHANGE,
-                "battleground": pending.battleground,
+                "target_hex": target_hex,
+            })
+        del self.spoils_pending[spirit_id]
+
+        if not self.spoils_pending:
+            self._finalize_spoils(events)
+        return None, events
+
+    def submit_spoils_expand_choice(self, spirit_id: str, choices: list[dict]) -> tuple[Optional[str], list[dict]]:
+        """Submit spoils Expand target hex choices for guided winners.
+
+        choices: list of {war_index, hex: {q, r}} where war_index is the position
+        in the pending_list for this spirit's EXPAND_CHOICE entries.
+        """
+        if spirit_id not in self.spoils_pending:
+            return "No spoils pending", []
+        pending_list = self.spoils_pending[spirit_id]
+        expand_pendings = [p for p in pending_list if p.stage == SubPhase.SPOILS_EXPAND_CHOICE]
+        if len(choices) != len(expand_pendings):
+            return f"Expected {len(expand_pendings)} expand choices, got {len(choices)}", []
+
+        events = []
+        for i, pending in enumerate(expand_pendings):
+            h = choices[i].get("hex", {})
+            chosen_hex = (h.get("q", 0), h.get("r", 0))
+            if chosen_hex not in pending.expand_hexes:
+                return f"Hex {chosen_hex} is not a valid enemy territory", []
+            pending.expand_target = chosen_hex
+            pending.stage = ""
+
+        # Collect all entries for batch finalization
+        for pending in pending_list:
+            target_hex = pending.expand_target if pending.chosen_card == AgendaType.EXPAND else None
+            self.auto_spoils_choices.append({
+                "winner": pending.winner,
+                "loser": pending.loser,
+                "agenda_type": pending.chosen_card,
+                "target_hex": target_hex,
             })
         del self.spoils_pending[spirit_id]
 
@@ -1350,18 +1263,19 @@ class GameState:
     def _finalize_spoils(self, events: list):
         """Finalize all spoils simultaneously and advance to scoring.
 
-        Guided Change spoils are excluded (modifier already applied via
-        submit_spoils_change_choice). All other spoils resolve in batch.
+        Guided Change modifiers are already applied during submit_spoils_change_choice
+        and must be excluded from the batch to avoid double-applying.
+        Guided Expand targets have been recorded in target_hex and are included.
         """
         if self.auto_spoils_choices:
-            # Filter out guided Change entries (already applied)
+            # Filter out guided Change entries (modifier already applied)
             batch = []
             for entry in self.auto_spoils_choices:
                 if entry["agenda_type"] == AgendaType.CHANGE:
                     winner = entry["winner"]
                     faction = self.factions[winner]
                     if faction.guiding_spirit and faction.guiding_spirit in self.spirits:
-                        continue  # Already resolved via submit_spoils_change_choice
+                        continue
                 batch.append(entry)
             finalize_all_spoils(self.factions, self.hex_map, self.wars, events,
                                batch, self.normal_trade_factions)

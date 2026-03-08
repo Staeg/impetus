@@ -568,12 +568,14 @@ class TutorialManager:
                     title="A War Has Erupted!",
                     text=(
                         "Wars erupt when Regard between neighbors drops to -2 or below "
-                        "after a Steal agenda. A new War is 'fresh'; it ripens at the end "
-                        "of the turn and resolves at the end of the NEXT turn.\n\n"
-                        "When a War resolves, both sides roll a die and add their territory "
-                        "count. The winner gains gold and draws Spoils (an extra Agenda). "
-                        "The loser loses 1 gold. If the winning Faction is Guided, the "
-                        "Spirit chooses which Spoils card to play based on its Influence."
+                        "after a Steal agenda. Wars resolve immediately at the end of this "
+                        "same turn.\n\n"
+                        "If exactly one Faction is Guided, the Guiding Spirit decides who "
+                        "wins. If both or neither side is Guided, both sides roll a die and "
+                        "add their territory count — highest total wins.\n\n"
+                        "The winner draws Spoils (a bonus Agenda card). If the winning "
+                        "Faction is Guided, the Spirit picks which card based on Influence. "
+                        "Spoils Expand lets you claim any territory from the losing Faction."
                     ),
                     button_label="Ok",
                 )
@@ -634,10 +636,10 @@ class TutorialManager:
                         "Choose a Spoils card from those drawn. Most cards work normally: "
                         "Trade sends gold back and benefits from others Trading this turn; "
                         "Steal and Change work exactly as normal.\n\n"
-                        "Expand is different: it conquers the war's battleground hex rather "
-                        "than an adjacent neutral hex. The gold cost is waive. If more than "
-                        "one Faction tries to conquer a hex simultaneously, they get [+1] gold "
-                        "as consolation."
+                        "Expand Spoils lets you claim any territory from the losing Faction "
+                        "rather than an adjacent neutral hex. The gold cost is waived. If two "
+                        "Factions target the same hex simultaneously, neither gets it but both "
+                        "receive a gold consolation."
                     ),
                     button_label="Ok",
                 )

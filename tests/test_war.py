@@ -9,42 +9,17 @@ from server.faction import Faction
 from server.hex_map import HexMap
 
 
-def make_factions():
-    factions = {}
-    for fid in ["mountain", "mesa", "sand", "plains", "river", "jungle"]:
-        f = Faction(fid)
-        for other in ["mountain", "mesa", "sand", "plains", "river", "jungle"]:
-            if other != fid:
-                f.regard[other] = 0
-        factions[fid] = f
-    return factions
-
-
 class TestWar:
     def test_war_creation(self):
         war = War("mountain", "mesa")
         assert war.faction_a == "mountain"
         assert war.faction_b == "mesa"
-        assert war.is_ripe is False
-        assert war.battleground is None
-
-    def test_war_ripen(self):
-        hm = HexMap()
-        war = War("mountain", "mesa")
-        result = war.ripen(hm)
-        assert result is True
-        assert war.is_ripe is True
-        assert war.battleground is not None
+        assert war.war_id is not None
 
     def test_war_resolve(self):
-        hm = HexMap()
-        factions = make_factions()
-        factions["mountain"].gold = 5
-        factions["mesa"].gold = 5
         war = War("mountain", "mesa")
-        war.ripen(hm)
-        power_a = len(hm.get_faction_territories("mountain"))
-        power_b = len(hm.get_faction_territories("mesa"))
+        power_a = 3
+        power_b = 3
         result = war.resolve(power_a, power_b)
         assert "roll_a" in result
         assert "roll_b" in result
@@ -52,47 +27,37 @@ class TestWar:
         assert "power_b" in result
         assert result["power_a"] == power_a
         assert result["power_b"] == power_b
-        # resolve() no longer applies gold — only determines winner
-        assert factions["mountain"].gold == 5
-        assert factions["mesa"].gold == 5
+        assert result.get("forced") is False
 
     def test_war_to_state(self):
-        hm = HexMap()
         war = War("mountain", "mesa")
-        war.ripen(hm)
         state = war.to_state()
         assert state.faction_a == "mountain"
         assert state.faction_b == "mesa"
-        assert state.is_ripe is True
-        assert state.battleground is not None
-
-    def test_war_no_border(self):
-        """Test war ripening when factions aren't neighbors (opposite sides of map)."""
-        hm = HexMap()
-        # Mountain (1,-1) and plains (-1,1) are on opposite sides, not adjacent
-        war = War("mountain", "plains")
-        result = war.ripen(hm)
-        assert result is False  # They are not neighbors
+        assert state.war_id == war.war_id
 
     def test_resolve_uses_provided_power(self):
         """resolve() should use the provided power values, not compute its own."""
         war = War("mountain", "mesa")
-        war.is_ripe = True
-        war.battleground = ((0, 0), (1, 0))
-        # Provide arbitrary power values
         result = war.resolve(10, 20)
         assert result["power_a"] == 10
         assert result["power_b"] == 20
-        # No gold side effects (no faction objects involved)
         assert result["total_a"] == result["roll_a"] + 10
         assert result["total_b"] == result["roll_b"] + 20
 
-    def test_ripen_with_battleground(self):
-        """ripen_with_battleground sets battleground directly and marks war ripe."""
+    def test_resolve_forced_winner(self):
+        """resolve_forced returns correct winner/loser with forced=True."""
         war = War("mountain", "mesa")
-        assert war.is_ripe is False
-        assert war.battleground is None
-        chosen = ((1, -1), (1, 0))
-        war.ripen_with_battleground(chosen)
-        assert war.is_ripe is True
-        assert war.battleground == chosen
+        result = war.resolve_forced("mountain", guided_faction="mountain")
+        assert result["winner"] == "mountain"
+        assert result["loser"] == "mesa"
+        assert result["forced"] is True
+        assert result["guided_faction"] == "mountain"
+
+    def test_resolve_forced_other_faction_wins(self):
+        """Spirit can choose the opposing faction to win."""
+        war = War("mountain", "mesa")
+        result = war.resolve_forced("mesa", guided_faction="mountain")
+        assert result["winner"] == "mesa"
+        assert result["loser"] == "mountain"
+        assert result["forced"] is True

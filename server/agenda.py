@@ -222,7 +222,7 @@ def _resolve_expand(factions, hex_map, playing_factions, events, is_spoils,
     randomly. All targets are collected first, then contest detection runs:
     if two or more factions target the same hex, all fail.
 
-    For spoils: take the loser's battleground hex instead of paying gold.
+    For spoils: claim a territory from the loser instead of paying gold.
     spoils_conquests maps faction_id -> list of hex coords to claim.
     """
     faction_counts = faction_counts or {}
@@ -344,31 +344,22 @@ def _resolve_change(factions, playing_factions, events, is_spoils=False, faction
             })
 
 
-def _cancel_wars_on_hex(wars, hex_coord, events, factions):
-    """Cancel any wars whose battleground includes the given hex.
+def _pick_enemy_territory(hex_map, loser: str):
+    """Pick a random enemy territory, preferring hexes with more idols.
 
-    Called after a spoils Expand conquers a battleground hex, since the
-    territorial change invalidates other wars' battlegrounds.
+    Used for unguided Spoils Expand targeting in Era 1.
     """
-    from shared.constants import FACTION_DISPLAY_NAMES
-    to_remove = []
-    for w in wars:
-        if not w.battleground:
-            continue
-        if w.battleground[0] == hex_coord or w.battleground[1] == hex_coord:
-            to_remove.append(w)
-    for w in to_remove:
-        wars.remove(w)
-        fa = FACTION_DISPLAY_NAMES.get(w.faction_a, w.faction_a)
-        fb = FACTION_DISPLAY_NAMES.get(w.faction_b, w.faction_b)
-        events.append({
-            "type": "war_ended",
-            "war_id": w.war_id,
-            "reason": "territorial_changes",
-            "faction_a": w.faction_a,
-            "faction_b": w.faction_b,
-            "message": f"War between {fa} and {fb} dissipated due to territorial changes.",
-        })
+    territories = list(hex_map.get_faction_territories(loser))
+    if not territories:
+        return None
+    idol_counts = {hx: 0 for hx in territories}
+    for idol in hex_map.idols:
+        pos = (idol.position.q, idol.position.r)
+        if pos in idol_counts:
+            idol_counts[pos] += 1
+    max_count = max(idol_counts.values())
+    best = [h for h, cnt in idol_counts.items() if cnt == max_count]
+    return random.choice(best)
 
 
 def resolve_spoils(factions, hex_map, war_results, wars, events,
@@ -379,9 +370,15 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
     Non-guided factions and single-card draws are auto-resolved and stored in
     auto_spoils_choices for later batch resolution.
 
+    For Expand spoils:
+    - Guided winner: spirit must choose a target hex via spoils_expand_choice;
+      the entry is placed in spoils_pending with no target_hex yet.
+    - Non-guided winner: target hex is auto-picked (most idols) and stored
+      immediately in target_hex.
+
     Returns (spoils_pending, auto_spoils_choices) where:
     - spoils_pending: spirit_id -> list of pending choice dicts
-    - auto_spoils_choices: list of {winner, loser, agenda_type, battleground}
+    - auto_spoils_choices: list of {winner, loser, agenda_type, target_hex}
     """
     spirits = spirits or {}
     spoils_pending = {}
@@ -414,11 +411,14 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
                 faction.played_agenda_this_turn.append(card)
                 spoils_type = card.agenda_type
                 result["spoils"] = spoils_type.value
+                target_hex = None
+                if spoils_type == AgendaType.EXPAND:
+                    target_hex = _pick_enemy_territory(hex_map, loser)
                 auto_spoils_choices.append({
                     "winner": winner,
                     "loser": loser,
                     "agenda_type": spoils_type,
-                    "battleground": result.get("battleground"),
+                    "target_hex": target_hex,
                 })
                 events.append({
                     "type": "spoils_drawn",
@@ -432,7 +432,6 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
                 "cards": cards,
                 "winner": winner,
                 "loser": loser,
-                "battleground": result.get("battleground"),
             })
             events.append({
                 "type": "spoils_choice",
@@ -447,11 +446,14 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
         faction.played_agenda_this_turn.append(card)
         spoils_type = card.agenda_type
         result["spoils"] = spoils_type.value
+        target_hex = None
+        if spoils_type == AgendaType.EXPAND:
+            target_hex = _pick_enemy_territory(hex_map, loser)
         auto_spoils_choices.append({
             "winner": winner,
             "loser": loser,
             "agenda_type": spoils_type,
-            "battleground": result.get("battleground"),
+            "target_hex": target_hex,
         })
         events.append({
             "type": "spoils_drawn",
@@ -467,14 +469,10 @@ def finalize_all_spoils(factions, hex_map, wars, events,
                         normal_trade_factions: list[str]):
     """Resolve all collected spoils agendas simultaneously.
 
-    all_spoils: list of {winner, loser, agenda_type, battleground} dicts.
-    Resolves in standard agenda order (Trade -> Steal -> Expand -> Change).
-    Spoils Expand uses contested-hex logic: if two factions target the same
-    hex, neither gets it.
-
-    A faction can appear multiple times (winning multiple wars). Each instance
-    is tracked via faction_counts so resolvers apply effects the correct
-    number of times.
+    all_spoils: list of {winner, loser, agenda_type, target_hex} dicts.
+    For Expand entries, target_hex is the pre-resolved hex to conquer
+    (chosen by spirit or auto-picked). Resolves in standard agenda order.
+    Contested Expand: if two factions target the same hex, neither gets it.
     """
     from collections import Counter
 
@@ -489,21 +487,13 @@ def finalize_all_spoils(factions, hex_map, wars, events,
     expand_targets = {}  # hex_coord -> list of faction_ids wanting it
     for entry in all_spoils:
         winner = entry["winner"]
-        loser = entry["loser"]
         agenda_type = entry["agenda_type"]
-        battleground = entry.get("battleground")
+        target_hex = entry.get("target_hex")
 
-        if agenda_type == AgendaType.EXPAND and battleground:
-            loser_hex = None
-            for h in battleground:
-                coord = (h["q"], h["r"])
-                if hex_map.ownership.get(coord) == loser:
-                    loser_hex = coord
-                    break
-            if loser_hex:
-                claimants = expand_targets.setdefault(loser_hex, [])
-                if winner not in claimants:
-                    claimants.append(winner)
+        if agenda_type == AgendaType.EXPAND and target_hex:
+            claimants = expand_targets.setdefault(target_hex, [])
+            if winner not in claimants:
+                claimants.append(winner)
 
     # Resolve contested spoils expand
     contested_expand_counts = Counter()  # faction_id -> number of contested expands
@@ -533,8 +523,7 @@ def finalize_all_spoils(factions, hex_map, wars, events,
         if instance_counts[(fid, AgendaType.EXPAND)] <= 0:
             del instance_counts[(fid, AgendaType.EXPAND)]
 
-    # Resolve each agenda type separately (since a faction can have multiple different
-    # types, we can't use a single dict mapping faction -> type)
+    # Resolve each agenda type separately
     for agenda_type in AGENDA_RESOLUTION_ORDER:
         type_factions = [fid for (fid, at), count in instance_counts.items()
                          if at == agenda_type and count > 0]
@@ -549,8 +538,3 @@ def finalize_all_spoils(factions, hex_map, wars, events,
                        is_spoils=True, spoils_conquests=spoils_conquests,
                        normal_trade_factions=normal_trade_factions,
                        faction_counts=type_counts)
-
-    # Cancel wars whose battleground was conquered
-    for hex_list in spoils_conquests.values():
-        for conquered_hex in hex_list:
-            _cancel_wars_on_hex(wars, conquered_hex, events, factions)

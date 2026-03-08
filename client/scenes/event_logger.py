@@ -95,20 +95,20 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
         fb = faction_full_name(event["faction_b"])
         event_log.append(f"War erupted between {fa} and {fb}!")
 
-    elif etype == "war_ripened":
-        fa = faction_full_name(event["faction_a"])
-        fb = faction_full_name(event["faction_b"])
-        event_log.append(f"War between {fa} and {fb} is ripe!")
-
     elif etype == "war_resolved":
         winner = event.get("winner")
         if winner:
             wname = faction_full_name(winner)
             loser = event.get("loser", "?")
             lname = faction_full_name(loser)
-            event_log.append(
-                f"{wname} won war against {lname}! (Roll: {event.get('roll_a', '?')}+{event.get('power_a', '?')} vs "
-                f"{event.get('roll_b', '?')}+{event.get('power_b', '?')})")
+            if event.get("forced"):
+                guided = faction_full_name(event.get("guided_faction", winner))
+                event_log.append(f"{wname} defeated {lname}! (guided spirit's choice)")
+            else:
+                event_log.append(
+                    f"{wname} defeated {lname}! "
+                    f"(Roll: {event.get('roll_a','?')}+{event.get('power_a','?')} vs "
+                    f"{event.get('roll_b','?')}+{event.get('power_b','?')})")
         else:
             event_log.append("War ended in a tie!")
 

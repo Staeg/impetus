@@ -69,9 +69,9 @@ class TestModelSerialization:
         assert s2.influence == 3
 
     def test_war_state(self):
-        w = WarState("w1", "mountain", "mesa", is_ripe=True,
-                     battleground=(HexCoord(1, -1), HexCoord(1, 0)))
+        w = WarState("w1", "mountain", "mesa")
         d = w.to_dict()
         w2 = WarState.from_dict(d)
-        assert w2.is_ripe is True
-        assert w2.battleground[0] == HexCoord(1, -1)
+        assert w2.war_id == "w1"
+        assert w2.faction_a == "mountain"
+        assert w2.faction_b == "mesa"

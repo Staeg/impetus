@@ -32,17 +32,12 @@ def advance_to_vagrant(gs, max_iter=20):
     for _ in range(max_iter):
         if gs.phase == Phase.VAGRANT_PHASE:
             break
-        if gs.has_pending_battleground_choices():
-            # Auto-pick first valid option for any pending battleground choices
-            for sid, war_choices in list(gs.battleground_pending.items()):
-                choices = []
-                for wc in war_choices:
-                    if wc["mode"] == "full":
-                        choices.append({"war_id": wc["war_id"], "pair_index": 0})
-                    else:
-                        choices.append({"war_id": wc["war_id"],
-                                        "hex": wc["enemy_hexes"][0]})
-                gs.submit_battleground_choice(sid, choices)
+        if gs.has_pending_winner_choices():
+            # Auto-pick guided faction to win for any pending winner choices
+            for sid, war_choices in list(gs.winner_choice_pending.items()):
+                choices = [{"war_id": wc["war_id"], "winner": wc["guided_faction"]}
+                           for wc in war_choices]
+                gs.submit_winner_choice(sid, choices)
             continue
         gs.resolve_current_phase()
 
@@ -107,9 +102,13 @@ class TestGameStateSetup:
 
         gs = make_game()
         assert gs.turn == 2
-        assert len(gs.wars) > 0
-        # Wars erupt and ripen within the same automated turn's war phase.
-        assert all(w.is_ripe for w in gs.wars)
+        # In Era 1, wars resolve immediately on the same turn they erupt.
+        # Any wars remaining after setup are freshly erupted (e.g. from spoils Steal)
+        # and have no is_ripe or battleground concept.
+        for w in gs.wars:
+            assert hasattr(w, "war_id")
+            assert hasattr(w, "faction_a")
+            assert hasattr(w, "faction_b")
 
 
 class TestVagrantPhase:
@@ -477,15 +476,11 @@ class TestSnapshot:
         assert "spirits" in d
 
 
-class TestBattlegroundChoice:
-    """Tests for the guided battleground choice mechanic."""
+class TestWinnerChoice:
+    """Tests for the winner_choice sub-phase (one guided, spirit decides war outcome)."""
 
-    def _make_game_with_pending_war(self, guided_a=None, guided_b=None):
-        """Return (gs, war) with an unripe mountain-vs-mesa war and optional guidance.
-
-        Uses fixed (non-shuffled) faction start positions so mountain(1,-1) and
-        mesa(1,0) are guaranteed to be adjacent.
-        """
+    def _make_game_with_war(self, guided_a=False, guided_b=False):
+        """Return (gs, war) with a mountain-vs-mesa war and optional guidance."""
         from server.war import War
         from server.faction import Faction
         from server.spirit import Spirit
@@ -493,7 +488,6 @@ class TestBattlegroundChoice:
         from shared.constants import FACTION_NAMES
 
         gs = GameState()
-        # Fixed hex map: mountain at (1,-1), mesa at (1,0) — guaranteed adjacent
         gs.hex_map = HexMap()
         for fid in FACTION_NAMES:
             faction = Faction(fid)
@@ -523,78 +517,54 @@ class TestBattlegroundChoice:
         gs.wars.append(war)
         return gs, war
 
-    def test_no_guided_ripens_immediately(self):
-        """If neither faction is guided, war ripens at random during war phase."""
-        gs, war = self._make_game_with_pending_war()
-        gs._resolve_war_phase()
-        assert war.is_ripe
-        assert not gs.has_pending_battleground_choices()
+    def test_neither_guided_resolves_immediately(self):
+        """If neither faction is guided, war resolves via dice immediately."""
+        gs, war = self._make_game_with_war()
+        events = gs._resolve_war_phase()
+        assert not gs.has_pending_winner_choices()
+        war_events = [e for e in events if e["type"] == "war_resolved"]
+        assert len(war_events) == 1
+
+    def test_both_guided_resolves_via_dice(self):
+        """If both factions are guided, war resolves via dice (not spirit choice)."""
+        gs, war = self._make_game_with_war(guided_a=True, guided_b=True)
+        events = gs._resolve_war_phase()
+        assert not gs.has_pending_winner_choices()
+        war_events = [e for e in events if e["type"] == "war_resolved"]
+        assert len(war_events) == 1
+        assert war_events[0].get("forced") is False
 
     def test_one_guided_defers_to_spirit(self):
-        """If faction_a is guided, its spirit gets a full-pick battleground_choice."""
-        gs, war = self._make_game_with_pending_war(guided_a="spirit_0")
+        """If exactly one faction is guided, spirit gets winner_choice."""
+        gs, war = self._make_game_with_war(guided_a=True)
         gs._resolve_war_phase()
-        assert not war.is_ripe
-        assert gs.has_pending_battleground_choices()
-        assert "spirit_0" in gs.battleground_pending
-        entry = gs.battleground_pending["spirit_0"][0]
-        assert entry["mode"] == "full"
+        assert gs.has_pending_winner_choices()
+        assert "spirit_0" in gs.winner_choice_pending
+        entry = gs.winner_choice_pending["spirit_0"][0]
         assert entry["war_id"] == war.war_id
-        assert len(entry["pairs"]) > 0
-        assert len(gs.battleground_wars_pending) == 1
+        assert entry["guided_faction"] == "mountain"
 
-    def test_one_guided_submit_ripens_war(self):
-        """Submitting a valid full-pick choice ripens the war with that pair."""
-        gs, war = self._make_game_with_pending_war(guided_a="spirit_0")
+    def test_submit_winner_choice_guided_faction_wins(self):
+        """Spirit submits guided faction as winner — forced win."""
+        gs, war = self._make_game_with_war(guided_a=True)
         gs._resolve_war_phase()
-        border_pairs = gs.hex_map.get_border_hex_pairs("mountain", "mesa")
-        err, events = gs.submit_battleground_choice("spirit_0",
-            [{"war_id": war.war_id, "pair_index": 0}])
+        err, events = gs.submit_winner_choice(
+            "spirit_0", [{"war_id": war.war_id, "winner": "mountain"}])
         assert err is None
-        assert not gs.has_pending_battleground_choices()
-        assert war.is_ripe
-        assert war.battleground == border_pairs[0]
+        assert not gs.has_pending_winner_choices()
+        war_events = [e for e in events if e["type"] == "war_resolved"]
+        assert len(war_events) == 1
+        assert war_events[0]["winner"] == "mountain"
+        assert war_events[0]["forced"] is True
 
-    def test_both_guided_compatible_picks_use_pair(self):
-        """Both guided: adjacent picks that form a valid pair are used as battleground."""
-        gs, war = self._make_game_with_pending_war(guided_a="spirit_0", guided_b="spirit_1")
+    def test_submit_winner_choice_other_faction_wins(self):
+        """Spirit can choose the opposing faction to win."""
+        gs, war = self._make_game_with_war(guided_a=True)
         gs._resolve_war_phase()
-        assert "spirit_0" in gs.battleground_pending
-        assert "spirit_1" in gs.battleground_pending
-        assert gs.battleground_pending["spirit_0"][0]["mode"] == "enemy_side"
-        assert gs.battleground_pending["spirit_1"][0]["mode"] == "enemy_side"
-
-        border_pairs = gs.hex_map.get_border_hex_pairs("mountain", "mesa")
-        hex_a, hex_b = border_pairs[0]  # mountain hex, mesa hex
-
-        # Spirit_0 (guides mountain) picks the ENEMY (mesa) side
-        err, _ = gs.submit_battleground_choice("spirit_0",
-            [{"war_id": war.war_id, "hex": {"q": hex_b[0], "r": hex_b[1]}}])
+        err, events = gs.submit_winner_choice(
+            "spirit_0", [{"war_id": war.war_id, "winner": "mesa"}])
         assert err is None
-        assert not war.is_ripe  # still waiting for spirit_1
-
-        # Spirit_1 (guides mesa) picks the ENEMY (mountain) side
-        err, events = gs.submit_battleground_choice("spirit_1",
-            [{"war_id": war.war_id, "hex": {"q": hex_a[0], "r": hex_a[1]}}])
-        assert err is None
-        assert war.is_ripe
-        assert war.battleground == (hex_a, hex_b)
-
-    def test_both_guided_incompatible_falls_back_to_random(self):
-        """Both guided with non-adjacent picks fall back to a random valid pair."""
-        gs, war = self._make_game_with_pending_war(guided_a="spirit_0", guided_b="spirit_1")
-        gs._resolve_war_phase()
-        border_pairs = gs.hex_map.get_border_hex_pairs("mountain", "mesa")
-
-        # Submit an invalid hex (not in the border pairs) for both spirits
-        # to guarantee the pair won't be found and fallback kicks in
-        err, _ = gs.submit_battleground_choice("spirit_0",
-            [{"war_id": war.war_id, "hex": {"q": 99, "r": 99}}])
-        assert err is None
-        err, events = gs.submit_battleground_choice("spirit_1",
-            [{"war_id": war.war_id, "hex": {"q": 99, "r": 99}}])
-        assert err is None
-        # War still ripens (via fallback)
-        assert war.is_ripe
-        # And the resulting battleground is still a valid border pair
-        assert war.battleground in border_pairs
+        war_events = [e for e in events if e["type"] == "war_resolved"]
+        assert len(war_events) == 1
+        assert war_events[0]["winner"] == "mesa"
+        assert war_events[0]["forced"] is True

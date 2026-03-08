@@ -142,13 +142,17 @@ def get_ai_expand_choice(reachable_hexes: list, hex_map=None, spirit_id: str = N
     return random.choice(pool)
 
 
-def get_ai_battleground_choice(war_choices: list[dict]) -> list[dict]:
-    """Random battleground selection — picks first valid option for each war."""
+def get_ai_winner_choice(winner_choices: list[dict]) -> list[dict]:
+    """AI always picks its own guided faction to win."""
+    return [{"war_id": wc["war_id"], "winner": wc["guided_faction"]}
+            for wc in winner_choices]
+
+
+def get_ai_spoils_expand_choice(expand_pendings) -> list[dict]:
+    """AI picks the first available enemy territory for each Expand spoils."""
     result = []
-    for wc in war_choices:
-        if wc["mode"] == "full":
-            result.append({"war_id": wc["war_id"], "pair_index": 0})
-        else:
-            h = wc["enemy_hexes"][0]
-            result.append({"war_id": wc["war_id"], "hex": h})
+    for i, pending in enumerate(expand_pendings):
+        hexes = pending.expand_hexes
+        h = hexes[0] if hexes else (0, 0)
+        result.append({"hex": {"q": h[0], "r": h[1]}})
     return result

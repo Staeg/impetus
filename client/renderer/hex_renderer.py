@@ -282,23 +282,14 @@ class HexRenderer:
 
     def _draw_war_arrows(self, surface, wars, hex_ownership, camera,
                          screen_w, screen_h):
-        """Draw bidirectional arrows for all wars."""
+        """Draw bidirectional arrows for all active wars."""
         for war in wars:
-            if war.is_ripe and war.battleground:
-                # Bright red arrow on the battleground border only
-                h1 = (war.battleground[0].q, war.battleground[0].r)
-                h2 = (war.battleground[1].q, war.battleground[1].r)
-                self._draw_hex_arrow(surface, h1, h2, (255, 50, 50),
+            # In Era 1 wars have no battleground — draw arrows on all border hexes
+            pairs = self._get_border_pairs(hex_ownership, war.faction_a, war.faction_b)
+            for h1, h2 in pairs:
+                self._draw_hex_arrow(surface, h1, h2, (220, 60, 60),
                                      camera, screen_w, screen_h,
-                                     width=3, head_size=8)
-            else:
-                # Faint red arrows between all neighboring border hexes
-                pairs = self._get_border_pairs(hex_ownership,
-                                               war.faction_a, war.faction_b)
-                for h1, h2 in pairs:
-                    self._draw_hex_arrow(surface, h1, h2, (180, 60, 60),
-                                         camera, screen_w, screen_h,
-                                         width=1, head_size=5)
+                                     width=2, head_size=6)
 
     def _get_border_pairs(self, hex_ownership, faction_a, faction_b):
         """Find all adjacent hex pairs where one is faction_a and other is faction_b."""
@@ -369,18 +360,11 @@ class HexRenderer:
         b = 80
         bright = (r, g, b)
         for war in wars:
-            if war.is_ripe and war.battleground:
-                h1 = (war.battleground[0].q, war.battleground[0].r)
-                h2 = (war.battleground[1].q, war.battleground[1].r)
+            pairs = self._get_border_pairs(hex_ownership, war.faction_a, war.faction_b)
+            for h1, h2 in pairs:
                 self._draw_hex_arrow(surface, h1, h2, bright,
                                      camera, screen_w, screen_h,
-                                     width=5, head_size=12)
-            else:
-                pairs = self._get_border_pairs(hex_ownership, war.faction_a, war.faction_b)
-                for h1, h2 in pairs:
-                    self._draw_hex_arrow(surface, h1, h2, bright,
-                                         camera, screen_w, screen_h,
-                                         width=3, head_size=8)
+                                     width=3, head_size=8)
 
     def get_hex_at_screen(self, sx: int, sy: int, camera, screen_w: int, screen_h: int,
                           valid_hexes: set = None) -> tuple[int, int] | None:

@@ -98,7 +98,7 @@ All dataclasses are JSON-serialisable via `.to_dict()` / `.from_dict()`.
 | `AgendaCard` | One card in a pool | `agenda_type: AgendaType` |
 | `FactionState` | Serialisable faction snapshot | `faction_id, color, gold, territories, agenda_pool, change_modifiers, regard, guiding_spirit, worship_spirit, race` |
 | `SpiritState` | Serialisable spirit snapshot | `spirit_id, name, influence, is_vagrant, guided_faction, idols, victory_points, habitat_affinity, race_affinity` |
-| `WarState` | Serialisable war snapshot | `war_id, faction_a, faction_b, is_ripe, battleground` |
+| `WarState` | Serialisable war snapshot | `war_id, faction_a, faction_b` |
 | `GameStateSnapshot` | Full state for client | `turn, phase, factions, spirits, wars, all_idols, hex_ownership, faction_order` |
 
 `GameStateSnapshot.hex_ownership` is `dict["q,r" → faction_id | None]`.
@@ -123,7 +123,8 @@ All dataclasses are JSON-serialisable via `.to_dict()` / `.from_dict()`.
 | `SUBMIT_EJECTION_AGENDA` | Ejected spirit picks card to remove and add |
 | `SUBMIT_SPOILS_CHOICE` | Spirit picks spoils card(s) after winning wars |
 | `SUBMIT_SPOILS_CHANGE_CHOICE` | Follow-up modifier pick if spoils card was Change |
-| `SUBMIT_BATTLEGROUND_CHOICE` | Spirit picks battleground hex pair for ripe wars |
+| `SUBMIT_SPOILS_EXPAND_CHOICE` | Spirit picks enemy territory to claim per Expand spoils |
+| `SUBMIT_WINNER_CHOICE` | Spirit decides which faction wins when only one side is guided |
 
 ### Server → Client (`S2C`)
 
@@ -148,7 +149,8 @@ Sub-phases are bare strings sent as the `phase` field inside a `PHASE_START` mes
 | `ejection_choice` | Spirit was ejected (0 influence); must pick card to remove/add |
 | `spoils_choice` | Spirit won one or more wars; must pick spoils card per war |
 | `spoils_change_choice` | One or more spoils cards was Change; must pick modifier(s) |
-| `battleground_choice` | A war ripened with a guided faction; must pick battleground |
+| `spoils_expand_choice` | One or more spoils cards was Expand (guided); must pick enemy territory per war |
+| `winner_choice` | Exactly one side of a war is Guided; spirit decides which faction wins |
 
 ---
 
@@ -176,8 +178,9 @@ Sub-phases are bare strings sent as the `phase` field inside a `PHASE_START` mes
 - `SUBMIT_CHANGE_CHOICE` → `game_state.submit_change_choice()` → broadcast events
 - `SUBMIT_EJECTION_AGENDA` → `game_state.submit_ejection_choice()`
 - `SUBMIT_SPOILS_CHOICE` → `game_state.submit_spoils_choice()` → broadcast events
-- `SUBMIT_SPOILS_CHANGE_CHOICE` → `game_state.submit_spoils_choice()` (second stage)
-- `SUBMIT_BATTLEGROUND_CHOICE` → `game_state.submit_battleground_choice()` → broadcast events
+- `SUBMIT_SPOILS_CHANGE_CHOICE` → `game_state.submit_spoils_change_choice()`
+- `SUBMIT_SPOILS_EXPAND_CHOICE` → `game_state.submit_spoils_expand_choice()` → broadcast events
+- `SUBMIT_WINNER_CHOICE` → `game_state.submit_winner_choice()` → broadcast events
 
 After each submission, `room.signal_submission()` wakes the game loop.
 
@@ -197,9 +200,7 @@ AGENDA_PHASE:
   _resolve_ai_inputs()
   wait_for_submission()
   _handle_agenda_resolution()    → prepares change/expand choices
-    _send_battleground_options() if battleground choices pending
     _send_ejection_options()     if ejection choices pending
-    _send_spoils_options_after_battleground() if spoils pending
   _auto_resolve_phases()
 
 WAR_PHASE / SCORING / CLEANUP:
@@ -219,7 +220,8 @@ All AI decisions are random or simple heuristic:
 | `get_ai_expand_choice()` | Prefer own-idol hexes > empty hexes > enemy-idol hexes |
 | `get_ai_ejection_choice()` | Random remove + random add |
 | `get_ai_spoils_choice()` | Random pick per war |
-| `get_ai_battleground_choice()` | Pick first valid option |
+| `get_ai_winner_choice()` | Always picks its own guided faction to win |
+| `get_ai_spoils_expand_choice()` | Picks first available enemy territory |
 
 In tutorial mode, AI spirits wait for all human spirits to submit in VAGRANT_PHASE before submitting their own actions.
 
@@ -247,7 +249,7 @@ expand_pending: dict[str, str]         # spirit_id → faction_id
 expand_chosen: dict[str, tuple]        # spirit_id → chosen hex
 ejection_pending: dict[str, str]       # spirit_id → faction_id
 spoils_pending: dict[str, list[SpoilsPendingEntry]]
-battleground_pending: dict[str, list]
+winner_choice_pending: dict[str, list[dict]]   # spirit_id → [{war_id, faction_a, faction_b, guided_faction}]
 
 # Cooldowns
 guidance_cooldowns: dict[str, set[str]]  # spirit_id → blocked faction_ids
@@ -262,8 +264,9 @@ normal_trade_factions: list[str]       # factions that traded normally (for spoi
 winner: str          # winning faction_id
 loser: str
 cards: list          # drawn agenda types for this war
-battleground: Any    # war battleground coords
-stage: str           # "" or SubPhase.CHANGE_CHOICE (second-stage modifier pick)
+expand_hexes: list   # available enemy territories for Expand spoils (if any)
+expand_target: tuple | None  # auto-chosen target for unguided Expand
+stage: str           # "" | SubPhase.CHANGE_CHOICE | SubPhase.SPOILS_EXPAND_CHOICE
 change_cards: list   # modifier options (populated on second stage)
 ```
 
@@ -314,17 +317,16 @@ LOBBY → (setup_game) → VAGRANT_PHASE → AGENDA_PHASE → WAR_PHASE → SCOR
 ### War Phase resolution (`_resolve_war_phase`)
 
 1. **Snapshot power**: `power_snapshot[faction_id] = len(hex_map.get_faction_territories(faction_id))`.
-2. **Resolve ripe wars**: call `war.resolve(power_a, power_b)` for each ripe war; apply gold deltas in batch after all wars.
-3. **Draw spoils**: call `agenda.resolve_spoils(...)` → returns `(spoils_pending, auto_spoils_choices)`.
+2. **Resolve all wars** (wars resolve immediately — no two-turn lifecycle):
+   - **Exactly one side Guided**: spirit decides winner → `winner_choice_pending[spirit_id].append({war_id, ...})`.
+   - **Both or neither Guided**: `war.resolve(power_a, power_b)` — dice + power; no gold changes applied.
+3. If `winner_choice_pending` has any entries: server sends `winner_choice` PHASE_START; spirit submits `choices: [{war_id, winner}]` via `SUBMIT_WINNER_CHOICE`.
+4. After all winner choices: collect all war results and proceed to spoils.
+5. **Draw spoils**: call `agenda.resolve_spoils(...)` → returns `(spoils_pending, auto_spoils_choices)`.
    - Non-guided winners and single-draw guided winners → `auto_spoils_choices` (batch finalized immediately).
    - Multi-draw guided winners → `spoils_pending`; server sends `spoils_choice` PHASE_START.
-4. After all spoils choices received: `agenda.finalize_all_spoils(...)`.
-5. **Ripen unripe wars**: call `war.ripen(hex_map)` or `war.ripen_with_battleground(bg)`.
-   - Battleground selection logic:
-     - Neither guided: `hex_map.get_border_hex_pairs()` → random pick.
-     - One guided: PHASE_START `mode: "full"`, full pairs list; spirit submits `pair_index`.
-     - Both guided: PHASE_START `mode: "enemy_side"`, each receives opposing faction's border hexes; spirit submits `{war_id, hex: {q, r}}`; if chosen hexes form a valid adjacent pair it is used, else random fallback.
-   - Message: `SUBMIT_BATTLEGROUND_CHOICE` with `choices: [{war_id, pair_index}]` or `choices: [{war_id, hex: {q, r}}]`.
+6. If any spoils card is **Expand** (guided winner): server sends `spoils_expand_choice` PHASE_START; spirit submits `choices: [{hex: {q, r}}]` via `SUBMIT_SPOILS_EXPAND_CHOICE`.
+7. After all spoils choices received: `agenda.finalize_all_spoils(...)`.
 
 ### Scoring (`_resolve_scoring`)
 
@@ -395,7 +397,7 @@ Top-level resolver. Iterates `AGENDA_RESOLUTION_ORDER`, calling the appropriate 
 - Guided choices pre-collected into `guided_expand_choices`.
 - Collect all targets, detect contests (two or more factions targeting the same hex → all fail).
 - Fail gives the `expand_fail_bonus` gold (`expand_modifier` on the Expand card).
-- Spoils variant: uses battleground hex, no gold cost.
+- Spoils variant: claims a territory from the losing faction, no gold cost.
 - Faction's `territories_gained_this_turn` is incremented on success.
 
 #### `_resolve_change`
@@ -414,9 +416,8 @@ Returns `(spoils_pending, auto_spoils_choices)`.
 ### `finalize_all_spoils(factions, hex_map, wars, events, all_spoils, normal_trade_factions)`
 
 Batch-resolves all spoils simultaneously:
-1. Detect contested Expand spoils (two factions targeting the same battleground hex → both fail, both get expand_fail gold).
-2. Cancel wars whose battleground hex was captured via a spoils Expand.
-3. Call `resolve_agendas()` once per agenda type.
+1. Detect contested Expand spoils (two factions targeting the same enemy territory → both fail, both get expand_fail gold).
+2. Call `resolve_agendas()` once per agenda type.
 
 ---
 
@@ -470,14 +471,12 @@ Key methods:
 ```python
 war_id: str              # UUID prefix (8 chars)
 faction_a, faction_b: str
-is_ripe: bool
-battleground: tuple[tuple[int,int], tuple[int,int]] | None
 ```
 
 Key methods:
-- `ripen(hex_map)` — picks random battleground; sets `is_ripe=True`.
-- `ripen_with_battleground(battleground)` — ripens with player-selected pair.
 - `resolve(power_a, power_b) → dict` — rolls 1d6 per faction + power; returns full result dict.
+- `resolve_forced(winner, guided_faction) → dict` — spirit-decided outcome; marks `forced=True` in result.
+- `to_state() → WarState` — serialise.
 
 ### `HexMap` (`server/hex_map.py`)
 

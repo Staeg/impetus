@@ -411,12 +411,12 @@ class UIRenderer:
             "change": (200, 140, 255),
         }
 
-        # Build war lookup: faction_id -> list of (opponent_faction_id, is_ripe)
+        # Build war lookup: faction_id -> list of opponent_faction_ids
         war_lookup = {}
         if wars:
             for war in wars:
-                war_lookup.setdefault(war.faction_a, []).append((war.faction_b, war.is_ripe))
-                war_lookup.setdefault(war.faction_b, []).append((war.faction_a, war.is_ripe))
+                war_lookup.setdefault(war.faction_a, []).append(war.faction_b)
+                war_lookup.setdefault(war.faction_b, []).append(war.faction_a)
 
         for i, fid in enumerate(faction_order):
             fd = factions.get(fid)
@@ -531,14 +531,13 @@ class UIRenderer:
                 # Center the group horizontally in the faction cell
                 wars_x_start = cx + cell_w // 2 - total_war_w // 2
                 wx = wars_x_start
-                any_ripe = any(ripe for _, ripe in opponents)
-                sword_color = (255, 50, 50) if any_ripe else (180, 60, 60)
+                sword_color = (255, 50, 50)
                 # Draw crossed swords icon (two diagonal lines)
                 pygame.draw.line(surface, sword_color, (wx, sy - 5), (wx + 10, sy + 5), 2)
                 pygame.draw.line(surface, sword_color, (wx + 10, sy - 5), (wx, sy + 5), 2)
                 wx += 14
                 # Draw tiny hex for each enemy faction
-                for opponent_fid, is_ripe in opponents:
+                for opponent_fid in opponents:
                     enemy_color = tuple(FACTION_COLORS.get(opponent_fid, (150, 150, 150)))
                     hx, hy = wx + 5, sy  # center of tiny hex
                     r = 5  # radius of tiny hex
@@ -548,8 +547,6 @@ class UIRenderer:
                         angle = math.pi / 3 * k
                         points.append((hx + r * math.cos(angle), hy + r * math.sin(angle)))
                     pygame.draw.polygon(surface, enemy_color, points)
-                    if is_ripe:
-                        pygame.draw.polygon(surface, (255, 255, 255), points, 1)
                     wx += 14
                 # Store hoverable rect covering just the war indicator area
                 ribbon_war_rects[fid] = pygame.Rect(wars_x_start, sy - 8, total_war_w, 16)
@@ -637,18 +634,15 @@ class UIRenderer:
         worship_name = spirits.get(worship, {}).get("name", worship) if worship else "none"
 
         # Build war opponents for this faction
-        war_opponents = []  # list of (opponent_name, is_ripe)
+        war_opponents = []  # list of (opponent_name, opponent_fid)
         if wars:
             for w in wars:
                 fa = getattr(w, 'faction_a', None) or (w.get('faction_a') if isinstance(w, dict) else None)
                 fb = getattr(w, 'faction_b', None) or (w.get('faction_b') if isinstance(w, dict) else None)
-                ripe = getattr(w, 'is_ripe', None)
-                if ripe is None and isinstance(w, dict):
-                    ripe = w.get('is_ripe', False)
                 if fa == fid:
-                    war_opponents.append((faction_full_name(fb), ripe, fb))
+                    war_opponents.append((faction_full_name(fb), fb))
                 elif fb == fid:
-                    war_opponents.append((faction_full_name(fa), ripe, fa))
+                    war_opponents.append((faction_full_name(fa), fa))
 
         # Calculate dynamic panel height based on content
         panel_h = 8 + 24  # top padding + name header
@@ -898,10 +892,9 @@ class UIRenderer:
             self.panel_war_rect = pygame.Rect(x + 10, dy, text.get_width(), 16)
             draw_dotted_underline(surface, x + 10, dy + 14, text.get_width())
             dy += 18
-            for opp_name, is_ripe, opp_fid in war_opponents:
-                suffix = " (ripe)" if is_ripe else " (new)"
+            for opp_name, opp_fid in war_opponents:
                 war_color = tuple(FACTION_COLORS.get(opp_fid, (150, 150, 150)))
-                text = self.small_font.render(f"  {opp_name}{suffix}", True, war_color)
+                text = self.small_font.render(f"  {opp_name}", True, war_color)
                 surface.blit(text, (x + 10, dy))
                 dy += 18
         else:

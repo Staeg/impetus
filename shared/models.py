@@ -161,33 +161,20 @@ class WarState:
     war_id: str
     faction_a: str
     faction_b: str
-    is_ripe: bool = False
-    battleground: Optional[tuple[HexCoord, HexCoord]] = None
 
     def to_dict(self) -> dict:
-        bg = None
-        if self.battleground:
-            bg = [self.battleground[0].to_dict(), self.battleground[1].to_dict()]
         return {
             "war_id": self.war_id,
             "faction_a": self.faction_a,
             "faction_b": self.faction_b,
-            "is_ripe": self.is_ripe,
-            "battleground": bg,
         }
 
     @staticmethod
     def from_dict(d: dict) -> WarState:
-        bg = None
-        if d.get("battleground"):
-            bg = (HexCoord.from_dict(d["battleground"][0]),
-                  HexCoord.from_dict(d["battleground"][1]))
         return WarState(
             war_id=d["war_id"],
             faction_a=d["faction_a"],
             faction_b=d["faction_b"],
-            is_ripe=d.get("is_ripe", False),
-            battleground=bg,
         )
 
 
