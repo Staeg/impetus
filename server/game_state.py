@@ -1151,8 +1151,8 @@ class GameState:
                 pending.change_cards = change_cards
                 change_needed = True
             elif chosen == AgendaType.EXPAND:
-                # Spirit must choose which enemy territory to conquer
-                enemy_territories = list(self.hex_map.get_faction_territories(pending.loser))
+                # Spirit must choose which adjacent enemy territory to conquer
+                enemy_territories = self.hex_map.get_adjacent_enemy_territories(pending.winner, pending.loser)
                 if enemy_territories:
                     pending.stage = SubPhase.SPOILS_EXPAND_CHOICE
                     pending.expand_hexes = enemy_territories
@@ -1166,6 +1166,7 @@ class GameState:
                     "loser": pending.loser,
                     "agenda_type": pending.chosen_card,
                     "target_hex": None,
+                    "guided": True,
                 })
             del self.spoils_pending[spirit_id]
 
@@ -1216,6 +1217,7 @@ class GameState:
                 "loser": pending.loser,
                 "agenda_type": pending.chosen_card if pending.chosen_card is not None else AgendaType.CHANGE,
                 "target_hex": target_hex,
+                "guided": True,
             })
         del self.spoils_pending[spirit_id]
 
@@ -1253,6 +1255,7 @@ class GameState:
                 "loser": pending.loser,
                 "agenda_type": pending.chosen_card,
                 "target_hex": target_hex,
+                "guided": True,
             })
         del self.spoils_pending[spirit_id]
 

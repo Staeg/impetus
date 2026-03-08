@@ -52,6 +52,10 @@ class HexMap:
                     pairs.append(((q, r), (nq, nr)))
         return pairs
 
+    def get_adjacent_enemy_territories(self, winner: str, loser: str) -> list[tuple[int, int]]:
+        """Return loser territories that border at least one winner territory."""
+        return list({b for a, b in self.get_border_hex_pairs(winner, loser)})
+
     def are_factions_neighbors(self, faction_a: str, faction_b: str) -> bool:
         return len(self.get_border_hex_pairs(faction_a, faction_b)) > 0
 

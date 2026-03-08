@@ -49,7 +49,7 @@ def resolve_agendas(factions: dict, hex_map, agenda_choices: dict[str, AgendaTyp
 
 def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils, faction_counts=None):
     """Steal: -1 regard and -1 gold to all neighbors. +1 gold per gold lost by neighbors.
-    Then wars erupt with neighbors at -2 regard or less."""
+    Then wars erupt with neighbors at -2 regard or less (skipped when is_spoils=True)."""
     faction_counts = faction_counts or {}
     # Calculate gold losses simultaneously
     gold_losses = {}  # faction_id -> gold actually lost
@@ -124,25 +124,26 @@ def _resolve_steal(factions, hex_map, playing_factions, wars, events, is_spoils,
         factions[fid].modify_regard(other_fid, delta)
         factions[other_fid].modify_regard(fid, delta)
 
-    # Check for war eruptions
-    for fid in playing_factions:
-        for other_fid in hex_map.get_live_neighbor_ids(fid, factions):
-            regard = factions[fid].get_regard(other_fid)
-            if regard <= -2:
-                # Check if war already exists between these two
-                existing = any(
-                    (w.faction_a == fid and w.faction_b == other_fid) or
-                    (w.faction_a == other_fid and w.faction_b == fid)
-                    for w in wars
-                )
-                if not existing:
-                    war = War(fid, other_fid)
-                    wars.append(war)
-                    events.append({
-                        "type": "war_erupted",
-                        "faction_a": fid,
-                        "faction_b": other_fid,
-                    })
+    # Check for war eruptions (spoils Steal does not start new wars)
+    if not is_spoils:
+        for fid in playing_factions:
+            for other_fid in hex_map.get_live_neighbor_ids(fid, factions):
+                regard = factions[fid].get_regard(other_fid)
+                if regard <= -2:
+                    # Check if war already exists between these two
+                    existing = any(
+                        (w.faction_a == fid and w.faction_b == other_fid) or
+                        (w.faction_a == other_fid and w.faction_b == fid)
+                        for w in wars
+                    )
+                    if not existing:
+                        war = War(fid, other_fid)
+                        wars.append(war)
+                        events.append({
+                            "type": "war_erupted",
+                            "faction_a": fid,
+                            "faction_b": other_fid,
+                        })
 
 
 def _resolve_trade(factions, playing_factions, events, is_spoils,
@@ -344,12 +345,12 @@ def _resolve_change(factions, playing_factions, events, is_spoils=False, faction
             })
 
 
-def _pick_enemy_territory(hex_map, loser: str):
-    """Pick a random enemy territory, preferring hexes with more idols.
+def _pick_enemy_territory(hex_map, winner: str, loser: str):
+    """Pick a random adjacent enemy territory, preferring hexes with more idols.
 
-    Used for unguided Spoils Expand targeting in Era 1.
+    Only considers loser territories that border at least one winner territory.
     """
-    territories = list(hex_map.get_faction_territories(loser))
+    territories = hex_map.get_adjacent_enemy_territories(winner, loser)
     if not territories:
         return None
     idol_counts = {hx: 0 for hx in territories}
@@ -411,14 +412,12 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
                 faction.played_agenda_this_turn.append(card)
                 spoils_type = card.agenda_type
                 result["spoils"] = spoils_type.value
-                target_hex = None
-                if spoils_type == AgendaType.EXPAND:
-                    target_hex = _pick_enemy_territory(hex_map, loser)
                 auto_spoils_choices.append({
                     "winner": winner,
                     "loser": loser,
                     "agenda_type": spoils_type,
-                    "target_hex": target_hex,
+                    "target_hex": None,
+                    "guided": True,
                 })
                 events.append({
                     "type": "spoils_drawn",
@@ -446,14 +445,12 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
         faction.played_agenda_this_turn.append(card)
         spoils_type = card.agenda_type
         result["spoils"] = spoils_type.value
-        target_hex = None
-        if spoils_type == AgendaType.EXPAND:
-            target_hex = _pick_enemy_territory(hex_map, loser)
         auto_spoils_choices.append({
             "winner": winner,
             "loser": loser,
             "agenda_type": spoils_type,
-            "target_hex": target_hex,
+            "target_hex": None,
+            "guided": False,
         })
         events.append({
             "type": "spoils_drawn",
@@ -467,64 +464,115 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
 def finalize_all_spoils(factions, hex_map, wars, events,
                         all_spoils: list[dict],
                         normal_trade_factions: list[str]):
-    """Resolve all collected spoils agendas simultaneously.
+    """Resolve all collected spoils agendas.
 
-    all_spoils: list of {winner, loser, agenda_type, target_hex} dicts.
-    For Expand entries, target_hex is the pre-resolved hex to conquer
-    (chosen by spirit or auto-picked). Resolves in standard agenda order.
-    Contested Expand: if two factions target the same hex, neither gets it.
+    all_spoils: list of {winner, loser, agenda_type, target_hex, guided} dicts.
+
+    Expand is handled in two phases:
+      Phase 1 — Guided (simultaneous): contest detection among guided entries;
+        contested pairs both fail. Entries with target_hex=None get adjacent
+        territory auto-picked here.
+      Phase 2 — Non-guided (sequential, random order): each greedily picks the
+        best remaining adjacent loser territory.
+
+    All other agenda types (Steal, Trade, Change) resolve via resolve_agendas
+    in standard order.
     """
     from collections import Counter
 
-    # Count instances per (faction, agenda_type)
+    # Separate Expand entries from the rest
+    expand_entries = [e for e in all_spoils if e["agenda_type"] == AgendaType.EXPAND]
+    non_expand_entries = [e for e in all_spoils if e["agenda_type"] != AgendaType.EXPAND]
+
+    guided_expand = [e for e in expand_entries if e.get("guided", True)]
+    non_guided_expand = [e for e in expand_entries if not e.get("guided", True)]
+
+    # Phase 1: Guided Expand — simultaneous with contest detection
+    # Assign targets to guided entries that don't have one yet
+    for entry in guided_expand:
+        if entry.get("target_hex") is None:
+            entry["target_hex"] = _pick_enemy_territory(hex_map, entry["winner"], entry["loser"])
+
+    # Detect contests among guided targets
+    hex_claimants: dict[tuple, list[str]] = {}
+    for entry in guided_expand:
+        target = entry.get("target_hex")
+        if target is not None:
+            hex_claimants.setdefault(target, []).append(entry["winner"])
+    contested_pairs: set[tuple[str, tuple]] = {
+        (fid, hx)
+        for hx, claimants in hex_claimants.items()
+        if len(claimants) > 1
+        for fid in claimants
+    }
+
+    for entry in guided_expand:
+        winner = entry["winner"]
+        target = entry.get("target_hex")
+        faction = factions[winner]
+        expand_discount = faction.change_modifiers.get(ChangeModifierTarget.EXPAND, 0)
+        expand_fail_bonus = 1 + expand_discount
+        if target is None:
+            faction.add_gold(expand_fail_bonus)
+            events.append({
+                "type": "expand_failed",
+                "faction": winner,
+                "gold_gained": expand_fail_bonus,
+                "is_spoils": True,
+            })
+        elif (winner, target) in contested_pairs:
+            faction.add_gold(expand_fail_bonus)
+            events.append({
+                "type": "expand_failed",
+                "faction": winner,
+                "gold_gained": expand_fail_bonus,
+                "is_spoils": True,
+                "contested": True,
+            })
+        else:
+            hex_map.claim_hex(target, winner)
+            faction.territories_gained_this_turn += 1
+            events.append({
+                "type": "expand_spoils",
+                "faction": winner,
+                "hex": {"q": target[0], "r": target[1]},
+            })
+
+    # Phase 2: Non-guided Expand — sequential in random order
+    random.shuffle(non_guided_expand)
+    for entry in non_guided_expand:
+        winner = entry["winner"]
+        loser = entry["loser"]
+        faction = factions[winner]
+        expand_discount = faction.change_modifiers.get(ChangeModifierTarget.EXPAND, 0)
+        expand_fail_bonus = 1 + expand_discount
+        # Pick best adjacent loser territory still owned by loser
+        target = _pick_enemy_territory(hex_map, winner, loser)
+        if target is not None:
+            hex_map.claim_hex(target, winner)
+            faction.territories_gained_this_turn += 1
+            events.append({
+                "type": "expand_spoils",
+                "faction": winner,
+                "hex": {"q": target[0], "r": target[1]},
+            })
+        else:
+            faction.add_gold(expand_fail_bonus)
+            events.append({
+                "type": "expand_failed",
+                "faction": winner,
+                "gold_gained": expand_fail_bonus,
+                "is_spoils": True,
+            })
+
+    # Non-Expand: resolve in standard agenda order via resolve_agendas
     instance_counts = Counter()
-    for entry in all_spoils:
+    for entry in non_expand_entries:
         instance_counts[(entry["winner"], entry["agenda_type"])] += 1
 
-    spoils_conquests = {}  # faction_id -> list of hex coords
-
-    # Build conquest targets — detect contests
-    expand_targets = {}  # hex_coord -> list of faction_ids wanting it
-    for entry in all_spoils:
-        winner = entry["winner"]
-        agenda_type = entry["agenda_type"]
-        target_hex = entry.get("target_hex")
-
-        if agenda_type == AgendaType.EXPAND and target_hex:
-            claimants = expand_targets.setdefault(target_hex, [])
-            if winner not in claimants:
-                claimants.append(winner)
-
-    # Resolve contested spoils expand
-    contested_expand_counts = Counter()  # faction_id -> number of contested expands
-    for hex_coord, claimants in expand_targets.items():
-        if len(claimants) == 1:
-            spoils_conquests.setdefault(claimants[0], []).append(hex_coord)
-        else:
-            # Contested: neither gets the hex, both get expand_failed bonus
-            for fid in claimants:
-                contested_expand_counts[fid] += 1
-                faction = factions[fid]
-                expand_discount = faction.change_modifiers.get(
-                    ChangeModifierTarget.EXPAND, 0)
-                expand_fail_bonus = 1 + expand_discount
-                faction.add_gold(expand_fail_bonus)
-                events.append({
-                    "type": "expand_failed",
-                    "faction": fid,
-                    "gold_gained": expand_fail_bonus,
-                    "is_spoils": True,
-                    "contested": True,
-                })
-
-    # Reduce expand instance counts by contested ones
-    for fid, contested in contested_expand_counts.items():
-        instance_counts[(fid, AgendaType.EXPAND)] -= contested
-        if instance_counts[(fid, AgendaType.EXPAND)] <= 0:
-            del instance_counts[(fid, AgendaType.EXPAND)]
-
-    # Resolve each agenda type separately
     for agenda_type in AGENDA_RESOLUTION_ORDER:
+        if agenda_type == AgendaType.EXPAND:
+            continue  # already handled above
         type_factions = [fid for (fid, at), count in instance_counts.items()
                          if at == agenda_type and count > 0]
         if not type_factions:
@@ -535,6 +583,6 @@ def finalize_all_spoils(factions, hex_map, wars, events,
                        for fid in type_factions}
 
         resolve_agendas(factions, hex_map, type_choices, wars, events,
-                       is_spoils=True, spoils_conquests=spoils_conquests,
+                       is_spoils=True,
                        normal_trade_factions=normal_trade_factions,
                        faction_counts=type_counts)
