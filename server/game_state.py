@@ -51,8 +51,9 @@ class GameState:
         self.ejection_pending: dict[str, str] = {}  # spirit_id -> faction_id
         # Spirits needing to submit change choice
         self.change_pending: dict[str, list] = {}  # spirit_id -> drawn change cards
-        # Track trade factions for spoils
+        # Track trade/expand factions for spoils bonuses
         self.normal_trade_factions: list[str] = []
+        self.normal_expand_factions: list[str] = []
         # Spoils of war choice pending (spirit_id -> pending data)
         self.spoils_pending: dict[str, list[SpoilsPendingEntry]] = {}
         # Auto-resolved spoils waiting for batch finalization
@@ -148,6 +149,10 @@ class GameState:
             self.normal_trade_factions = [
                 fid for fid, at in agenda_choices.items()
                 if at == AgendaType.TRADE
+            ]
+            self.normal_expand_factions = [
+                fid for fid, at in agenda_choices.items()
+                if at == AgendaType.EXPAND
             ]
             resolve_agendas(self.factions, self.hex_map, agenda_choices, self.wars, events)
             events.extend(self._resolve_war_phase())
@@ -705,10 +710,14 @@ class GameState:
             if not spirit.is_vagrant and spirit.guided_faction:
                 spirit.lose_influence(1)
 
-        # Track trade factions before resolving
+        # Track trade/expand factions before resolving (for spoils bonuses)
         self.normal_trade_factions = [
             fid for fid, at in agenda_choices.items()
             if at == AgendaType.TRADE
+        ]
+        self.normal_expand_factions = [
+            fid for fid, at in agenda_choices.items()
+            if at == AgendaType.EXPAND
         ]
 
         # Store agenda choices for later resolution
@@ -1281,7 +1290,8 @@ class GameState:
                         continue
                 batch.append(entry)
             finalize_all_spoils(self.factions, self.hex_map, self.wars, events,
-                               batch, self.normal_trade_factions)
+                               batch, self.normal_trade_factions,
+                               normal_expand_factions=self.normal_expand_factions)
         self.auto_spoils_choices = []
         self._check_respawns(events)
         if not self.respawn_pending:

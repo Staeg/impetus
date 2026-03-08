@@ -378,14 +378,15 @@ Sub-phase options are built separately and sent by the server just before waitin
 
 ## Agenda resolution (`server/agenda.py`)
 
-### `resolve_agendas(factions, hex_map, agenda_choices, wars, events, is_spoils, spoils_conquests, normal_trade_factions, faction_counts, guided_expand_choices)`
+### `resolve_agendas(factions, hex_map, agenda_choices, wars, events, is_spoils, spoils_conquests, normal_trade_factions, faction_counts, guided_expand_choices, normal_expand_factions)`
 
 Top-level resolver. Iterates `AGENDA_RESOLUTION_ORDER`, calling the appropriate `_resolve_*` function. Each step is simultaneous — all factions playing the same type resolve together using state from before that step.
 
 #### `_resolve_trade`
 - Calculates gold and regard gains using pre-resolution state.
-- Co-trader bonus: +1 gold per other faction also trading.
-- Spoils variant: adds bonus from normal-trade factions too.
+- Co-trader bonus: +1 gold per other faction also trading (bilateral regard too).
+- Expand bonus: +1 gold per faction playing Expand this turn (no regard).
+- Spoils variant: adds bonus from normal-trade factions and normal-expand factions too.
 
 #### `_resolve_steal`
 - Snapshot neighbour gold before applying any changes.
@@ -397,7 +398,7 @@ Top-level resolver. Iterates `AGENDA_RESOLUTION_ORDER`, calling the appropriate 
 - Guided choices pre-collected into `guided_expand_choices`.
 - Collect all targets, detect contests (two or more factions targeting the same hex → all fail).
 - Fail gives the `expand_fail_bonus` gold (`expand_modifier` on the Expand card).
-- Spoils variant: claims a territory from the losing faction, no gold cost.
+- Spoils variant: claims a territory from the losing faction; pays the normal expand cost (territory count − modifier). Fails if can't afford.
 - Faction's `territories_gained_this_turn` is incremented on success.
 
 #### `_resolve_change`
@@ -413,11 +414,12 @@ For each winning faction:
 
 Returns `(spoils_pending, auto_spoils_choices)`.
 
-### `finalize_all_spoils(factions, hex_map, wars, events, all_spoils, normal_trade_factions)`
+### `finalize_all_spoils(factions, hex_map, wars, events, all_spoils, normal_trade_factions, normal_expand_factions)`
 
 Batch-resolves all spoils simultaneously:
-1. Detect contested Expand spoils (two factions targeting the same enemy territory → both fail, both get expand_fail gold).
-2. Call `resolve_agendas()` once per agenda type.
+1. Phase 1 — Guided Expand (simultaneous): snapshot territory counts, compute costs, contest detection among affordable entries. Entries that can't afford the expand cost or have no valid target fail with the gold consolation. Contested entries (two factions targeting the same hex) both fail with the gold consolation.
+2. Phase 2 — Non-guided Expand (sequential): each faction picks the best remaining adjacent loser territory and pays the normal expand cost.
+3. Call `resolve_agendas()` once per non-Expand agenda type, passing `normal_expand_factions` for Trade's expand bonus.
 
 ---
 

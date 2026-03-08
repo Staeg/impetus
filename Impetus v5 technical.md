@@ -33,7 +33,7 @@
     * Guided spirits playing **Change** each receive a drawn set of modifier cards and pick one (`change_choice` sub-phase). All picks are collected before any resolution runs.
     * Guided spirits playing **Expand** who can afford the cost and have at least one reachable neutral hex each receive the list of valid hexes and pick one (`expand_choice` sub-phase). All picks are collected before any resolution runs.
   * Agendas are resolved in order (but each step is simultaneous):
-    * Trade: \+1 gold, \+1 gold for every other Faction playing Trade this turn. \+1 Regard with each other Faction playing Trade this turn.
+    * Trade: \+1 gold, \+1 gold for every other Faction playing Trade this turn, \+1 gold for every Faction playing Expand this turn. \+1 Regard with each other Faction playing Trade (not Expand) this turn.
     * Steal: \-1 Regard with and \-1 gold to all neighbors. \+1 gold to this Faction for each gold lost by neighbors. Then a War erupts with any neighboring Factions who have \-2 Regard or less with this Faction.
     * Expand: spend gold equal to the number of this Faction's territories to claim a reachable neutral hex; if none are available or it lacks gold, \+1 gold instead.
       * If the Faction is Guided, its Spirit chooses which hex to claim (interactive `expand_choice` sub-phase, resolved before non-Guided Expands but simultaneously with other Guided Expands). If two Spirits choose the same hex, both fail (contested — each receives the expand\_failed gold bonus). Unguided Factions target a random reachable hex (preferring Idol hexes).
@@ -47,7 +47,8 @@
   * Gold changes from all wars (winner gains, loser/tie losses) are applied simultaneously after all wars are resolved
   * Whoever is victorious draws a Spoils of War Agenda card from their Faction's pool. If the winning Faction is guided by a Spirit, the Spirit draws 1 \+ their Influence Spoils cards and chooses 1 among them.
   * All Spoils of War are collected into a batch and resolved simultaneously in standard agenda order (Trade → Steal → Expand → Change)
-    * If two Spoils Expands target the same hex, the hex is contested and neither Faction gets it
+    * Spoils Expand claims a loser territory instead of a neutral hex but costs gold equal to territory count (same as normal Expand, including modifiers). If a Faction cannot afford it or no valid target exists, they receive the expand\_failed gold bonus instead. If two Spoils Expands target the same hex, the hex is contested and neither Faction gets it (both receive the gold consolation).
+    * Spoils Trade also benefits from Factions that played Expand normally this turn (gold bonus only, no regard bonus).
   * Any non-Ripe Wars become Ripe and a Battleground is selected
     * **Battleground Selection**: `hex_map.get_border_hex_pairs(faction_a, faction_b)` supplies valid adjacent hex pairs. If neither faction is guided, a pair is chosen at random (existing behaviour). If exactly one faction is guided, its spirit receives a `battleground_choice` PHASE\_START with `mode: "full"` and the full pairs list; they select by `pair_index`. If both are guided, each receives `mode: "enemy_side"` with the list of the opposing faction's unique border hexes; they each select one hex, and if the two chosen hexes form a valid adjacent pair the server uses it, otherwise falls back to random. The `SUBMIT_BATTLEGROUND_CHOICE` message carries `choices: [{war_id, pair_index}]` (full mode) or `choices: [{war_id, hex: {q,r}}]` (enemy\_side mode). Spoils resolution follows after all battleground choices are finalized.
 * Scoring

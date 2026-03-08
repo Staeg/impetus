@@ -329,6 +329,10 @@ class TestContestedSpoilsExpand:
         wars = []
         events = []
 
+        # Give factions enough gold to afford the expand cost (territory_count = 1, cost = 1)
+        factions["mountain"].gold = 5
+        factions["sand"].gold = 5
+
         # Find a hex owned by mesa
         mesa_hexes = list(hm.get_faction_territories("mesa"))
         target_hex = mesa_hexes[0]
@@ -390,6 +394,10 @@ class TestMultipleSpoilsPerFaction:
         hm = HexMap()
         wars = []
         events = []
+
+        # Mountain needs enough gold to pay for both expands.
+        # Cost = territory_count (1) per expand, so 2 total.
+        factions["mountain"].gold = 10
 
         # Find two different hexes owned by different losers
         mesa_hexes = list(hm.get_faction_territories("mesa"))

@@ -189,7 +189,7 @@ class TutorialManager:
                 title="Agenda Types",
                 text=(
                     "Each turn, every Faction plays one Agenda card from their pool:\n"
-                    "  Trade — gain gold and regard with other Traders\n"
+                    "  Trade — gain gold per Trader and per Expander this turn\n"
                     "  Steal — drain gold from neighbors, risking War\n"
                     "  Expand — spend gold to claim a neutral hex\n"
                     "  Change — draw a modifier that permanently boosts an Agenda type\n\n"
@@ -634,12 +634,12 @@ class TutorialManager:
                         "Your Guided Faction won a War and draws Spoils — a bonus Agenda "
                         "card that resolves immediately after the regular agendas this turn.\n\n"
                         "Choose a Spoils card from those drawn. Most cards work normally: "
-                        "Trade sends gold back and benefits from others Trading this turn; "
+                        "Trade also gives gold for Factions that expanded this turn; "
                         "Steal and Change work exactly as normal.\n\n"
                         "Expand Spoils lets you claim any territory from the losing Faction "
-                        "rather than an adjacent neutral hex. The gold cost is waived. If two "
-                        "Factions target the same hex simultaneously, neither gets it but both "
-                        "receive a gold consolation."
+                        "rather than a neutral hex. It costs gold equal to your current "
+                        "territory count (same as normal Expand). If two Factions target "
+                        "the same hex, neither gets it but both receive the gold consolation."
                     ),
                     button_label="Ok",
                 )

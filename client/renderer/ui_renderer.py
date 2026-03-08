@@ -222,10 +222,14 @@ def build_agenda_tooltip(agenda_type: str, modifiers: dict,
     expand_mod = modifiers.get("expand", 0)
 
     if is_spoils and agenda_type == "expand":
-        return "Spoils Expand\nConquer the hex on the loser's side of the Battleground (free)."
+        return (f"Spoils Expand\nConquer the hex on the loser's side of the Battleground. "
+                f"Costs gold equal to territories{' -' + str(expand_mod) if expand_mod else ''}. "
+                f"If two Factions target the same hex, both fail and receive +{1 + expand_mod} gold instead.")
 
     tooltips = {
-        "trade": f"Trade\n+1 gold, +{1 + trade_mod} gold for every other Faction playing Trade this turn.\n+{1 + trade_mod} Regard with each other Faction playing Trade this turn.",
+        "trade": (f"Trade\n+1 gold, +{1 + trade_mod} gold for every other Faction playing Trade this turn, "
+                  f"+1 gold for every Faction playing Expand this turn.\n"
+                  f"+{1 + trade_mod} Regard with each other Faction playing Trade (not Expand) this turn."),
         "steal": f"Steal\n-{1 + steal_mod} Regard with and -{1 + steal_mod} gold to all neighbors. +1 gold for each gold lost. War erupts at -2 Regard.",
         "expand": f"Expand\nSpend gold equal to territories{' -' + str(expand_mod) if expand_mod else ''} to claim a neutral hex. If unavailable or lacking gold, +{1 + expand_mod} gold instead. Idol hexes prioritized.",
         "change": "Change\nDraw a modifier card. If guided, draw extra cards equal to Influence and choose 1.",
@@ -376,7 +380,8 @@ class UIRenderer:
                               spirits: dict = None,
                               preview_guidance: dict = None,
                               animated_agenda_factions: set = None,
-                              faction_order: list = None):
+                              faction_order: list = None,
+                              gold_overrides: dict = None):
         """Draw a compact overview strip showing all factions' gold, agenda, wars, and worship.
 
         Returns (agenda_label_entries, pool_icon_rects, ribbon_war_rects, ribbon_worship_rects):
@@ -437,8 +442,10 @@ class UIRenderer:
             abbr_surf = self.small_font.render(abbr, True, fc)
             surface.blit(abbr_surf, (cx + 6, strip_y + 4))
 
-            # Gold amount
+            # Gold amount (use override for smooth tween during animations)
             gold = fd.get("gold", 0) if isinstance(fd, dict) else getattr(fd, "gold", 0)
+            if gold_overrides and fid in gold_overrides:
+                gold = gold_overrides[fid]
             gold_text = self.small_font.render(f"{gold}g", True, (255, 220, 60))
             surface.blit(gold_text, (cx + 6 + abbr_surf.get_width() + 6, strip_y + 4))
 

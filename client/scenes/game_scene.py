@@ -103,15 +103,17 @@ _WAR_RESOLVES_TOOLTIP = (
     "If the winning Faction is Guided, the Spirit draws 1 + Influence cards "
     "and picks one to resolve.\n\n"
     "Spoils Expand works differently: instead of claiming a neutral hex, the "
-    "winner conquers any Territory belonging to the loser. If the Faction is "
-    "Guided, the Spirit chooses which enemy Territory to take; otherwise a "
-    "random Territory is chosen, preferring those with more Idols.\n\n"
-    "Other Spoils Agendas work normally. No gold is gained or lost from War."
+    "winner conquers any Territory belonging to the loser. It costs gold equal "
+    "to territory count (same as normal Expand). If the Faction is Guided, the "
+    "Spirit chooses which enemy Territory to take; otherwise a random Territory "
+    "is chosen. If two Factions target the same hex, both fail and receive the "
+    "gold consolation instead.\n\n"
+    "Other Spoils Agendas work normally. No gold is gained or lost from War itself."
 )
 
 _GOLD_TOOLTIP = "Resource used to pay for Expand Agendas. Cannot go below 0."
 
-_TRADE_AGENDA_TOOLTIP = "Trade\n+1 gold, +1 gold for every other Faction playing Trade this turn.\n+1 Regard with each other Faction playing Trade this turn."
+_TRADE_AGENDA_TOOLTIP = "Trade\n+1 gold, +1 gold for every other Faction playing Trade this turn, +1 gold for every Faction playing Expand this turn.\n+1 Regard with each other Faction playing Trade (not Expand) this turn."
 _STEAL_AGENDA_TOOLTIP = "Steal\n-1 Regard with and -1 gold to all neighbors. +1 gold for each gold lost. War erupts at -2 Regard and resolves immediately."
 _EXPAND_AGENDA_TOOLTIP = "Expand\nGuided: choose a reachable neutral hex to claim (cost = territories). If multiple Spirits pick the same hex, both fail. Unguided: random. If unavailable or lacking gold, +1 gold instead."
 
@@ -2261,7 +2263,17 @@ class GameScene:
 
         # Draw faction overview strip — always use live factions so worship/pool
         # stay current even when _display_factions is stale during AI-only games.
+        # Gold is overridden with tweened values to animate smoothly.
         disp_factions = self.factions
+        gold_overrides: dict[str, int] = {}
+        for fid in (self.faction_order or self.factions):
+            key = f"gold_display_{fid}"
+            if key in self.animation.tweens:
+                gold_overrides[fid] = int(self.animation.get_tween_value(key))
+            elif self._display_factions is not None:
+                fd = self._display_factions.get(fid, {})
+                gold_overrides[fid] = (fd.get("gold", 0) if isinstance(fd, dict)
+                                       else getattr(fd, "gold", 0))
         animated_agenda_factions = self.animation.get_persistent_agenda_factions()
         self.agenda_label_rects, self.pool_icon_rects, self.ribbon_war_rects, self.ribbon_worship_rects = self.ui_renderer.draw_faction_overview(
             screen, disp_factions, self.faction_agendas_this_turn,
@@ -2271,6 +2283,7 @@ class GameScene:
             preview_guidance=preview_guid_dict,
             animated_agenda_factions=animated_agenda_factions,
             faction_order=self.faction_order,
+            gold_overrides=gold_overrides,
         )
         if self.faction_order:
             cell_w = SCREEN_WIDTH // len(self.faction_order)

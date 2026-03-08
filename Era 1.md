@@ -56,7 +56,7 @@ After all Agendas are chosen, they resolve in a fixed order: **Trade → Steal �
 ## The four Agendas
 
 ### Trade
-+1 gold, plus +1 gold for every other Faction also playing Trade this turn. Gain +1 Regard with each of those co-trading Factions.
++1 gold, plus +1 gold for every other Faction also playing Trade this turn, plus +1 gold for every Faction playing Expand this turn. Gain +1 Regard with each co-trading Faction (not Expand Factions).
 
 ### Steal
 −1 gold and −1 Regard to each neighbouring Faction. +1 gold for each neighbour who loses gold. If any neighbour's Regard with you drops to −2 or lower, a **War erupts** between you.
@@ -116,9 +116,9 @@ No gold is exchanged for winning or losing a War.
 
 **Spoils resolution**: All Spoils are batched and resolved simultaneously in standard Agenda order (Trade → Steal → Expand → Change).
 
-- **Spoils Expand** works differently: the winning Faction claims any territory belonging to the losing Faction. If Guided, the Spirit picks which territory. If unguided, a territory is chosen at random, prioritising hexes with the most Idols. If two Factions both target the same hex this way, neither gets it.
-- **Spoils Steal** can trigger new Wars.
-- **Spoils Trade** also gives the bonus gold and Regard to every Faction that played Trade normally this turn.
+- **Spoils Expand** works differently: the winning Faction claims any territory belonging to the losing Faction, paying the normal Expand cost (territory count minus modifier). If Guided, the Spirit picks which territory. If unguided, a territory is chosen at random, prioritising hexes with the most Idols. If two Factions both target the same hex this way, neither gets it — both receive the failed-Expand gold bonus instead.
+- **Spoils Steal** does **not** trigger new Wars.
+- **Spoils Trade** also gives the bonus gold and Regard to every Faction that played Trade normally this turn. It also benefits from Factions that played Expand normally this turn (gold bonus only, no regard).
 
 ---
 

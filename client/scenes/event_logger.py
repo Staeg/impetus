@@ -123,7 +123,11 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
 
     elif etype == "expand_spoils":
         fname = faction_full_name(event["faction"])
-        event_log.append(f"Spoils: {fname} conquered enemy territory")
+        cost = event.get("cost", 0)
+        if cost:
+            event_log.append(f"Spoils: {fname} conquered enemy territory for {cost} gold")
+        else:
+            event_log.append(f"Spoils: {fname} conquered enemy territory")
 
     elif etype == "vp_scored":
         name = spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])

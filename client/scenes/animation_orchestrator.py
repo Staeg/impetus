@@ -191,6 +191,14 @@ class AnimationOrchestrator:
                             (nq, nr), (tq, tr), (80, 220, 80),
                             delay=delay, duration=3.0,
                         ))
+            cost = event.get("cost", 0)
+            if cost:
+                gx, gy = self._get_gold_display_pos(faction_id, small_font)
+                self.animation.add_effect_animation(TextAnimation(
+                    f"-{cost}g", gx, gy, (255, 160, 60),
+                    delay=delay, duration=3.0, drift_pixels=40,
+                    direction=1, screen_space=True,
+                ))
 
         elif etype == "expand_failed":
             gold = event.get("gold_gained", 0)
@@ -282,7 +290,7 @@ class AnimationOrchestrator:
                     for nfid in event.get("neighbors", []):
                         if steal_amount:
                             gold_deltas.append((nfid, -steal_amount))
-                elif etype == "expand":
+                elif etype in ("expand", "expand_spoils"):
                     cost = event.get("cost", 0)
                     if cost:
                         gold_deltas.append((faction_id, -cost))
@@ -431,7 +439,11 @@ class AnimationOrchestrator:
                 anim._hex_revealed = True
 
     def apply_gold_deltas(self, display_factions: dict):
-        """Incrementally update gold display as agenda animations become active."""
+        """Incrementally update gold display as agenda animations become active.
+
+        Starts a smooth tween for each gold change so the displayed value
+        counts up/down over the animation slide duration rather than jumping.
+        """
         for anim in self.animation.get_persistent_agenda_animations():
             if anim.active and not anim._gold_applied:
                 applied = False
@@ -439,13 +451,25 @@ class AnimationOrchestrator:
                     for fid, delta in anim.gold_deltas:
                         if fid and fid in display_factions and delta:
                             fd = display_factions[fid]
-                            fd["gold"] = max(0, fd.get("gold", 0) + delta)
+                            old_gold = fd.get("gold", 0)
+                            new_gold = max(0, old_gold + delta)
+                            fd["gold"] = new_gold
+                            key = f"gold_display_{fid}"
+                            current = self.animation.get_tween_value(key, float(old_gold))
+                            self.animation.add_tween(key, current, float(new_gold),
+                                                     AgendaSlideAnimation.SLIDE_DURATION)
                             applied = True
                 elif anim.gold_delta:
                     fid = anim.gold_delta_faction
                     if fid and fid in display_factions:
                         fd = display_factions[fid]
-                        fd["gold"] = max(0, fd.get("gold", 0) + anim.gold_delta)
+                        old_gold = fd.get("gold", 0)
+                        new_gold = max(0, old_gold + anim.gold_delta)
+                        fd["gold"] = new_gold
+                        key = f"gold_display_{fid}"
+                        current = self.animation.get_tween_value(key, float(old_gold))
+                        self.animation.add_tween(key, current, float(new_gold),
+                                                 AgendaSlideAnimation.SLIDE_DURATION)
                         applied = True
                 if applied:
                     anim._gold_applied = True
