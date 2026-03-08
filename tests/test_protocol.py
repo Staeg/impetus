@@ -4,8 +4,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from shared.constants import MessageType
-from shared.protocol import create_message, parse_message
+from shared.protocol import create_message, parse_message, C2S, S2C
 from shared.models import (
     HexCoord, Idol, FactionState, SpiritState, WarState, GameStateSnapshot,
 )
@@ -14,25 +13,36 @@ from shared.constants import IdolType, Phase
 
 class TestProtocol:
     def test_create_and_parse(self):
-        msg = create_message(MessageType.JOIN_GAME, {"player_name": "Alice"})
+        msg = create_message(C2S.JOIN_GAME, {"player_name": "Alice"})
         msg_type, payload = parse_message(msg)
-        assert msg_type == MessageType.JOIN_GAME
+        assert msg_type == C2S.JOIN_GAME
         assert payload["player_name"] == "Alice"
 
     def test_empty_payload(self):
-        msg = create_message(MessageType.READY)
+        msg = create_message(C2S.READY)
         msg_type, payload = parse_message(msg)
-        assert msg_type == MessageType.READY
+        assert msg_type == C2S.READY
         assert payload == {}
 
     def test_complex_payload(self):
-        msg = create_message(MessageType.PHASE_RESULT, {
+        msg = create_message(S2C.PHASE_RESULT, {
             "phase": "agenda",
             "events": [{"type": "trade", "faction": "mountain", "gold_gained": 3}],
         })
         msg_type, payload = parse_message(msg)
-        assert msg_type == MessageType.PHASE_RESULT
+        assert msg_type == S2C.PHASE_RESULT
         assert len(payload["events"]) == 1
+
+    def test_c2s_s2c_directions(self):
+        """C2S and S2C values are plain strings; equality with string literals works."""
+        assert C2S.JOIN_GAME == "join_game"
+        assert S2C.LOBBY_STATE == "lobby_state"
+
+    def test_parse_returns_str(self):
+        msg = create_message(S2C.GAME_START, {})
+        msg_type, payload = parse_message(msg)
+        assert isinstance(msg_type, str)
+        assert msg_type == S2C.GAME_START
 
 
 class TestModelSerialization:

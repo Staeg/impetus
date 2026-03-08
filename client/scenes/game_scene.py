@@ -7,10 +7,11 @@ from typing import Any
 import pygame
 from dataclasses import dataclass
 from shared.constants import (
-    MessageType, Phase, SubPhase, AgendaType, IdolType, MAP_SIDE_LENGTH,
+    Phase, AgendaType, IdolType, MAP_SIDE_LENGTH,
     SCREEN_WIDTH, SCREEN_HEIGHT, HEX_SIZE, FACTION_NAMES, FACTION_COLORS,
     BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPREAD_IDOL_VP,
 )
+from shared.protocol import C2S, S2C, SubPhase
 from shared.hex_utils import axial_to_pixel
 from client.faction_names import faction_full_name, update_faction_races
 from client.renderer.hex_renderer import HexRenderer
@@ -383,12 +384,12 @@ class GameScene:
 
         # Network message dispatch table (built after all state is initialised)
         self._net_handlers = {
-            MessageType.GAME_START:   self._handle_game_start,
-            MessageType.PHASE_START:  self._handle_phase_start,
-            MessageType.PHASE_RESULT: self._handle_phase_result,
-            MessageType.WAITING_FOR:  self._handle_waiting_for,
-            MessageType.GAME_OVER:    self._handle_game_over,
-            MessageType.ERROR:        self._handle_error,
+            S2C.GAME_START:   self._handle_game_start,
+            S2C.PHASE_START:  self._handle_phase_start,
+            S2C.PHASE_RESULT: self._handle_phase_result,
+            S2C.WAITING_FOR:  self._handle_waiting_for,
+            S2C.GAME_OVER:    self._handle_game_over,
+            S2C.ERROR:        self._handle_error,
         }
 
     @property
@@ -665,7 +666,7 @@ class GameScene:
                 if self.change_cards:
                     for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.change_cards))):
                         if rect.collidepoint(event.pos):
-                            self._submit_card_choice(i, MessageType.SUBMIT_CHANGE_CHOICE, "change_cards")
+                            self._submit_card_choice(i, C2S.SUBMIT_CHANGE_CHOICE, "change_cards")
                             return
 
                 # Check spoils card clicks (one-at-a-time display)
@@ -888,14 +889,14 @@ class GameScene:
                 if self.selected_idol_type and self.selected_hex:
                     self.preview_idol = (self.selected_idol_type,
                                          self.selected_hex[0], self.selected_hex[1])
-                self.app.network.send(MessageType.SUBMIT_VAGRANT_ACTION, payload)
+                self.app.network.send(C2S.SUBMIT_VAGRANT_ACTION, payload)
                 self._clear_selection()
                 self.has_submitted = True
                 if self.tutorial:
                     self.tutorial.notify_action("vagrant_submitted", {})
         elif self.phase == Phase.AGENDA_PHASE.value:
             if self.selected_agenda_index >= 0:
-                self.app.network.send(MessageType.SUBMIT_AGENDA_CHOICE, {
+                self.app.network.send(C2S.SUBMIT_AGENDA_CHOICE, {
                     "agenda_index": self.selected_agenda_index,
                 })
                 self._clear_selection()
@@ -908,7 +909,7 @@ class GameScene:
                 and self.selected_ejection_add_type
                 and self.selected_ejection_remove_type != self.selected_ejection_add_type
             ):
-                self.app.network.send(MessageType.SUBMIT_EJECTION_AGENDA, {
+                self.app.network.send(C2S.SUBMIT_EJECTION_AGENDA, {
                     "remove_type": self.selected_ejection_remove_type,
                     "add_type": self.selected_ejection_add_type,
                 })
@@ -919,20 +920,20 @@ class GameScene:
                     self.tutorial.notify_action("ejection_submitted", {})
         elif self.phase == SubPhase.SPOILS_CHOICE:
             if all(e.selected >= 0 for e in self.spoils_entries):
-                self.app.network.send(MessageType.SUBMIT_SPOILS_CHOICE,
+                self.app.network.send(C2S.SUBMIT_SPOILS_CHOICE,
                     {"card_indices": [e.selected for e in self.spoils_entries]})
                 self.spoils_entries = []
                 self.has_submitted = True
         elif self.phase == SubPhase.SPOILS_CHANGE_CHOICE:
             if all(e.selected >= 0 for e in self.spoils_change_entries):
-                self.app.network.send(MessageType.SUBMIT_SPOILS_CHANGE_CHOICE,
+                self.app.network.send(C2S.SUBMIT_SPOILS_CHANGE_CHOICE,
                     {"card_indices": [e.selected for e in self.spoils_change_entries]})
                 self.spoils_change_entries = []
                 self.has_submitted = True
         elif self.phase == SubPhase.EXPAND_CHOICE:
             if self.selected_hex:
                 q, r = self.selected_hex
-                self.app.network.send(MessageType.SUBMIT_EXPAND_CHOICE, {"q": q, "r": r})
+                self.app.network.send(C2S.SUBMIT_EXPAND_CHOICE, {"q": q, "r": r})
                 self.expand_choice_hexes = set()
                 self.expand_choice_faction = ""
                 self.selected_hex = None
@@ -941,7 +942,7 @@ class GameScene:
             if len(self.battleground_selections) >= len(self.battleground_choice_wars):
                 self._do_submit_battleground()
 
-    def _submit_card_choice(self, index: int, msg_type: MessageType, card_attr: str):
+    def _submit_card_choice(self, index: int, msg_type: str, card_attr: str):
         self.app.network.send(msg_type, {"card_index": index})
         setattr(self, card_attr, [])
         self.has_submitted = True
@@ -1378,7 +1379,7 @@ class GameScene:
             else:
                 choices.append({"war_id": wc["war_id"],
                                 "hex": {"q": sel[0], "r": sel[1]}})
-        self.app.network.send(MessageType.SUBMIT_BATTLEGROUND_CHOICE,
+        self.app.network.send(C2S.SUBMIT_BATTLEGROUND_CHOICE,
             {"choices": choices})
         self.battleground_choice_wars = []
         self.battleground_selections = {}

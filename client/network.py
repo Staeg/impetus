@@ -11,7 +11,6 @@ try:
 except ImportError:
     websockets = None  # type: ignore
 
-from shared.constants import MessageType
 from shared.protocol import create_message, parse_message
 
 
@@ -61,7 +60,7 @@ class NetworkClient:
                             try:
                                 msg_type, payload = parse_message(message)
                                 self.incoming.put((msg_type, payload))
-                                print(f"[net] Received: {msg_type.value}")
+                                print(f"[net] Received: {msg_type}")
                             except Exception as e:
                                 print(f"[net] Parse error: {e}")
                     except Exception as e:
@@ -78,7 +77,7 @@ class NetworkClient:
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, 30)
 
-    def send(self, msg_type: MessageType, payload: dict = None):
+    def send(self, msg_type: str, payload: dict = None):
         """Send a message to the server (called from main thread).
 
         If not yet connected, queues the message to be sent once the connection is ready.
@@ -89,14 +88,14 @@ class NetworkClient:
         else:
             self._outgoing.put(message)
 
-    def poll(self) -> Optional[tuple[MessageType, dict]]:
+    def poll(self) -> Optional[tuple[str, dict]]:
         """Non-blocking poll for the next incoming message."""
         try:
             return self.incoming.get_nowait()
         except queue.Empty:
             return None
 
-    def poll_all(self) -> list[tuple[MessageType, dict]]:
+    def poll_all(self) -> list[tuple[str, dict]]:
         """Poll all pending incoming messages."""
         messages = []
         while True:

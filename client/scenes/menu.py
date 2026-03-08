@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 import pygame
-from shared.constants import MessageType, SCREEN_WIDTH, SCREEN_HEIGHT, DEFAULT_PORT
+from shared.constants import SCREEN_WIDTH, SCREEN_HEIGHT, DEFAULT_PORT
+from shared.protocol import C2S
 from client.renderer.ui_renderer import Button
 from client.renderer.font_cache import get_font
 import client.theme as theme
@@ -170,11 +171,11 @@ class MenuScene:
     def _start_single_player(self):
         self.app.tutorial_mode = False
         self.app.start_local_transport()
-        self.app.network.send(MessageType.JOIN_GAME, {
+        self.app.network.send(C2S.JOIN_GAME, {
             "player_name": self.player_name.strip(),
         })
         # Pre-set 1 AI player; server will echo this back in LOBBY_STATE
-        self.app.network.send(MessageType.SET_LOBBY_OPTIONS, {"ai_count": 1})
+        self.app.network.send(C2S.SET_LOBBY_OPTIONS, {"ai_count": 1})
         self.app.set_scene("lobby")
 
     def _start_tutorial(self):
@@ -184,10 +185,10 @@ class MenuScene:
             lobby._tutorial_ready_sent = False
             lobby._tutorial_start_sent = False
         self.app.start_local_transport()
-        self.app.network.send(MessageType.JOIN_GAME, {
+        self.app.network.send(C2S.JOIN_GAME, {
             "player_name": self.player_name.strip(),
         })
-        self.app.network.send(MessageType.SET_LOBBY_OPTIONS, {
+        self.app.network.send(C2S.SET_LOBBY_OPTIONS, {
             "ai_count": 2,
             "tutorial_mode": True,
         })
@@ -196,7 +197,7 @@ class MenuScene:
     def _host_game(self):
         self._apply_server_address()
         self.app.connect_to_server()
-        self.app.network.send(MessageType.JOIN_GAME, {
+        self.app.network.send(C2S.JOIN_GAME, {
             "player_name": self.player_name.strip(),
             "create_room": self.host_code.strip(),
         })
@@ -206,7 +207,7 @@ class MenuScene:
     def _join_room(self):
         self._apply_server_address()
         self.app.connect_to_server()
-        self.app.network.send(MessageType.JOIN_GAME, {
+        self.app.network.send(C2S.JOIN_GAME, {
             "player_name": self.player_name.strip(),
             "room_code": self.room_code.strip(),
         })

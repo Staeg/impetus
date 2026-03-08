@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 import pygame
-from shared.constants import MessageType, SCREEN_WIDTH, SCREEN_HEIGHT
+from shared.constants import SCREEN_WIDTH, SCREEN_HEIGHT
+from shared.protocol import C2S, S2C
 from client.renderer.ui_renderer import Button, draw_dotted_underline
 from client.renderer.popup_manager import (
     PopupManager, HoverRegion, draw_multiline_tooltip_with_regions
@@ -106,7 +107,7 @@ class LobbyScene:
         else:
             new_vp = min(250, self.vp_to_win + 5)
         if new_vp != self.vp_to_win:
-            self.app.network.send(MessageType.SET_LOBBY_OPTIONS, {"vp_to_win": new_vp})
+            self.app.network.send(C2S.SET_LOBBY_OPTIONS, {"vp_to_win": new_vp})
 
     # ------------------------------------------------------------------ #
     # Events
@@ -130,15 +131,15 @@ class LobbyScene:
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if not i_am_spectator and self.ready_button.clicked(event.pos):
-                self.app.network.send(MessageType.READY)
+                self.app.network.send(C2S.READY)
                 return
 
             if self.spectator_button.clicked(event.pos):
-                self.app.network.send(MessageType.TOGGLE_SPECTATOR)
+                self.app.network.send(C2S.TOGGLE_SPECTATOR)
                 return
 
             if i_am_host and self.all_ready and self.start_button.clicked(event.pos):
-                self.app.network.send(MessageType.START_GAME)
+                self.app.network.send(C2S.START_GAME)
                 return
 
             if i_am_host:
@@ -152,10 +153,10 @@ class LobbyScene:
                     self._vp_hold_timer = 0.4
                 elif self.ai_minus.clicked(event.pos):
                     new_ai = max(0, self.ai_player_count - 1)
-                    self.app.network.send(MessageType.SET_LOBBY_OPTIONS, {"ai_count": new_ai})
+                    self.app.network.send(C2S.SET_LOBBY_OPTIONS, {"ai_count": new_ai})
                 elif self.ai_plus.clicked(event.pos):
                     new_ai = min(5, self.ai_player_count + 1)
-                    self.app.network.send(MessageType.SET_LOBBY_OPTIONS, {"ai_count": new_ai})
+                    self.app.network.send(C2S.SET_LOBBY_OPTIONS, {"ai_count": new_ai})
 
         if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
             self._vp_held = None
@@ -177,8 +178,8 @@ class LobbyScene:
                 )
 
     def handle_network(self, msg_type, payload):
-        print(f"[lobby] handle_network: {msg_type.value} keys={list(payload.keys())}")
-        if msg_type == MessageType.LOBBY_STATE:
+        print(f"[lobby] handle_network: {msg_type} keys={list(payload.keys())}")
+        if msg_type == S2C.LOBBY_STATE:
             if "room_code" in payload:
                 self.room_code = payload["room_code"]
             if "spirit_id" in payload:
@@ -201,11 +202,11 @@ class LobbyScene:
             if self.app.tutorial_mode:
                 if "spirit_id" in payload and not self._tutorial_ready_sent:
                     self._tutorial_ready_sent = True
-                    self.app.network.send(MessageType.READY)
+                    self.app.network.send(C2S.READY)
                 if self.all_ready and self._is_host() and not self._tutorial_start_sent:
                     self._tutorial_start_sent = True
-                    self.app.network.send(MessageType.START_GAME)
-        elif msg_type == MessageType.ERROR:
+                    self.app.network.send(C2S.START_GAME)
+        elif msg_type == S2C.ERROR:
             self.error_message = payload.get("message", "Unknown error")
             print(f"[lobby] Error: {self.error_message}")
             # If we never successfully joined a room, return to menu

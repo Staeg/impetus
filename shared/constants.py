@@ -2,40 +2,51 @@
 
 from enum import Enum
 
+
 # Map
 MAP_SIDE_LENGTH = 5
 
+
 # Factions
-FACTION_NAMES = ["mountain", "mesa", "sand", "plains", "river", "jungle"]
+class FactionId(str, Enum):
+    MOUNTAIN = "mountain"
+    MESA     = "mesa"
+    SAND     = "sand"
+    PLAINS   = "plains"
+    RIVER    = "river"
+    JUNGLE   = "jungle"
+
+
+FACTION_NAMES = list(FactionId)
 
 FACTION_COLORS = {
-    "mountain": (200, 50, 50),     # red
-    "mesa": (220, 140, 40),        # orange
-    "sand": (220, 210, 60),        # yellow
-    "plains": (60, 180, 60),       # green
-    "river": (50, 100, 220),       # blue
-    "jungle": (140, 50, 200),      # purple
+    FactionId.MOUNTAIN: (200, 50, 50),     # red
+    FactionId.MESA:     (220, 140, 40),    # orange
+    FactionId.SAND:     (220, 210, 60),    # yellow
+    FactionId.PLAINS:   (60, 180, 60),     # green
+    FactionId.RIVER:    (50, 100, 220),    # blue
+    FactionId.JUNGLE:   (140, 50, 200),    # purple
 }
 
 FACTION_DISPLAY_NAMES = {
-    "mountain": "Mountain",
-    "mesa": "Mesa",
-    "sand": "Sand",
-    "plains": "Plains",
-    "river": "River",
-    "jungle": "Jungle",
+    FactionId.MOUNTAIN: "Mountain",
+    FactionId.MESA:     "Mesa",
+    FactionId.SAND:     "Sand",
+    FactionId.PLAINS:   "Plains",
+    FactionId.RIVER:    "River",
+    FactionId.JUNGLE:   "Jungle",
 }
 
 RACES = ["Elves", "Orcs", "Fae", "Dwarves", "Goblins", "Elementals"]
 
 # Starting hex positions for the 6 factions (axial coords around center 0,0)
 FACTION_START_HEXES = {
-    "mountain": (1, -1),
-    "mesa": (1, 0),
-    "sand": (0, 1),
-    "plains": (-1, 1),
-    "river": (-1, 0),
-    "jungle": (0, -1),
+    FactionId.MOUNTAIN: (1, -1),
+    FactionId.MESA:     (1, 0),
+    FactionId.SAND:     (0, 1),
+    FactionId.PLAINS:   (-1, 1),
+    FactionId.RIVER:    (-1, 0),
+    FactionId.JUNGLE:   (0, -1),
 }
 
 # Neutral color
@@ -76,15 +87,6 @@ class Phase(str, Enum):
     GAME_OVER = "game_over"
 
 
-class SubPhase(str, Enum):
-    CHANGE_CHOICE        = "change_choice"
-    EJECTION_CHOICE      = "ejection_choice"
-    SPOILS_CHOICE        = "spoils_choice"
-    SPOILS_CHANGE_CHOICE = "spoils_change_choice"
-    BATTLEGROUND_CHOICE  = "battleground_choice"
-    EXPAND_CHOICE        = "expand_choice"
-
-
 class AgendaType(str, Enum):
     STEAL = "steal"
     TRADE = "trade"
@@ -121,36 +123,11 @@ CHANGE_DECK = [
 ]
 
 # Starting Change modifiers per faction habitat
-HABITAT_STARTING_MODIFIERS: dict[str, dict[ChangeModifierTarget, int]] = {
-    "mountain": {ChangeModifierTarget.TRADE: 1, ChangeModifierTarget.STEAL: 1},
-    "mesa":     {ChangeModifierTarget.TRADE: 2},
-    "sand":     {ChangeModifierTarget.STEAL: 1, ChangeModifierTarget.EXPAND: 1},
-    "plains":   {ChangeModifierTarget.EXPAND: 2},
-    "river":    {ChangeModifierTarget.TRADE: 1, ChangeModifierTarget.EXPAND: 1},
-    "jungle":   {ChangeModifierTarget.STEAL: 2},
+HABITAT_STARTING_MODIFIERS: dict[FactionId, dict[ChangeModifierTarget, int]] = {
+    FactionId.MOUNTAIN: {ChangeModifierTarget.TRADE: 1, ChangeModifierTarget.STEAL: 1},
+    FactionId.MESA:     {ChangeModifierTarget.TRADE: 2},
+    FactionId.SAND:     {ChangeModifierTarget.STEAL: 1, ChangeModifierTarget.EXPAND: 1},
+    FactionId.PLAINS:   {ChangeModifierTarget.EXPAND: 2},
+    FactionId.RIVER:    {ChangeModifierTarget.TRADE: 1, ChangeModifierTarget.EXPAND: 1},
+    FactionId.JUNGLE:   {ChangeModifierTarget.STEAL: 2},
 }
-
-
-class MessageType(str, Enum):
-    # Client -> Server
-    JOIN_GAME = "join_game"
-    READY = "ready"
-    START_GAME = "start_game"
-    SET_LOBBY_OPTIONS = "set_lobby_options"
-    TOGGLE_SPECTATOR = "toggle_spectator"
-    SUBMIT_VAGRANT_ACTION = "submit_vagrant_action"
-    SUBMIT_AGENDA_CHOICE = "submit_agenda_choice"
-    SUBMIT_CHANGE_CHOICE = "submit_change_choice"
-    SUBMIT_EJECTION_AGENDA = "submit_ejection_agenda"
-    SUBMIT_SPOILS_CHOICE = "submit_spoils_choice"
-    SUBMIT_SPOILS_CHANGE_CHOICE = "submit_spoils_change_choice"
-    SUBMIT_BATTLEGROUND_CHOICE = "submit_battleground_choice"
-    SUBMIT_EXPAND_CHOICE       = "submit_expand_choice"
-    # Server -> Client
-    LOBBY_STATE = "lobby_state"
-    GAME_START = "game_start"
-    PHASE_START = "phase_start"
-    WAITING_FOR = "waiting_for"
-    PHASE_RESULT = "phase_result"
-    GAME_OVER = "game_over"
-    ERROR = "error"

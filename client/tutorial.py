@@ -108,11 +108,10 @@ class TutorialManager:
             TutorialStep(
                 title="Hover Tooltips",
                 text=(
-                    "Many elements show a tooltip when hovered — try hovering over a Faction "
-                    "name, an idol icon, or any panel value.\n\n"
+                    "Many elements show a tooltip when hovered, indicated by underlined text. "
                     "Right-click while hovering to freeze the tooltip in place. "
                     "You can then hover other elements for nested popups.\n"
-                    "Right-click again to close the frozen tooltip.\n\n"
+                    "Right-click again to close the frozen tooltip.\n"
                     "Try it: hover something, right-click to freeze it, then right-click "
                     "to unfreeze. Click Continue when done."
                 ),

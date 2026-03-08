@@ -15,8 +15,8 @@ except ImportError:
     serve = None  # type: ignore
     ServerConnection = None  # type: ignore
 
-from shared.constants import MessageType, Phase, SubPhase, AgendaType, VP_TO_WIN
-from shared.protocol import create_message, parse_message
+from shared.constants import Phase, AgendaType, VP_TO_WIN
+from shared.protocol import create_message, parse_message, C2S, S2C, SubPhase
 from server.game_state import GameState
 from server import ai
 
@@ -42,6 +42,16 @@ class GameRoom:
         self.ai_player_count: int = 0
         self.ai_spirit_ids: set[str] = set()
         self.tutorial_mode: bool = False
+        self._submission_event: asyncio.Event = asyncio.Event()
+
+    def signal_submission(self) -> None:
+        """Wake the game loop to check if all submissions are in."""
+        self._submission_event.set()
+
+    async def wait_for_submission(self) -> None:
+        """Block until signalled; clears after waking."""
+        await self._submission_event.wait()
+        self._submission_event.clear()
 
     def add_player(self, session: PlayerSession):
         self.players[session.spirit_id] = session
@@ -118,11 +128,11 @@ class GameServer:
                     msg_type, payload = parse_message(raw_message)
                 except Exception as e:
                     print(f"[server] Parse error: {e}")
-                    await ws.send(create_message(MessageType.ERROR, {"message": "Invalid message format"}))
+                    await ws.send(create_message(S2C.ERROR, {"message": "Invalid message format"}))
                     continue
 
-                print(f"[server] Received {msg_type.value} from {spirit_id or 'new'}")
-                if msg_type == MessageType.JOIN_GAME:
+                print(f"[server] Received {msg_type} from {spirit_id or 'new'}")
+                if msg_type == C2S.JOIN_GAME:
                     room_code, spirit_id = await self._handle_join(ws, payload)
                     print(f"[server] Join result: room={room_code}, spirit={spirit_id}")
                     if room_code and spirit_id:
@@ -131,14 +141,14 @@ class GameServer:
                     try:
                         await self._handle_game_message(room_code, spirit_id, msg_type, payload)
                     except Exception as e:
-                        print(f"[server] Error handling {msg_type.value} from {spirit_id}: {e}")
+                        print(f"[server] Error handling {msg_type} from {spirit_id}: {e}")
                         traceback.print_exc()
                         room = self.rooms.get(room_code)
                         if room:
-                            await room.send_to(spirit_id, create_message(MessageType.ERROR,
+                            await room.send_to(spirit_id, create_message(S2C.ERROR,
                                 {"message": "Server error processing action"}))
                 else:
-                    await ws.send(create_message(MessageType.ERROR, {"message": "Not in a room"}))
+                    await ws.send(create_message(S2C.ERROR, {"message": "Not in a room"}))
         except Exception as e:
             if not (websockets and isinstance(e, websockets.exceptions.ConnectionClosed)):
                 raise
@@ -163,7 +173,7 @@ class GameServer:
             # Join existing room
             room = self.rooms.get(room_code)
             if not room:
-                await ws.send(create_message(MessageType.ERROR, {"message": f"Room {room_code} not found"}))
+                await ws.send(create_message(S2C.ERROR, {"message": f"Room {room_code} not found"}))
                 return None, None
             if room.started:
                 # Try reconnect
@@ -173,13 +183,13 @@ class GameServer:
                         # Send current game state
                         if room.game_state:
                             snapshot = room.game_state.get_snapshot()
-                            await ws.send(create_message(MessageType.GAME_START, snapshot.to_dict()))
+                            await ws.send(create_message(S2C.GAME_START, snapshot.to_dict()))
                         return room_code, sid
-                await ws.send(create_message(MessageType.ERROR, {"message": "Game already started"}))
+                await ws.send(create_message(S2C.ERROR, {"message": "Game already started"}))
                 return None, None
             # Reject if at human player cap (spectators don't count toward cap)
             if room.human_player_count() >= 5:
-                await ws.send(create_message(MessageType.ERROR, {"message": "Room full."}))
+                await ws.send(create_message(S2C.ERROR, {"message": "Room full."}))
                 return None, None
         else:
             # Create new room with requested code or random
@@ -190,7 +200,7 @@ class GameServer:
                     if existing.game_state and existing.game_state.phase == Phase.GAME_OVER:
                         del self.rooms[room_code]
                     else:
-                        await ws.send(create_message(MessageType.ERROR, {"message": f"Room {room_code} already exists"}))
+                        await ws.send(create_message(S2C.ERROR, {"message": f"Room {room_code} already exists"}))
                         return None, None
             else:
                 room_code = self._generate_room_code()
@@ -200,7 +210,7 @@ class GameServer:
         # Check for duplicate name in lobby
         for existing in room.players.values():
             if existing.player_name.lower() == player_name.lower():
-                await ws.send(create_message(MessageType.ERROR,
+                await ws.send(create_message(S2C.ERROR,
                     {"message": f"Name '{player_name}' is already taken"}))
                 return None, None
 
@@ -212,7 +222,7 @@ class GameServer:
         if not room.host_spirit_id:
             room.host_spirit_id = spirit_id
 
-        await ws.send(create_message(MessageType.LOBBY_STATE, {
+        await ws.send(create_message(S2C.LOBBY_STATE, {
             "room_code": room_code,
             "spirit_id": spirit_id,
             "player_name": player_name,
@@ -229,7 +239,7 @@ class GameServer:
             {"spirit_id": s.spirit_id, "name": s.player_name, "connected": s.connected}
             for s in room.players.values() if s.is_spectator
         ]
-        await room.broadcast(create_message(MessageType.LOBBY_STATE, {
+        await room.broadcast(create_message(S2C.LOBBY_STATE, {
             "room_code": room.room_code,
             "players": players,
             "spectators": spectators,
@@ -240,32 +250,32 @@ class GameServer:
         }))
 
     async def _handle_game_message(self, room_code: str, spirit_id: str,
-                                    msg_type: MessageType, payload: dict):
+                                    msg_type: str, payload: dict):
         room = self.rooms.get(room_code)
         if not room:
             return
 
-        if msg_type == MessageType.READY:
+        if msg_type == C2S.READY:
             session = room.players.get(spirit_id)
             if session and not session.is_spectator:
                 session.ready = not session.ready
                 await self._broadcast_lobby_state(room)
 
-        elif msg_type == MessageType.START_GAME:
+        elif msg_type == C2S.START_GAME:
             if spirit_id != room.host_spirit_id:
-                await room.send_to(spirit_id, create_message(MessageType.ERROR,
+                await room.send_to(spirit_id, create_message(S2C.ERROR,
                     {"message": "Only the host can start the game"}))
                 return
             if not room.can_start():
-                await room.send_to(spirit_id, create_message(MessageType.ERROR,
+                await room.send_to(spirit_id, create_message(S2C.ERROR,
                     {"message": "Not all players are ready"}))
                 return
             if not room.started:
                 await self._start_game(room)
 
-        elif msg_type == MessageType.SET_LOBBY_OPTIONS:
+        elif msg_type == C2S.SET_LOBBY_OPTIONS:
             if spirit_id != room.host_spirit_id:
-                await room.send_to(spirit_id, create_message(MessageType.ERROR,
+                await room.send_to(spirit_id, create_message(S2C.ERROR,
                     {"message": "Only the host can change lobby options"}))
                 return
             if "vp_to_win" in payload:
@@ -280,14 +290,14 @@ class GameServer:
                 room.tutorial_mode = bool(payload["tutorial_mode"])
             await self._broadcast_lobby_state(room)
 
-        elif msg_type == MessageType.TOGGLE_SPECTATOR:
+        elif msg_type == C2S.TOGGLE_SPECTATOR:
             session = room.players.get(spirit_id)
             if not session:
                 return
             if session.is_spectator:
                 # Become player — check capacity
                 if room.human_player_count() >= 5:
-                    await room.send_to(spirit_id, create_message(MessageType.ERROR,
+                    await room.send_to(spirit_id, create_message(S2C.ERROR,
                         {"message": "Room full."}))
                     return
                 session.is_spectator = False
@@ -297,58 +307,55 @@ class GameServer:
             else:
                 # Become spectator — check spectator cap
                 if room.spectator_count() >= 10:
-                    await room.send_to(spirit_id, create_message(MessageType.ERROR,
+                    await room.send_to(spirit_id, create_message(S2C.ERROR,
                         {"message": "Spectator slots full."}))
                     return
                 session.is_spectator = True
                 session.ready = False
             await self._broadcast_lobby_state(room)
 
-        elif msg_type == MessageType.SUBMIT_VAGRANT_ACTION:
+        elif msg_type == C2S.SUBMIT_VAGRANT_ACTION:
             if room.game_state and room.game_state.phase == Phase.VAGRANT_PHASE:
                 error = room.game_state.submit_action(spirit_id, payload)
                 if error:
-                    await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
+                    await room.send_to(spirit_id, create_message(S2C.ERROR, {"message": error}))
                 else:
                     await self._broadcast_waiting(room)
-                    if room.game_state.all_inputs_received():
-                        await self._resolve_and_advance(room)
-                    else:
-                        # In tutorial mode AIs wait for humans; trigger their submissions now
-                        await self._resolve_ai_inputs(room)
+                    room.signal_submission()
+                    # In tutorial mode AIs wait for humans; trigger their submissions now
+                    await self._resolve_ai_inputs(room)
 
-        elif msg_type == MessageType.SUBMIT_AGENDA_CHOICE:
+        elif msg_type == C2S.SUBMIT_AGENDA_CHOICE:
             if room.game_state and room.game_state.phase == Phase.AGENDA_PHASE:
                 error = room.game_state.submit_action(spirit_id, payload)
                 if error:
-                    await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
+                    await room.send_to(spirit_id, create_message(S2C.ERROR, {"message": error}))
                 else:
                     await self._broadcast_waiting(room)
-                    if room.game_state.all_inputs_received():
-                        await self._handle_agenda_resolution(room)
+                    room.signal_submission()
 
-        elif msg_type == MessageType.SUBMIT_EXPAND_CHOICE:
+        elif msg_type == C2S.SUBMIT_EXPAND_CHOICE:
             if room.game_state:
                 q = int(payload.get("q", 0))
                 r = int(payload.get("r", 0))
                 error = room.game_state.submit_expand_choice(spirit_id, q, r)
                 if error:
-                    await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
+                    await room.send_to(spirit_id, create_message(S2C.ERROR, {"message": error}))
                 elif not room.game_state.has_pending_expand_choices():
                     # All expand choices received — proceed to change choices
                     await self._handle_change_choices_after_expand(room)
                 else:
                     waiting_for = list(room.game_state.expand_pending.keys())
-                    await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                    await room.broadcast(create_message(S2C.WAITING_FOR, {
                         "players_remaining": waiting_for,
                     }))
 
-        elif msg_type == MessageType.SUBMIT_CHANGE_CHOICE:
+        elif msg_type == C2S.SUBMIT_CHANGE_CHOICE:
             if room.game_state:
                 error, change_events = room.game_state.submit_change_choice(
                     spirit_id, payload.get("card_index", 0))
                 if error:
-                    await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
+                    await room.send_to(spirit_id, create_message(S2C.ERROR, {"message": error}))
                 else:
                     # Collect change events; don't broadcast until all spirits have chosen
                     if not hasattr(room, '_pending_change_events'):
@@ -357,7 +364,7 @@ class GameServer:
                     # Update waiting list
                     if room.game_state.has_pending_change_choices():
                         waiting_for = list(room.game_state.change_pending.keys())
-                        await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                        await room.broadcast(create_message(S2C.WAITING_FOR, {
                             "players_remaining": waiting_for,
                         }))
                     else:
@@ -370,7 +377,7 @@ class GameServer:
                         await self._broadcast_phase_result(room, events)
                         await self._auto_resolve_phases(room)
 
-        elif msg_type == MessageType.SUBMIT_EJECTION_AGENDA:
+        elif msg_type == C2S.SUBMIT_EJECTION_AGENDA:
             if room.game_state:
                 error = room.game_state.submit_ejection_choice(
                     spirit_id,
@@ -378,10 +385,10 @@ class GameServer:
                     payload.get("add_type", ""),
                 )
                 if error:
-                    await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
+                    await room.send_to(spirit_id, create_message(S2C.ERROR, {"message": error}))
                 elif room.game_state.has_pending_sub_choices():
                     waiting_for = list(room.game_state.ejection_pending.keys())
-                    await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                    await room.broadcast(create_message(S2C.WAITING_FOR, {
                         "players_remaining": waiting_for,
                     }))
                 else:
@@ -389,7 +396,7 @@ class GameServer:
                     await self._broadcast_phase_result(room, events)
                     await self._auto_resolve_phases(room)
 
-        elif msg_type == MessageType.SUBMIT_SPOILS_CHOICE:
+        elif msg_type == C2S.SUBMIT_SPOILS_CHOICE:
             if room.game_state:
                 card_indices = payload.get("card_indices", [])
                 # Backwards compat: single card_index → list
@@ -398,7 +405,7 @@ class GameServer:
                 error, events = room.game_state.submit_spoils_choice(
                     spirit_id, card_indices)
                 if error:
-                    await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
+                    await room.send_to(spirit_id, create_message(S2C.ERROR, {"message": error}))
                 else:
                     await self._broadcast_phase_result(room, events)
                     # Check if this spirit now needs change modifier choices
@@ -411,24 +418,24 @@ class GameServer:
                                 "cards": [c.value for c in p.change_cards],
                                 "loser": p.loser,
                             })
-                        await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
+                        await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
                             "phase": "spoils_change_choice",
                             "turn": room.game_state.turn,
                             "options": {"choices": change_options},
                         }))
                         waiting_for = list(room.game_state.spoils_pending.keys())
-                        await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                        await room.broadcast(create_message(S2C.WAITING_FOR, {
                             "players_remaining": waiting_for,
                         }))
                     elif not room.game_state.spoils_pending:
                         await self._auto_resolve_phases(room)
                     else:
                         waiting_for = list(room.game_state.spoils_pending.keys())
-                        await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                        await room.broadcast(create_message(S2C.WAITING_FOR, {
                             "players_remaining": waiting_for,
                         }))
 
-        elif msg_type == MessageType.SUBMIT_SPOILS_CHANGE_CHOICE:
+        elif msg_type == C2S.SUBMIT_SPOILS_CHANGE_CHOICE:
             if room.game_state:
                 card_indices = payload.get("card_indices", [])
                 if not card_indices and "card_index" in payload:
@@ -436,28 +443,28 @@ class GameServer:
                 error, events = room.game_state.submit_spoils_change_choice(
                     spirit_id, card_indices)
                 if error:
-                    await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
+                    await room.send_to(spirit_id, create_message(S2C.ERROR, {"message": error}))
                 else:
                     await self._broadcast_phase_result(room, events)
                     if not room.game_state.spoils_pending:
                         await self._auto_resolve_phases(room)
                     else:
                         waiting_for = list(room.game_state.spoils_pending.keys())
-                        await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                        await room.broadcast(create_message(S2C.WAITING_FOR, {
                             "players_remaining": waiting_for,
                         }))
 
-        elif msg_type == MessageType.SUBMIT_BATTLEGROUND_CHOICE:
+        elif msg_type == C2S.SUBMIT_BATTLEGROUND_CHOICE:
             if room.game_state:
                 choices = payload.get("choices", [])
                 error, events = room.game_state.submit_battleground_choice(spirit_id, choices)
                 if error:
-                    await room.send_to(spirit_id, create_message(MessageType.ERROR, {"message": error}))
+                    await room.send_to(spirit_id, create_message(S2C.ERROR, {"message": error}))
                 else:
                     await self._broadcast_phase_result(room, events)
                     if room.game_state.has_pending_battleground_choices():
                         waiting_for = list(room.game_state.battleground_pending.keys())
-                        await room.broadcast(create_message(MessageType.WAITING_FOR,
+                        await room.broadcast(create_message(S2C.WAITING_FOR,
                             {"players_remaining": waiting_for}))
                     elif not room.game_state.spoils_pending:
                         await self._auto_resolve_phases(room)
@@ -487,25 +494,40 @@ class GameServer:
             player_info, vp_to_win=room.vp_to_win)
 
         # Send initial state (pre-setup) so client starts with just starting hexes
-        await room.broadcast(create_message(MessageType.GAME_START, initial_snapshot.to_dict()))
+        await room.broadcast(create_message(S2C.GAME_START, initial_snapshot.to_dict()))
 
         # Send each automated turn with its own post-turn snapshot so the
         # client's animation system can diff hex ownership correctly.
         for events, snapshot in turn_results:
-            await room.broadcast(create_message(MessageType.PHASE_RESULT, {
+            await room.broadcast(create_message(S2C.PHASE_RESULT, {
                 "phase": room.game_state.phase.value,
                 "events": events,
                 "state": snapshot.to_dict(),
             }))
 
-        # Send phase options to each player
+        # Spawn game loop task to drive phase transitions
+        asyncio.create_task(self._run_game_loop(room))
+
+    async def _run_game_loop(self, room: GameRoom):
+        """Drive VAGRANT and AGENDA phase transitions using event-based waiting."""
+        gs = room.game_state
         await self._send_phase_options(room)
+        while gs.phase != Phase.GAME_OVER:
+            await room.wait_for_submission()
+            if not gs.all_inputs_received():
+                continue  # Spurious wakeup; wait for next signal
+            if gs.phase == Phase.VAGRANT_PHASE:
+                events = gs.resolve_current_phase()
+                await self._broadcast_phase_result(room, events)
+                await self._auto_resolve_phases(room)
+            elif gs.phase == Phase.AGENDA_PHASE:
+                await self._handle_agenda_resolution(room)
 
     async def _send_phase_options(self, room: GameRoom):
         gs = room.game_state
         for spirit_id in gs.spirits:
             options = gs.get_phase_options(spirit_id)
-            await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
+            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
                 "phase": gs.phase.value,
                 "turn": gs.turn,
                 "options": options,
@@ -552,16 +574,12 @@ class GameServer:
                     if action:
                         gs.submit_action(sid, action)
         await self._broadcast_waiting(room)
-        if gs.all_inputs_received():
-            if gs.phase == Phase.VAGRANT_PHASE:
-                await self._resolve_and_advance(room)
-            elif gs.phase == Phase.AGENDA_PHASE:
-                await self._handle_agenda_resolution(room)
+        room.signal_submission()
 
     async def _broadcast_waiting(self, room: GameRoom):
         gs = room.game_state
         remaining = gs.get_spirits_needing_input()
-        await room.broadcast(create_message(MessageType.WAITING_FOR, {
+        await room.broadcast(create_message(S2C.WAITING_FOR, {
             "players_remaining": remaining,
         }))
 
@@ -590,7 +608,7 @@ class GameServer:
             # Send expand_choice to each remaining human spirit
             for spirit_id, faction_id in gs.expand_pending.items():
                 reachable = gs.hex_map.get_reachable_neutral_hexes(faction_id)
-                await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
+                await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
                     "phase": SubPhase.EXPAND_CHOICE,
                     "turn": gs.turn,
                     "options": {
@@ -599,7 +617,7 @@ class GameServer:
                     },
                 }))
             waiting_for = list(gs.expand_pending.keys())
-            await room.broadcast(create_message(MessageType.WAITING_FOR, {
+            await room.broadcast(create_message(S2C.WAITING_FOR, {
                 "players_remaining": waiting_for,
             }))
             return
@@ -626,13 +644,13 @@ class GameServer:
         if gs.has_pending_change_choices():
             # Send change_choice to each remaining human spirit
             for spirit_id, cards in gs.change_pending.items():
-                await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
+                await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
                     "phase": "change_choice",
                     "turn": gs.turn,
                     "options": {"cards": [c.value for c in cards]},
                 }))
             waiting_for = list(gs.change_pending.keys())
-            await room.broadcast(create_message(MessageType.WAITING_FOR, {
+            await room.broadcast(create_message(S2C.WAITING_FOR, {
                 "players_remaining": waiting_for,
             }))
             return
@@ -672,7 +690,7 @@ class GameServer:
         for spirit_id, faction_id in gs.ejection_pending.items():
             faction = gs.factions[faction_id]
             agenda_pool = [c.agenda_type.value for c in faction.agenda_pool]
-            await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
+            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
                 "phase": "ejection_choice",
                 "turn": gs.turn,
                 "options": {
@@ -682,7 +700,7 @@ class GameServer:
                 },
             }))
         waiting_for = list(gs.ejection_pending.keys())
-        await room.broadcast(create_message(MessageType.WAITING_FOR, {
+        await room.broadcast(create_message(S2C.WAITING_FOR, {
             "players_remaining": waiting_for,
         }))
 
@@ -708,13 +726,13 @@ class GameServer:
             return
         # Send options to human spirits
         for spirit_id, war_choices in gs.battleground_pending.items():
-            await room.send_to(spirit_id, create_message(MessageType.PHASE_START, {
+            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
                 "phase": SubPhase.BATTLEGROUND_CHOICE,
                 "turn": gs.turn,
                 "options": {"wars": war_choices},
             }))
         waiting_for = list(gs.battleground_pending.keys())
-        await room.broadcast(create_message(MessageType.WAITING_FOR,
+        await room.broadcast(create_message(S2C.WAITING_FOR,
             {"players_remaining": waiting_for}))
 
     async def _send_spoils_options_after_battleground(self, room: GameRoom):
@@ -745,13 +763,13 @@ class GameServer:
         for sid, pending_list in gs.spoils_pending.items():
             choices = [{"cards": [c.value for c in p.cards], "loser": p.loser}
                        for p in pending_list]
-            await room.send_to(sid, create_message(MessageType.PHASE_START, {
+            await room.send_to(sid, create_message(S2C.PHASE_START, {
                 "phase": "spoils_choice",
                 "turn": gs.turn,
                 "options": {"choices": choices},
             }))
         waiting_for = list(gs.spoils_pending.keys())
-        await room.broadcast(create_message(MessageType.WAITING_FOR,
+        await room.broadcast(create_message(S2C.WAITING_FOR,
             {"players_remaining": waiting_for}))
 
     async def _resolve_and_advance(self, room: GameRoom):
@@ -808,13 +826,13 @@ class GameServer:
                             "cards": [c.value for c in p.cards],
                             "loser": p.loser,
                         })
-                    await room.send_to(sid, create_message(MessageType.PHASE_START, {
+                    await room.send_to(sid, create_message(S2C.PHASE_START, {
                         "phase": "spoils_choice",
                         "turn": gs.turn,
                         "options": {"choices": choices},
                     }))
                 waiting_for = list(gs.spoils_pending.keys())
-                await room.broadcast(create_message(MessageType.WAITING_FOR, {
+                await room.broadcast(create_message(S2C.WAITING_FOR, {
                     "players_remaining": waiting_for,
                 }))
                 return
@@ -823,17 +841,15 @@ class GameServer:
                 await self._send_ejection_options(room)
                 return
 
-        # Now at a phase that needs player input
+        # Now at a phase that needs player input; game loop handles resolution
         if gs.phase in (Phase.VAGRANT_PHASE, Phase.AGENDA_PHASE):
             await self._send_phase_options(room)
-            # If no spirit actually needs input, resolve immediately
-            if gs.all_inputs_received():
-                await self._resolve_and_advance(room)
+            # _send_phase_options → _resolve_ai_inputs → signal_submission; game loop drives resolution
 
     async def _broadcast_phase_result(self, room: GameRoom, events: list):
         gs = room.game_state
         snapshot = gs.get_snapshot()
-        await room.broadcast(create_message(MessageType.PHASE_RESULT, {
+        await room.broadcast(create_message(S2C.PHASE_RESULT, {
             "phase": gs.phase.value,
             "events": events,
             "state": snapshot.to_dict(),

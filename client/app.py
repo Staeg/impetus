@@ -5,8 +5,9 @@ import asyncio
 import sys
 import pygame
 from shared.constants import (
-    SCREEN_WIDTH, SCREEN_HEIGHT, FPS, TITLE, MessageType, DEFAULT_HOST, DEFAULT_PORT,
+    SCREEN_WIDTH, SCREEN_HEIGHT, FPS, TITLE, DEFAULT_HOST, DEFAULT_PORT,
 )
+from shared.protocol import S2C
 from client.local_transport import LocalTransport
 from client.network import NetworkClient
 from client.scenes.menu import MenuScene
@@ -120,11 +121,11 @@ class App:
         self.stop_local_transport()
         pygame.quit()
 
-    def _handle_network_message(self, msg_type: MessageType, payload: dict):
+    def _handle_network_message(self, msg_type: str, payload: dict):
         scene_name = type(self.current_scene).__name__ if self.current_scene else "None"
-        print(f"[app] Message: {msg_type.value} -> {scene_name}")
+        print(f"[app] Message: {msg_type} -> {scene_name}")
         # Handle scene transitions
-        if msg_type == MessageType.GAME_START:
+        if msg_type == S2C.GAME_START:
             self.set_scene("game")
             # Forward to game scene
             self.current_scene.handle_network(msg_type, payload)

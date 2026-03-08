@@ -4,9 +4,10 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Optional
 from shared.constants import (
-    Phase, SubPhase, AgendaType, IdolType, FACTION_NAMES, RACES, VP_TO_WIN,
+    Phase, AgendaType, IdolType, FACTION_NAMES, RACES, VP_TO_WIN,
     STARTING_INFLUENCE, CHANGE_DECK, FACTION_START_HEXES, HABITAT_STARTING_MODIFIERS,
 )
+from shared.protocol import SubPhase
 
 # Left-to-right ribbon order: sorted by x then y of flat-top axial hex positions
 RIBBON_HEX_ORDER = [(-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0)]
