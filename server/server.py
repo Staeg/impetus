@@ -454,6 +454,22 @@ class GameServer:
                             "players_remaining": waiting_for,
                         }))
 
+        elif msg_type == C2S.SUBMIT_RESPAWN_CHOICE:
+            if room.game_state:
+                q = int(payload.get("q", 0))
+                r = int(payload.get("r", 0))
+                error, events = room.game_state.submit_respawn_choice(spirit_id, q, r)
+                if error:
+                    await room.send_to(spirit_id, create_message(S2C.ERROR, {"message": error}))
+                else:
+                    await self._broadcast_phase_result(room, events)
+                    if room.game_state.respawn_pending:
+                        waiting_for = list(room.game_state.respawn_pending.keys())
+                        await room.broadcast(create_message(S2C.WAITING_FOR,
+                            {"players_remaining": waiting_for}))
+                    else:
+                        await self._auto_resolve_phases(room)
+
         elif msg_type == C2S.SUBMIT_BATTLEGROUND_CHOICE:
             if room.game_state:
                 choices = payload.get("choices", [])
@@ -665,6 +681,36 @@ class GameServer:
         await self._broadcast_phase_result(room, events)
         await self._auto_resolve_phases(room)
 
+    async def _send_respawn_options(self, room: GameRoom):
+        """Auto-submit AI respawn choices and send options to human spirits."""
+        gs = room.game_state
+        ai_events = []
+        for sid in list(room.ai_spirit_ids):
+            if sid in gs.respawn_pending:
+                neutral = list(gs.hex_map.get_neutral_hexes())
+                if neutral:
+                    chosen = random.choice(neutral)
+                    err, evts = gs.submit_respawn_choice(sid, chosen[0], chosen[1])
+                    if not err:
+                        ai_events.extend(evts)
+        if ai_events:
+            await self._broadcast_phase_result(room, ai_events)
+        if not gs.respawn_pending:
+            await self._auto_resolve_phases(room)
+            return
+        for spirit_id in list(gs.respawn_pending.keys()):
+            neutral = [{"q": h[0], "r": h[1]} for h in sorted(gs.hex_map.get_neutral_hexes())]
+            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
+                "phase": SubPhase.RESPAWN_CHOICE,
+                "turn": gs.turn,
+                "options": {
+                    "faction": gs.respawn_pending[spirit_id],
+                    "hexes": neutral,
+                },
+            }))
+        waiting_for = list(gs.respawn_pending.keys())
+        await room.broadcast(create_message(S2C.WAITING_FOR, {"players_remaining": waiting_for}))
+
     async def _send_ejection_options(self, room: GameRoom):
         """Send ejection choice options to spirits that need them."""
         gs = room.game_state
@@ -783,6 +829,10 @@ class GameServer:
         """Auto-resolve phases that don't need player input."""
         gs = room.game_state
         while gs.phase in (Phase.WAR_PHASE, Phase.SCORING, Phase.CLEANUP):
+            # Check for pending sub-choices before resolving (avoids re-entering WAR_PHASE)
+            if gs.respawn_pending:
+                await self._send_respawn_options(room)
+                return
             events = gs.resolve_current_phase()
             await self._broadcast_phase_result(room, events)
             if gs.phase == Phase.GAME_OVER:
@@ -835,6 +885,10 @@ class GameServer:
                 await room.broadcast(create_message(S2C.WAITING_FOR, {
                     "players_remaining": waiting_for,
                 }))
+                return
+            # If respawn choices are pending (after war/spoils), send options and stop
+            if gs.respawn_pending:
+                await self._send_respawn_options(room)
                 return
             # If ejection choices are pending (after scoring), send options and stop
             if gs.ejection_pending:

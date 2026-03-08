@@ -643,21 +643,18 @@ class TutorialManager:
                 )
                 self._popup_panel_rect = None
 
-        elif event_type == "faction_eliminated":
+        elif event_type == "faction_respawned":
             if (self.first_time_triggers_enabled
-                    and "faction_eliminated" not in self.fired_triggers):
-                self.fired_triggers.add("faction_eliminated")
+                    and "faction_respawned" not in self.fired_triggers):
+                self.fired_triggers.add("faction_respawned")
                 self.popup_step = TutorialStep(
-                    title="A Faction Has Been Eliminated!",
+                    title="A Faction Has Respawned!",
                     text=(
-                        "A Faction lost all of its territories and has been eliminated!\n\n"
-                        "Eliminated Factions no longer play Agendas, accumulate Gold, or "
-                        "participate in Wars. Any Spirit guiding them is immediately ejected. "
-                        "Their Worship is cleared, and any Wars they were involved in are "
-                        "cancelled.\n\n"
-                        "Fewer Factions means fewer options for Guidance. However, if you are "
-                        "ever in a situation where you have to Guide and can't, you gain 10 VP "
-                        "instead."
+                        "A Faction lost all of its territories!\n\n"
+                        "Instead of being eliminated, it lost all of its Gold and was placed on "
+                        "a new hex anywhere on the map. If a Spirit was Guiding it, that Spirit "
+                        "chose where it reappeared.\n\n"
+                        "The Faction continues to play normally from its new position."
                     ),
                     button_label="Ok",
                 )

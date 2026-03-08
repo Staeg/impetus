@@ -60,7 +60,7 @@
 * Cleanup
   * The Agenda pool is static \- cards are sampled with replacement and never consumed, so no reshuffling is needed.
 
-A Faction with 0 territories is eliminated. Its guiding Spirit is ejected, its Worship is cleared, and any active Wars involving it are cancelled. Eliminated Factions skip all phases.
+At the end of a turn in which a Faction loses its last Territory, it loses all of its Gold and gains a new hex anywhere on the game board. If the Faction is Guided, its Spirit chooses which neutral hex it reappears on (`respawn_choice` sub-phase, resolved after War spoils). If the Faction is unguided, the server picks a random neutral hex. The Faction continues to participate in all phases normally from its new position.
 
 Each step is resolved simultaneously. For example, if two neighboring Factions play Steal, they do not take any gold from each other even if one Faction has 0 gold and the other has 1, but they get \-2 Regard with each other.
 Similarly, if two Wars are resolved at the same time, their Spoils of War are batched and resolved simultaneously in the standard agenda order. If two Factions both win a War against the same Faction and draw Expand to conquer the same hex, the hex is contested and neither Faction gets it.

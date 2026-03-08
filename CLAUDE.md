@@ -52,6 +52,7 @@ Several phases trigger sub-phases where the server waits for a specific player c
 - `ejection_choice` — When a spirit is ejected (0 influence), they pick one agenda card to remove from the faction's pool and one to add in its place (pool size stays the same)
 - `spoils_choice` — After war victories, the winning guided spirit picks spoils agenda cards for ALL wars at once (multi-pick UI). Server sends a `choices` list with one entry per war won.
 - `spoils_change_choice` — If any spoils cards are Change, the spirit picks modifier cards for all of them at once
+- `respawn_choice` — After spoils resolve, if the guided faction has 0 territories, the spirit picks any neutral hex for the faction to reappear on. Server sends `faction` (faction id) and `hexes` (all neutral hexes). Client sends `{q, r}`.
 
 ### Core game concepts
 - **6 factions** (Mountain, Mesa, Sand, Plains, River, Jungle) on a hex grid (axial coords, side-length 5)
@@ -62,7 +63,7 @@ Several phases trigger sub-phases where the server waits for a specific player c
 - **Guidance cooldown**: if two or more spirits contest the same faction in the same vagrant phase (neither gets it), all contesting spirits are blocked from targeting that faction for the next vagrant phase. Tracked in `game_state.guidance_cooldowns` (dict of spirit_id → set of blocked faction_ids); cleared at the start of each vagrant phase.
 - **Worship** (`worship_spirit` on factions): spirits compete for faction Worship via idol counts; a spirit cannot guide a faction that Worships them
 - **Scoring**: VP from idols in faction territories where the spirit has Worship (Battle/Affluence/Spread idol types)
-- **Faction elimination**: factions with 0 territories are eliminated (guiding spirit ejected, Worship cleared, wars cancelled)
+- **Faction respawn**: factions with 0 territories lose all gold and gain a new hex anywhere on the map; if guided, the spirit picks the hex (`respawn_choice` sub-phase after war spoils); factions always persist and continue playing normally
 
 ### Simultaneous resolution
 "Simultaneous" means all factions playing the same agenda type resolve in one step, using the game state from before any of them applied:

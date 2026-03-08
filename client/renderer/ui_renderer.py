@@ -424,18 +424,6 @@ class UIRenderer:
                 continue
             cx = i * cell_w
             fc = tuple(FACTION_COLORS.get(fid, (150, 150, 150)))
-            is_eliminated = fd.get("eliminated", False) if isinstance(fd, dict) else getattr(fd, "eliminated", False)
-
-            if is_eliminated:
-                # Greyed-out eliminated faction
-                pygame.draw.rect(surface, (40, 40, 40), pygame.Rect(cx, strip_y, 3, strip_h))
-                pygame.draw.rect(surface, (20, 20, 20), pygame.Rect(cx + 3, strip_y, cell_w - 3, strip_h))
-                abbr = faction_full_name(fid)
-                abbr_surf = self.small_font.render(abbr, True, (80, 80, 80))
-                surface.blit(abbr_surf, (cx + 6, strip_y + 4))
-                elim_surf = self.small_font.render("ELIMINATED", True, (120, 60, 60))
-                surface.blit(elim_surf, (cx + 6, strip_y + 22))
-                continue
 
             # Color accent bar
             pygame.draw.rect(surface, fc, pygame.Rect(cx, strip_y, 3, strip_h))
@@ -635,11 +623,7 @@ class UIRenderer:
         territories = faction_data.get("territories", [])
         regard = faction_data.get("regard", {})
         if all_factions:
-            regard = {
-                other_fid: val
-                for other_fid, val in regard.items()
-                if not all_factions.get(other_fid, {}).get("eliminated", False)
-            }
+            regard = dict(regard)
         if faction_order:
             regard = dict(sorted(regard.items(),
                                  key=lambda kv: faction_order.index(kv[0]) if kv[0] in faction_order else 999))
@@ -668,25 +652,22 @@ class UIRenderer:
 
         # Calculate dynamic panel height based on content
         panel_h = 8 + 24  # top padding + name header
-        if faction_data.get("eliminated", False):
-            panel_h += 24  # "ELIMINATED" text
-        else:
-            panel_h += 18 * 4  # gold + territories + guided + worship
-            if regard:
-                panel_h += 4 + 18 + len(regard) * 18  # gap + header + entries
-            active_modifiers = sum(1 for v in modifiers.values() if v > 0)
-            if active_modifiers:
-                panel_h += 4 + 18 + active_modifiers * 18
-            pool_types = faction_data.get("agenda_pool", [])
-            pool_counts = {}
-            for pt in pool_types:
-                pool_counts[pt] = pool_counts.get(pt, 0) + 1
-            pool_differs = set(pool_counts.keys()) != {"steal", "trade", "expand", "change"} or any(v != 1 for v in pool_counts.values())
-            if pool_differs:
-                pool_entries = len(pool_counts)
-                panel_h += 4 + 18 + pool_entries * 18
-            if war_opponents:
-                panel_h += 4 + 18 + len(war_opponents) * 18
+        panel_h += 18 * 4  # gold + territories + guided + worship
+        if regard:
+            panel_h += 4 + 18 + len(regard) * 18  # gap + header + entries
+        active_modifiers = sum(1 for v in modifiers.values() if v > 0)
+        if active_modifiers:
+            panel_h += 4 + 18 + active_modifiers * 18
+        pool_types = faction_data.get("agenda_pool", [])
+        pool_counts = {}
+        for pt in pool_types:
+            pool_counts[pt] = pool_counts.get(pt, 0) + 1
+        pool_differs = set(pool_counts.keys()) != {"steal", "trade", "expand", "change"} or any(v != 1 for v in pool_counts.values())
+        if pool_differs:
+            pool_entries = len(pool_counts)
+            panel_h += 4 + 18 + pool_entries * 18
+        if war_opponents:
+            panel_h += 4 + 18 + len(war_opponents) * 18
         panel_h += 8  # bottom padding
         self._faction_panel_content_h = panel_h
         if max_height:
@@ -706,12 +687,6 @@ class UIRenderer:
         name_text = self.font.render(name, True, color)
         surface.blit(name_text, (x + 10, dy))
         dy += 24
-
-        if faction_data.get("eliminated", False):
-            elim_text = self.font.render("ELIMINATED", True, (200, 60, 60))
-            surface.blit(elim_text, (x + 10, dy))
-            surface.set_clip(old_clip)
-            return
 
         # Check for preview guidance name
         preview_guid_name = preview_guidance.get(fid)
@@ -971,7 +946,7 @@ class UIRenderer:
         # Find factions worshipping this spirit
         worshipping_factions = []
         for fid, fdata in factions.items():
-            if fdata.get("worship_spirit") == spirit_id and not fdata.get("eliminated"):
+            if fdata.get("worship_spirit") == spirit_id:
                 worshipping_factions.append((fid, fdata))
 
         # Calculate panel height

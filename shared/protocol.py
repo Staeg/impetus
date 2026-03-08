@@ -18,6 +18,7 @@ class C2S:
     SUBMIT_SPOILS_CHANGE_CHOICE = "submit_spoils_change_choice"
     SUBMIT_BATTLEGROUND_CHOICE  = "submit_battleground_choice"
     SUBMIT_EXPAND_CHOICE        = "submit_expand_choice"
+    SUBMIT_RESPAWN_CHOICE       = "submit_respawn_choice"
 
 
 class S2C:
@@ -39,6 +40,7 @@ class SubPhase:
     SPOILS_CHANGE_CHOICE = "spoils_change_choice"
     BATTLEGROUND_CHOICE  = "battleground_choice"
     EXPAND_CHOICE        = "expand_choice"
+    RESPAWN_CHOICE       = "respawn_choice"
 
 
 def create_message(msg_type: str, payload: dict = None) -> str:

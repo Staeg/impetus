@@ -30,7 +30,6 @@ class Faction:
         self.regard: dict[str, int] = {}
         self.guiding_spirit: Optional[str] = None
         self.worship_spirit: Optional[str] = None
-        self.eliminated: bool = False
         self.race: str = ""
         # Turn tracking for scoring
         self.gold_gained_this_turn: int = 0
@@ -111,6 +110,5 @@ class Faction:
             regard=dict(self.regard),
             guiding_spirit=self.guiding_spirit,
             worship_spirit=self.worship_spirit,
-            eliminated=self.eliminated,
             race=self.race,
         )

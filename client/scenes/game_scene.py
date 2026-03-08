@@ -283,6 +283,10 @@ class GameScene:
         self.expand_choice_hexes: set[tuple] = set()
         self.expand_choice_faction: str = ""
 
+        # Respawn choice state
+        self.respawn_choice_hexes: set[tuple] = set()
+        self.respawn_choice_faction: str = ""
+
         # In-game menu (top-right)
         self._ingame_menu_open: bool = False
         self._ingame_menu_confirm_exit: bool = False
@@ -838,6 +842,10 @@ class GameScene:
             if hex_coord in self.expand_choice_hexes:
                 self.selected_hex = hex_coord
             return
+        if self.phase == SubPhase.RESPAWN_CHOICE:
+            if hex_coord in self.respawn_choice_hexes:
+                self.selected_hex = hex_coord
+            return
         if self.phase == Phase.VAGRANT_PHASE.value and self.hex_ownership.get(hex_coord) is None:
             # Neutral hex during vagrant phase: select for idol placement
             my_id = self.app.my_spirit_id
@@ -938,6 +946,14 @@ class GameScene:
                 self.expand_choice_faction = ""
                 self.selected_hex = None
                 self.has_submitted = True
+        elif self.phase == SubPhase.RESPAWN_CHOICE:
+            if self.selected_hex:
+                q, r = self.selected_hex
+                self.app.network.send(C2S.SUBMIT_RESPAWN_CHOICE, {"q": q, "r": r})
+                self.respawn_choice_hexes = set()
+                self.respawn_choice_faction = ""
+                self.selected_hex = None
+                self.has_submitted = True
         elif self.phase == SubPhase.BATTLEGROUND_CHOICE:
             if len(self.battleground_selections) >= len(self.battleground_choice_wars):
                 self._do_submit_battleground()
@@ -976,6 +992,8 @@ class GameScene:
         self.battleground_hex_to_choice = {}
         self.expand_choice_hexes = set()
         self.expand_choice_faction = ""
+        self.respawn_choice_hexes = set()
+        self.respawn_choice_faction = ""
 
     def handle_network(self, msg_type, payload):
         handler = self._net_handlers.get(msg_type)
@@ -1005,7 +1023,8 @@ class GameScene:
         needs_input = action not in ("none", "") or phase in (
             SubPhase.CHANGE_CHOICE, SubPhase.SPOILS_CHOICE,
             SubPhase.SPOILS_CHANGE_CHOICE, SubPhase.EJECTION_CHOICE,
-            SubPhase.BATTLEGROUND_CHOICE, SubPhase.EXPAND_CHOICE)
+            SubPhase.BATTLEGROUND_CHOICE, SubPhase.EXPAND_CHOICE,
+            SubPhase.RESPAWN_CHOICE)
         should_defer = (
             needs_input
             and (
@@ -1035,7 +1054,7 @@ class GameScene:
         active_sub_phase = self.phase if self.phase in (
             SubPhase.CHANGE_CHOICE, SubPhase.SPOILS_CHOICE, SubPhase.SPOILS_CHANGE_CHOICE,
             SubPhase.EJECTION_CHOICE, SubPhase.BATTLEGROUND_CHOICE,
-            SubPhase.EXPAND_CHOICE) else None
+            SubPhase.EXPAND_CHOICE, SubPhase.RESPAWN_CHOICE) else None
         # Snapshot display state before updating so animations render old state
         events = payload.get("events", [])
         _ANIM_ORDER = {
@@ -1065,6 +1084,8 @@ class GameScene:
         elif active_sub_phase == SubPhase.BATTLEGROUND_CHOICE and self.battleground_choice_wars:
             self.phase = active_sub_phase
         elif active_sub_phase == SubPhase.EXPAND_CHOICE and self.expand_choice_hexes:
+            self.phase = active_sub_phase
+        elif active_sub_phase == SubPhase.RESPAWN_CHOICE and self.respawn_choice_hexes:
             self.phase = active_sub_phase
         # Log events (consolidate agenda play + resolution into one line)
         self._log_events_batch(events)
@@ -1290,6 +1311,17 @@ class GameScene:
             "Confirm", (60, 130, 60)
         )
 
+    def _setup_respawn_choice_ui(self):
+        """Set up state for the respawn_choice sub-phase."""
+        hexes = self.phase_options.get("hexes", [])
+        self.respawn_choice_hexes = {(h["q"], h["r"]) for h in hexes}
+        self.respawn_choice_faction = self.phase_options.get("faction", "")
+        self.selected_hex = None
+        self.submit_button = Button(
+            pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
+            "Confirm", (60, 130, 60)
+        )
+
     def _setup_battleground_choice_ui(self):
         """Set up state for the battleground_choice sub-phase."""
         wars = self.phase_options.get("wars", [])
@@ -1417,6 +1449,7 @@ class GameScene:
             SubPhase.EJECTION_CHOICE:      self._setup_ejection_choice_ui,
             SubPhase.BATTLEGROUND_CHOICE:  self._setup_battleground_choice_ui,
             SubPhase.EXPAND_CHOICE:        self._setup_expand_choice_ui,
+            SubPhase.RESPAWN_CHOICE:       self._setup_respawn_choice_ui,
         }
         if self.phase in _SUB_PHASE_SETUP:
             _SUB_PHASE_SETUP[self.phase]()
@@ -1491,10 +1524,7 @@ class GameScene:
         return "\n".join(lines)
 
     def _build_faction_buttons(self):
-        available = [
-            fid for fid in self.phase_options.get("available_factions", [])
-            if not self.factions.get(fid, {}).get("eliminated", False)
-        ]
+        available = list(self.phase_options.get("available_factions", []))
         blocked = self.phase_options.get("worship_blocked", [])
         contested_blocked = self.phase_options.get("contested_blocked", [])
         self.faction_buttons = []
@@ -1939,9 +1969,9 @@ class GameScene:
         elif etype == "war_erupted":
             if self.tutorial:
                 self.tutorial.notify_game_event("war_erupted", event)
-        elif etype == "faction_eliminated":
+        elif etype == "faction_respawned":
             if self.tutorial:
-                self.tutorial.notify_game_event("faction_eliminated", event)
+                self.tutorial.notify_game_event("faction_respawned", event)
 
     @staticmethod
     def _format_faction_list(factions: list[str]) -> str:
@@ -2215,6 +2245,9 @@ class GameScene:
         # Expand choice: highlight reachable neutral hexes
         elif self.phase == SubPhase.EXPAND_CHOICE and self.expand_choice_hexes:
             highlight = self.expand_choice_hexes
+        # Respawn choice: highlight all neutral hexes
+        elif self.phase == SubPhase.RESPAWN_CHOICE and self.respawn_choice_hexes:
+            highlight = self.respawn_choice_hexes
 
         # Compute preview idol (post-confirm or pre-confirm)
         render_preview_idol = self.preview_idol
@@ -2417,6 +2450,8 @@ class GameScene:
             self._render_battleground_ui(screen)
         elif self.phase == SubPhase.EXPAND_CHOICE:
             self._render_expand_choice_ui(screen)
+        elif self.phase == SubPhase.RESPAWN_CHOICE:
+            self._render_respawn_choice_ui(screen)
 
         # Register UI rects for tooltip placement scoring
         self._register_ui_rects_for_tooltips()
@@ -3247,6 +3282,28 @@ class GameScene:
             self.submit_button.enabled = all_chosen
             if not all_chosen:
                 self.submit_button.tooltip = "Select a hex for each war first."
+                self.submit_button.tooltip_always = True
+            else:
+                self.submit_button.tooltip = None
+                self.submit_button.tooltip_always = False
+            self._draw_submit_button(screen)
+
+    def _render_respawn_choice_ui(self, screen):
+        faction_name = faction_full_name(self.respawn_choice_faction)
+        title = self.font.render(f"Respawn: {faction_name}", True, (255, 160, 60))
+        screen.blit(title, (20, 102))
+
+        instruction = "Your faction lost all territory and must respawn. Click any highlighted neutral hex to choose where it reappears."
+        lines = _wrap_text(instruction, self.font, 220)
+        line_h = self.font.get_linesize()
+        for i, line in enumerate(lines):
+            surf = self.font.render(line, True, theme.TEXT_NORMAL)
+            screen.blit(surf, (20, 130 + i * line_h))
+
+        if self.submit_button:
+            self.submit_button.enabled = self.selected_hex is not None
+            if not self.submit_button.enabled:
+                self.submit_button.tooltip = "Select a hex first."
                 self.submit_button.tooltip_always = True
             else:
                 self.submit_button.tooltip = None

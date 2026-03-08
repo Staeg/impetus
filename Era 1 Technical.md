@@ -96,7 +96,7 @@ All dataclasses are JSON-serialisable via `.to_dict()` / `.from_dict()`.
 | `HexCoord` | Axial hex coordinate | `q, r` |
 | `Idol` | A placed idol | `type: IdolType, position: HexCoord, owner_spirit: str` |
 | `AgendaCard` | One card in a pool | `agenda_type: AgendaType` |
-| `FactionState` | Serialisable faction snapshot | `faction_id, color, gold, territories, agenda_pool, change_modifiers, regard, guiding_spirit, worship_spirit, eliminated, race` |
+| `FactionState` | Serialisable faction snapshot | `faction_id, color, gold, territories, agenda_pool, change_modifiers, regard, guiding_spirit, worship_spirit, race` |
 | `SpiritState` | Serialisable spirit snapshot | `spirit_id, name, influence, is_vagrant, guided_faction, idols, victory_points, habitat_affinity, race_affinity` |
 | `WarState` | Serialisable war snapshot | `war_id, faction_a, faction_b, is_ripe, battleground` |
 | `GameStateSnapshot` | Full state for client | `turn, phase, factions, spirits, wars, all_idols, hex_ownership, faction_order` |
@@ -432,7 +432,6 @@ change_modifiers: dict[ChangeModifierTarget, int]
 regard: dict[str, int]           # faction_id → regard
 guiding_spirit: Optional[str]
 worship_spirit: Optional[str]
-eliminated: bool
 race: str
 gold_gained_this_turn: int       # tracking for scoring
 territories_gained_this_turn: int
@@ -840,7 +839,7 @@ tooltip: str, tooltip_always: bool
 - **Change tracker timing**: `snapshot_and_reset()` is called on `turn_start` events, before any agenda events. By the time `process_event()` runs per-event, `self.factions` already reflects final state — the tracker uses its own `old_state` snapshot for delta computation.
 - **Worship stability**: `_check_worship()` is only called on guidance take/leave, never mid-phase.
 - **War finality**: Resolved wars are removed from `self.wars`. Ripe wars stay until resolved next turn.
-- **Faction elimination**: 0 territories → immediate ejection of guiding spirit, clear worship, cancel active wars, skip all future phases.
+- **Faction respawn**: 0 territories → faction loses all gold and gains a new hex anywhere on the map. If guided, the spirit picks the hex via `respawn_choice` sub-phase (after war spoils); otherwise a random neutral hex is chosen. The faction always persists and continues playing normally.
 
 ---
 

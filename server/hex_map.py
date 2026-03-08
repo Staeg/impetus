@@ -56,10 +56,10 @@ class HexMap:
         return len(self.get_border_hex_pairs(faction_a, faction_b)) > 0
 
     def get_live_neighbor_ids(self, faction_id: str, factions: dict) -> list[str]:
-        """Return IDs of non-eliminated factions neighboring faction_id."""
+        """Return IDs of factions neighboring faction_id."""
         return [
             fid for fid, f in factions.items()
-            if fid != faction_id and not f.eliminated
+            if fid != faction_id
             and self.are_factions_neighbors(faction_id, fid)
         ]
 

@@ -134,7 +134,7 @@ Phase details:
 |---|---|---|
 | VAGRANT_PHASE | Vagrant spirits choose: guide a faction AND/OR place an idol (must do both if both available). Cannot guide a faction that Worships them. One idol per vagrant stint. | Simultaneous reveal. Contested guidance fails. Idols placed. Influence set to 3 on success. Worship checked. |
 | AGENDA_PHASE | Guiding spirits choose 1 agenda from drawn hand | Simultaneous reveal. Non-guided factions draw randomly. Resolve in order: Trade → Steal → Expand → Change. Eject 0-influence spirits (they choose agenda to add). Worship checked. |
-| WAR_PHASE | None (dice rolls are server-side), unless guided spirits need to choose spoils cards | Resolve ripe wars first: roll + power. Losers lose gold, winners gain gold + spoils agenda (guided spirits draw 1+influence spoils cards and choose). Then ripen new wars (select battlegrounds). Spoils resolved in agenda order. Check for faction eliminations. |
+| WAR_PHASE | None (dice rolls are server-side), unless guided spirits need to choose spoils cards or a respawn hex | Resolve ripe wars first: roll + power. Losers lose gold, winners gain gold + spoils agenda (guided spirits draw 1+influence spoils cards and choose). Then ripen new wars (select battlegrounds). Spoils resolved in agenda order. Check for respawns: factions with 0 territories lose all gold and gain a new hex (guided spirits choose, `respawn_choice` sub-phase). |
 | SCORING | None | Calculate VP per spirit based on idols in factions where they have Worship. Check for 100 VP winner. |
 | CLEANUP | None | Clear `played_agenda_this_turn` on each faction (no cards to return since the deck is a pool sampled with replacement). Advance turn counter. |
 
@@ -153,13 +153,13 @@ Each faction tracks:
 - `regard: dict[FactionId, int]` (bilateral regard with other factions, starts at 0)
 - `guiding_spirit: Optional[SpiritId]`
 - `worship_spirit: Optional[SpiritId]` (the spirit whose Worship this faction holds)
-- `eliminated: bool` (True when faction has 0 territories; eliminated factions skip all phases)
+- (no `eliminated` field — factions always persist; losing all territories triggers a respawn)
 
 Neighbors are determined dynamically: two factions are neighbors if any of their territories are adjacent on the hex grid.
 
 When a spirit is ejected (0 influence), they choose one card type to remove and one to add via `replace_agenda_card()`, keeping the pool size constant.
 
-A faction with 0 territories is eliminated: its guiding spirit is ejected, its Worship is cleared, and any active wars involving it are cancelled.
+A faction with 0 territories is not eliminated — instead it respawns. It loses all Gold and gains a new hex anywhere on the board. If guided, its Spirit chooses the hex (`respawn_choice` sub-phase); otherwise the server picks a random neutral hex.
 
 ### 4. Spirit Model (`server/spirit.py`)
 
@@ -237,6 +237,7 @@ Message types fall into two categories:
 | `submit_expand_choice` | Agenda/expand_choice sub-phase | `{q, r}` (chosen neutral hex to expand into) |
 | `submit_ejection_agenda` | Agenda/ejection_choice sub-phase | `{remove_type, add_type}` (card type to remove and add to faction pool) |
 | `submit_battleground_choice` | War/battleground_choice sub-phase | `{choices: [{war_id, pair_index}]}` (full mode) or `{choices: [{war_id, hex: {q,r}}]}` (enemy_side mode) |
+| `submit_respawn_choice` | War/respawn_choice sub-phase | `{q, r}` (chosen neutral hex for the faction to reappear on) |
 | `submit_spoils_choice` | War/spoils_choice sub-phase | `{card_indices}` (list of indices, one per war won, into each drawn spoils hand) |
 | `submit_spoils_change_choice` | War/spoils_change_choice sub-phase | `{card_index}` (index into drawn change modifier cards) |
 
@@ -261,6 +262,7 @@ Message types fall into two categories:
 | `expand_choice` | `faction` (faction id), `hexes` (list of `{q,r}` reachable neutral hexes the spirit may expand into) |
 | `ejection_choice` | `faction` (faction id), `agenda_pool` (current list of card types in pool), `agenda_types` (list of all valid card type names) |
 | `battleground_choice` | `wars` (list of war configs; each has `war_id`, `mode` (`"full"` or `"enemy_side"`), `pairs` (full mode: list of `[{q,r},{q,r}]` adjacent hex pairs) or `hexes` (enemy_side mode: list of `{q,r}` from opposing faction's border)) |
+| `respawn_choice` | `faction` (faction id that lost all territory), `hexes` (list of `{q,r}` — all neutral hexes on the map) |
 | `spoils_choice` | `choices` (list of `{cards, loser}`, one entry per war won; `cards` is the drawn spoils hand for that war) |
 | `spoils_change_choice` | `cards` (list of Change modifier card descriptions, one per Change spoils drawn) |
 
@@ -357,7 +359,6 @@ class FactionState:
     regard: dict[str, int]
     guiding_spirit: str | None
     worship_spirit: str | None
-    eliminated: bool
 
 @dataclass
 class SpiritState:

@@ -96,6 +96,8 @@ class GameState:
         # Guided expand hex choices (spirit_id -> faction_id pending, spirit_id -> (q,r) chosen)
         self.expand_pending: dict[str, str] = {}
         self.expand_chosen: dict[str, tuple] = {}
+        # Spirits needing to choose where their faction respawns (spirit_id -> faction_id)
+        self.respawn_pending: dict[str, str] = {}
         # Faction display order (left-to-right by starting hex x-position)
         self.faction_order: list[str] = list(FACTION_NAMES)
 
@@ -204,8 +206,6 @@ class GameState:
         # Turn 1: normal unguided turn (all factions play random agendas).
         turn_one_choices: dict[str, AgendaType] = {}
         for fid, faction in self.factions.items():
-            if faction.eliminated:
-                continue
             card = faction.draw_random_agenda()
             faction.played_agenda_this_turn.append(card)
             turn_one_choices[fid] = card.agenda_type
@@ -243,18 +243,18 @@ class GameState:
         if self.phase == Phase.VAGRANT_PHASE:
             if not spirit.is_vagrant:
                 return {"action": "none", "reason": "not_vagrant"}
-            # Can guide any unoccupied, non-eliminated faction or place an idol
+            # Can guide any unoccupied faction or place an idol
             cooldown_set = self.guidance_cooldowns.get(spirit_id, set())
             guidable = [
                 fid for fid, f in self.factions.items()
-                if f.guiding_spirit is None and not f.eliminated
+                if f.guiding_spirit is None
                 and f.worship_spirit != spirit_id
             ]
             available_factions = [fid for fid in guidable if fid not in cooldown_set]
             contested_blocked = [fid for fid in guidable if fid in cooldown_set]
             worship_blocked = [
                 fid for fid, f in self.factions.items()
-                if f.guiding_spirit is None and not f.eliminated
+                if f.guiding_spirit is None
                 and f.worship_spirit == spirit_id
             ]
             neutral_hexes = [
@@ -342,7 +342,7 @@ class GameState:
         # If both guidance and idol placement are available, require both
         cooldown_set = self.guidance_cooldowns.get(spirit.spirit_id, set())
         can_guide = any(
-            f.guiding_spirit is None and not f.eliminated
+            f.guiding_spirit is None
             and f.worship_spirit != spirit.spirit_id
             and fid not in cooldown_set
             for fid, f in self.factions.items()
@@ -625,42 +625,67 @@ class GameState:
                     "faction": faction.faction_id,
                 })
 
-    def _check_eliminations(self, events: list):
-        """Check all factions for 0 territories and mark as eliminated."""
+    def _check_respawns(self, events: list):
+        """Check all factions for 0 territories and trigger a respawn."""
+        neutral_hexes = list(self.hex_map.get_neutral_hexes())
+        already_pending = set(self.respawn_pending.values())
         for fid, faction in self.factions.items():
-            if faction.eliminated:
-                continue
+            if fid in already_pending:
+                continue  # Already queued for respawn, don't double-process
             territories = self.hex_map.get_faction_territories(fid)
             if len(territories) > 0:
                 continue
-            faction.eliminated = True
-            events.append({
-                "type": "faction_eliminated",
-                "faction": fid,
-            })
-            # Eject guiding spirit
-            if faction.guiding_spirit:
-                spirit = self.spirits[faction.guiding_spirit]
-                faction.guiding_spirit = None
-                spirit.become_vagrant()
+            # Faction lost all territories: lose all gold
+            lost_gold = faction.gold
+            faction.gold = 0
+            if faction.guiding_spirit and neutral_hexes:
+                # Guided: defer hex choice to the spirit
+                self.respawn_pending[faction.guiding_spirit] = fid
                 events.append({
-                    "type": "ejected",
-                    "spirit": spirit.spirit_id,
+                    "type": "faction_respawning",
                     "faction": fid,
+                    "gold_lost": lost_gold,
                 })
-            # Clear worship
-            faction.worship_spirit = None
-            # Remove wars involving this faction
-            wars_to_remove = [w for w in self.wars
-                              if w.faction_a == fid or w.faction_b == fid]
-            for w in wars_to_remove:
-                self.wars.remove(w)
-                events.append({
-                    "type": "war_ended",
-                    "war_id": w.war_id,
-                    "reason": "faction_eliminated",
-                    "faction": fid,
-                })
+            else:
+                # Unguided (or no neutral hexes): auto-pick a random neutral hex
+                if neutral_hexes:
+                    chosen = random.choice(neutral_hexes)
+                    neutral_hexes.remove(chosen)
+                    self.hex_map.claim_hex(chosen, fid)
+                    events.append({
+                        "type": "faction_respawned",
+                        "faction": fid,
+                        "gold_lost": lost_gold,
+                        "hex": {"q": chosen[0], "r": chosen[1]},
+                    })
+                else:
+                    events.append({
+                        "type": "faction_respawned",
+                        "faction": fid,
+                        "gold_lost": lost_gold,
+                        "hex": None,
+                    })
+
+    def submit_respawn_choice(self, spirit_id: str, q: int, r: int) -> tuple[Optional[str], list[dict]]:
+        """Submit a respawn hex choice for a guided spirit. Returns (error, events)."""
+        if spirit_id not in self.respawn_pending:
+            return "No respawn pending", []
+        hex_coord = (q, r)
+        if hex_coord not in self.hex_map.all_hexes:
+            return "Invalid hex", []
+        if self.hex_map.ownership.get(hex_coord) is not None:
+            return "Hex is not neutral", []
+        faction_id = self.respawn_pending[spirit_id]
+        self.hex_map.claim_hex(hex_coord, faction_id)
+        del self.respawn_pending[spirit_id]
+        events = [{
+            "type": "faction_respawned",
+            "faction": faction_id,
+            "hex": {"q": q, "r": r},
+        }]
+        if not self.respawn_pending:
+            self.phase = Phase.SCORING
+        return None, events
 
     def prepare_change_choices(self) -> list[dict]:
         """Process agenda inputs and identify Change choices needed before resolution.
@@ -689,11 +714,9 @@ class GameState:
                 "agenda": chosen.agenda_type.value,
             })
 
-        # Non-guided factions draw random agenda (skip eliminated)
+        # Non-guided factions draw random agenda
         for fid, faction in self.factions.items():
             if fid not in agenda_choices:
-                if faction.eliminated:
-                    continue
                 card = faction.draw_random_agenda()
                 faction.played_agenda_this_turn.append(card)
                 agenda_choices[fid] = card.agenda_type
@@ -1153,7 +1176,7 @@ class GameState:
         # Check worship for all guided factions before scoring
         events = []
         for fid, faction in self.factions.items():
-            if faction.guiding_spirit and not faction.eliminated:
+            if faction.guiding_spirit:
                 spirit = self.spirits.get(faction.guiding_spirit)
                 if spirit:
                     self._check_worship(faction, spirit, events)
@@ -1201,8 +1224,6 @@ class GameState:
         events = []
         # Return played/spoils cards to decks, then reset turn tracking
         for faction in self.factions.values():
-            if faction.eliminated:
-                continue
             faction.cleanup_deck()
             faction.reset_turn_tracking()
 
@@ -1345,8 +1366,9 @@ class GameState:
             finalize_all_spoils(self.factions, self.hex_map, self.wars, events,
                                batch, self.normal_trade_factions)
         self.auto_spoils_choices = []
-        self._check_eliminations(events)
-        self.phase = Phase.SCORING
+        self._check_respawns(events)
+        if not self.respawn_pending:
+            self.phase = Phase.SCORING
 
     def has_pending_sub_choices(self) -> bool:
         """Check if ejection choices are still pending (change is handled earlier)."""

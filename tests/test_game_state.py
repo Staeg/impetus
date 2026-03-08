@@ -253,23 +253,21 @@ class TestVagrantPhase:
         gs.resolve_current_phase()  # resolve vagrant phase
 
         # Cooldown is set immediately after the contested guidance resolves.
-        # Check this now, before running war phases that might eliminate mountain.
         assert "mountain" in gs.guidance_cooldowns.get("spirit_0", set())
         assert "mountain" in gs.guidance_cooldowns.get("spirit_1", set())
         err = gs.submit_action("spirit_0", {"guide_target": "mountain"})
         assert err is not None  # blocked by cooldown
 
         # Advance to next vagrant phase. Use a loop rather than a fixed count:
-        # the agenda phase can take 2 calls when a guided faction draws Change,
-        # and wars from automated setup turns may eliminate factions.
+        # the agenda phase can take 2 calls when a guided faction draws Change.
         # Also auto-resolve battleground choices when guided factions are involved.
         advance_to_vagrant(gs)
 
-        # If mountain survived wars, verify it appears as contested-blocked.
-        if not gs.factions["mountain"].eliminated:
-            opts0 = gs.get_phase_options("spirit_0")
-            assert "mountain" not in opts0["available_factions"]
-            assert "mountain" in opts0["contested_blocked"]
+        # Mountain always has at least 1 territory (respawns if it ever hit 0),
+        # so verify it appears as contested-blocked.
+        opts0 = gs.get_phase_options("spirit_0")
+        assert "mountain" not in opts0["available_factions"]
+        assert "mountain" in opts0["contested_blocked"]
 
         # Guide different factions instead, advance a full turn
         gs.pending_actions.clear()
@@ -285,10 +283,9 @@ class TestVagrantPhase:
         gs.factions["mesa"].guiding_spirit = None
         advance_to_vagrant(gs)
 
-        # Cooldown expired: mountain available again (if not eliminated by wars)
-        if not gs.factions["mountain"].eliminated:
-            opts0 = gs.get_phase_options("spirit_0")
-            assert "mountain" in opts0["available_factions"]
+        # Cooldown expired: mountain available again (factions always persist via respawn)
+        opts0 = gs.get_phase_options("spirit_0")
+        assert "mountain" in opts0["available_factions"]
 
     def test_submit_no_action_fails(self):
         gs = make_game(2)

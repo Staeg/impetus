@@ -150,11 +150,10 @@ You score VP only from Factions whose **Worship** you hold. Once you have a Fact
 
 ---
 
-## Faction Elimination
+## Faction Respawn
 
-If a Faction ever reaches 0 territories, it is eliminated:
-- Its guiding Spirit is ejected and becomes Vagrant immediately.
-- Its Worship is cleared.
-- Any active Wars involving it are cancelled.
+If a Faction ever reaches 0 territories, at the end of that turn:
+- It loses all of its Gold.
+- It gains a new hex anywhere on the game board. If it is Guided, its Spirit chooses which neutral hex it reappears on. Otherwise, a random neutral hex is chosen.
 
-Eliminated Factions skip all phases from that point onward.
+The Faction continues to participate in all phases normally from its new position.

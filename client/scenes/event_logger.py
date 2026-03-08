@@ -161,9 +161,18 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
         fname = faction_full_name(event["faction"])
         event_log.append(f"{fname} now Worships {name} (was {old_name})")
 
-    elif etype == "faction_eliminated":
+    elif etype == "faction_respawning":
         fname = faction_full_name(event["faction"])
-        event_log.append(f"{fname} has been ELIMINATED!")
+        gold_lost = event.get("gold_lost", 0)
+        event_log.append(f"{fname} lost all territory! Lost {gold_lost} gold — choosing where to reappear.")
+
+    elif etype == "faction_respawned":
+        fname = faction_full_name(event["faction"])
+        h = event.get("hex")
+        if h:
+            event_log.append(f"{fname} reappeared at ({h['q']}, {h['r']}).")
+        else:
+            event_log.append(f"{fname} reappeared.")
 
     elif etype == "war_ended":
         fa_id = event.get("faction_a")
