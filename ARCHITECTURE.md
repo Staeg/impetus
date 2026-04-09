@@ -1,433 +1,251 @@
-# Impetus - Architecture
+# Impetus Architecture
 
-This document describes the technical architecture for Impetus, a multiplayer turn-based strategy game built with PyGame. It serves as the implementation guide and orientation reference for development.
+This document reflects the current code layout and runtime behavior of Impetus.
 
-## High-Level Overview
+## Overview
 
-Impetus uses a **client-server model** with an **authoritative server**. All game logic runs on the server; clients render state and send player inputs. This prevents cheating and keeps game state consistent across players.
+Impetus uses an authoritative client-server architecture:
 
-```
-┌──────────┐  WebSocket  ┌──────────┐  WebSocket  ┌──────────┐
-│  Client   │◄──────────►│  Server  │◄──────────►│  Client   │
-│ (PyGame)  │            │ (Python) │            │ (PyGame)  │
-└──────────┘             └──────────┘             └──────────┘
-      ▲                        ▲                        ▲
-  Rendering              Game Logic                Rendering
-  Input                  State Machine             Input
-  Audio                  Validation                Audio
-```
+- `server/` owns game rules, turn sequencing, resolution, and validation.
+- `client/` owns rendering, local interaction, animations, menus, and transport adapters.
+- `shared/` defines protocol strings, enums, serializable models, and hex math used by both sides.
 
-## Project Structure
+The client is not the source of truth for gameplay state. It displays server snapshots, stages local selections, and replays `phase_result` events into animation and UI systems.
 
-```
+## Top-level layout
+
+```text
 impetus/
-├── main.py                     # Entry point - launches client or server via CLI args
-├── requirements.txt
-├── ARCHITECTURE.md
-├── Impetus v5.md               # Game design document
-├── Impetus v5 technical.md     # Technical game rules
-│
-├── server/                     # Authoritative game server
-│   ├── __init__.py
-│   ├── server.py               # WebSocket server, lobby/room management
-│   ├── game_state.py           # Core game state machine and turn resolution
-│   ├── hex_map.py              # Hex grid generation, adjacency, pathfinding
-│   ├── faction.py              # Faction model (gold, territories, agenda pool, modifiers)
-│   ├── spirit.py               # Spirit model (influence, worship, idols, VP)
-│   ├── war.py                  # War eruption tracking, ripening, resolution
-│   ├── agenda.py               # Agenda card system and resolution logic
-│   └── scoring.py              # Victory point calculation per phase
-│
-├── client/                     # PyGame client
-│   ├── __init__.py
-│   ├── app.py                  # Main loop, scene manager, event dispatch
-│   ├── network.py              # WebSocket client, message queue, reconnection
-│   ├── scenes/                 # Game screens (one active at a time)
-│   │   ├── __init__.py
-│   │   ├── menu.py             # Main menu, host/join options
-│   │   ├── lobby.py            # Pre-game lobby, player list, ready state
-│   │   ├── game_scene.py       # Primary gameplay scene (hex map, UI, phases)
-│   │   └── results.py          # End-of-game scoreboard
-│   ├── renderer/               # All drawing code, stateless where possible
-│   │   ├── __init__.py
-│   │   ├── hex_renderer.py     # Hex grid drawing, territory coloring, borders
-│   │   ├── ui_renderer.py      # HUD, cards, faction info panels, phase indicators
-│   │   └── animation.py        # Tweens, transitions, war/expand visual effects
-│   └── input_handler.py        # Mouse/keyboard mapping, hex picking, UI interaction
-│
-├── shared/                     # Code shared between client and server
-│   ├── __init__.py
-│   ├── constants.py            # Game constants (map size, faction colors, VP thresholds)
-│   ├── models.py               # Serializable data classes for game entities
-│   ├── protocol.py             # Message type definitions and serialization
-│   └── hex_utils.py            # Hex math (axial coords, distance, neighbors, rings)
-│
-├── assets/                     # Game assets
-│   ├── fonts/
-│   ├── images/
-│   └── sounds/
-│
-└── tests/                      # Test suite mirroring src structure
-    ├── test_hex_map.py
-    ├── test_game_state.py
-    ├── test_agenda.py
-    ├── test_war.py
-    ├── test_scoring.py
-    └── test_protocol.py
+|-- main.py
+|-- AGENTS.md
+|-- ARCHITECTURE.md
+|-- graphics/
+|-- client/
+|-- server/
+|-- shared/
+`-- tests/
 ```
 
-## Core Systems
+### Key directories
+
+- `graphics/`
+  Agenda and UI art loaded by the client. Manifest-backed agenda assets are resolved from here.
+- `client/`
+  PyGame application, scenes, rendering helpers, local/replay transport, settings, tutorial flow.
+- `server/`
+  WebSocket server, game-state machine, resolution systems, AI helpers, prompt helpers for pending choices.
+- `shared/`
+  Constants, protocol strings, dataclasses, and hex-coordinate utilities.
+- `tests/`
+  Server-heavy tests plus protocol/model coverage.
 
-### 1. Hex Grid (`shared/hex_utils.py`, `server/hex_map.py`)
+## Entry points
 
-Uses **axial coordinates** (q, r) for hex math. This is the standard approach for hex grids - it makes neighbor calculation, distance, and ring generation trivial with simple arithmetic.
+`main.py` supports four runtime modes:
 
-```
-Axial coordinate system (flat-top hexagons):
+- `python main.py`
+- `python main.py client <host> <port>`
+- `python main.py server <host> <port>`
+- `python main.py replay <path-to-jsonl>`
 
-        (0,-2)  (1,-2)
-     (-1,-1) (0,-1) (1,-1)
-  (-2,0) (-1,0) (0,0) (1,0) (2,0)
-     (-1,1) (0,1)  (1,1)
-        (0,2)  (-1,2)
-```
+Replay mode feeds previously recorded inbound network traffic into the real client for debugging animation and UI behavior.
 
-- `shared/hex_utils.py` - Pure math: coordinate conversions (axial ↔ pixel ↔ cube), neighbor directions, distance, line drawing, ring/spiral iteration. Used by both client (for click-to-hex picking) and server.
-- `server/hex_map.py` - Game-specific map state: generates the side-5 hex grid, tracks ownership (faction or neutral), idol placement per hex, and provides queries like "neutral hexes reachable by faction X" or "border hexes between factions X and Y."
+## Client architecture
 
-The six factions start on the six hexes surrounding center (0,0). Center is empty/neutral. All other hexes start neutral. Starting positions are randomized each game. During setup, each faction receives habitat-based starting Change modifiers (see table below), then a single autopilot turn is played where all factions draw and resolve a random agenda card without player input.
+### App shell
 
-**Habitat starting Change modifiers:**
+`client/app.py` owns:
 
-| Habitat  | Starting Modifiers        |
-|----------|---------------------------|
-| Mountain | Trade ×1, Steal ×1        |
-| Mesa     | Trade ×2                  |
-| Sand     | Steal ×1, Expand ×1       |
-| Plains   | Expand ×2                 |
-| River    | Trade ×1, Expand ×1       |
-| Jungle   | Steal ×2                  |
+- PyGame initialization
+- the scene registry
+- the main update/render loop
+- inbound network dispatch
+- optional replay recording through `IMPETUS_REPLAY_LOG`
+
+Scene transitions are simple and explicit:
+
+- `MenuScene`
+- `LobbyScene`
+- `GameScene`
+- `ResultsScene`
+- `SettingsScene`
 
-### 2. Game State Machine (`server/game_state.py`)
+### Transport layer
+
+The client can run against three transport paths:
 
-The game progresses through a fixed sequence of phases each turn. The state machine drives the entire flow.
+- `client/network.py`
+  Real WebSocket transport on a background thread
+- `client/local_transport.py`
+  In-process server for local/single-player verification using the real server code
+- `client/replay.py`
+  Read-only transport that replays recorded inbound messages
 
-```
-LOBBY ──(setup runs here)──► VAGRANT_PHASE → AGENDA_PHASE → WAR_PHASE → SCORING → CLEANUP ─┐
-                                   ▲                                                        │
-                                   └────────────────────────────────────────────────────────┘
-                                                  (loop until 100 VP)
-```
+### Gameplay scene structure
 
-> **Note:** `Phase.SETUP` exists in the enum but the game never transitions into it. Setup logic (habitat modifiers + one automated turn) runs at the end of the LOBBY phase before the first VAGRANT_PHASE begins.
+`client/scenes/game_scene.py` is the main gameplay shell. It still coordinates most gameplay presentation, but the architecture is split into smaller responsibilities:
 
-Each phase:
-1. **Waits** for required player inputs (if any).
-2. **Validates** submitted actions.
-3. **Resolves** the phase logic.
-4. **Broadcasts** results to all clients.
-5. **Transitions** to the next phase.
+- `client/scenes/game_scene.py`
+  Core scene state, high-level event routing, network handling, rendering orchestration
+- `client/scenes/game_phase_controller.py`
+  Phase/sub-phase UI setup and submission logic
+- `client/scenes/animation_orchestrator.py`
+  Translates server events into agenda/effect animations
+- `client/scenes/change_tracker.py`
+  Tracks per-turn faction deltas for the faction panel
+- `client/scenes/event_logger.py`
+  Event log formatting helpers
 
-Phase details:
+### Input boundaries
 
-| Phase | Player Input Required | Resolution |
-|---|---|---|
-| VAGRANT_PHASE | Vagrant spirits choose: guide a faction AND/OR place an idol (must do both if both available). Cannot guide a faction that Worships them. One idol per vagrant stint. | Simultaneous reveal. Contested guidance fails. Idols placed. Influence set to 3 on success. Worship checked. |
-| AGENDA_PHASE | Guiding spirits choose 1 agenda from drawn hand | Simultaneous reveal. Non-guided factions draw randomly. Resolve in order: Trade → Steal → Expand → Change. Eject 0-influence spirits (they choose agenda to add). Worship checked. |
-| WAR_PHASE | None (dice rolls are server-side), unless guided spirits need to choose spoils cards or a respawn hex | Resolve ripe wars first: roll + power. Losers lose gold, winners gain gold + spoils agenda (guided spirits draw 1+influence spoils cards and choose). Then ripen new wars (select battlegrounds). Spoils resolved in agenda order. Check for respawns: factions with 0 territories lose all gold and gain a new hex (guided spirits choose, `respawn_choice` sub-phase). |
-| SCORING | None | Calculate VP per spirit based on idols in factions where they have Worship. Check for 100 VP winner. |
-| CLEANUP | None | Clear `played_agenda_this_turn` on each faction (no cards to return since the deck is a pool sampled with replacement). Advance turn counter. |
+Input is split into layers:
 
-The `GameState` object holds all mutable game data: the hex map, all factions, all spirits, current phase, pending wars, and the turn counter. It exposes methods like `submit_action(spirit_id, action)` and `resolve_current_phase()`.
+- `client/input_handler.py`
+  Camera panning and screen/world/hex coordinate conversion
+- `client/input_actions.py`
+  Semantic gameplay action mapping from raw PyGame events
+- `client/scenes/game_scene.py`
+  Consumes those actions in the current phase/sub-phase context
 
-**Guidance cooldown:** If two or more spirits contest the same faction in the same Vagrant phase (all fail to guide), every contesting spirit is blocked from targeting that faction in the *next* Vagrant phase. Tracked in `guidance_cooldowns: dict[spirit_id, set[faction_id]]`; cleared at the start of each Vagrant phase.
+This keeps camera math separate from gameplay intent and makes tutorial/spectator/input-gating logic easier to extend.
 
-### 3. Faction Model (`server/faction.py`)
+### Rendering boundaries
 
-Each faction tracks:
-- `name` and `color` (Mountain/red, Mesa/orange, Sand/yellow, Plains/green, River/blue, Jungle/purple)
-- `gold: int` (starts at 0, minimum 0 - gold cannot go negative)
-- `territories: set[HexCoord]` (starts with 1 hex)
-- `agenda_pool: list[AgendaCard]` (starts with 1 of each: Steal, Trade, Expand, Change; cards are sampled with replacement via `random.choices`, never consumed, so drawn hands can contain duplicates; ejection replaces one card type with another, keeping pool size constant)
-- `change_modifiers: dict[ChangeModifierTarget, int]` (accumulated Change upgrades per agenda type)
-- `regard: dict[FactionId, int]` (bilateral regard with other factions, starts at 0)
-- `guiding_spirit: Optional[SpiritId]`
-- `worship_spirit: Optional[SpiritId]` (the spirit whose Worship this faction holds)
-- (no `eliminated` field — factions always persist; losing all territories triggers a respawn)
+Rendering responsibilities are divided as follows:
 
-Neighbors are determined dynamically: two factions are neighbors if any of their territories are adjacent on the hex grid.
+- `client/renderer/hex_renderer.py`
+  Hex-map drawing, map hit testing, ownership highlights
+- `client/renderer/ui_renderer.py`
+  HUD, faction panels, cards, labels, and many render-time rect registrations
+- `client/renderer/animation.py`
+  Low-level animation primitives and timing
+- `client/renderer/popup_manager.py`
+  Pinned and hover tooltip layout/interaction
+- `client/renderer/assets.py`
+  Agenda image loading and scaled/composite caches
+- `client/renderer/asset_manifest.py`
+  Stable asset keys and path resolution
 
-When a spirit is ejected (0 influence), they choose one card type to remove and one to add via `replace_agenda_card()`, keeping the pool size constant.
+### Asset policy
 
-A faction with 0 territories is not eliminated — instead it respawns. It loses all Gold and gains a new hex anywhere on the board. If guided, its Spirit chooses the hex (`respawn_choice` sub-phase); otherwise the server picks a random neutral hex.
+The client no longer assumes arbitrary filenames scattered through render code. Agenda art is keyed through a manifest in `client/renderer/asset_manifest.py`, then loaded in `client/renderer/assets.py`.
 
-### 4. Spirit Model (`server/spirit.py`)
+Current shipped art is resolved from `graphics/`.
 
-Each spirit (player) tracks:
-- `spirit_id: str`
-- `influence: int` (0-3, only meaningful while guiding)
-- `is_vagrant: bool`
-- `guided_faction: Optional[FactionId]`
-- `has_placed_idol_as_vagrant: bool` (limits one idol per vagrant stint, resets on guide/become vagrant)
-- `idols: list[Idol]` (each idol has a type and hex location)
-- `victory_points: int`
+## Server architecture
 
-### 5. Agenda System (`server/agenda.py`)
+### Core rule ownership
 
-Agenda resolution is the heart of the game. Each agenda type is resolved as a discrete step, but all factions playing the same agenda resolve **simultaneously** within that step.
+The server owns:
 
-Resolution order: Trade → Steal → Expand → Change.
-
-Simultaneous resolution matters most for Steal: if A and B are neighbors and both Steal, neither takes gold from the other (both had their gold reduced "at the same time"), but regard drops by -2 between them.
-
-Trade also grants bilateral regard between co-traders: each trading faction gains `1 + trade_modifier` regard with every other trading faction.
-
-The Change modifier system is cumulative. A faction's Change modifiers permanently boost subsequent plays of that agenda type.
+- phase transitions
+- validation of all player submissions
+- simultaneous agenda resolution
+- war creation and resolution
+- scoring
+- secret information boundaries
 
-**Agenda phase sub-phase sequencing:** Resolution does not begin immediately after choices are revealed. The server first collects interactive sub-choices from guided spirits before running `resolve_agendas()`:
+Important files:
 
-1. Reveal all agenda choices simultaneously (guided choices + random draws for unguided factions).
-2. Guided spirits playing **Change** receive a `change_choice` sub-phase (draw modifier cards, pick one). All Change picks are collected before continuing.
-3. Guided spirits playing **Expand** who can afford it and have valid hexes receive an `expand_choice` sub-phase (list of reachable neutral hexes, pick one). All Expand picks are collected before continuing.
-4. With all interactive picks in hand, `resolve_agendas()` runs in the standard order (Trade → Steal → Expand → Change). Guided Expand choices use the pre-submitted hexes; contest detection runs across all Expand factions simultaneously.
+- `server/game_state.py`
+  Authoritative game state, turn flow, pending-choice state, snapshots
+- `server/agenda.py`
+  Agenda resolution and simultaneous effects
+- `server/war.py`
+  War data and war resolution helpers
+- `server/scoring.py`
+  VP computation
+- `server/hex_map.py`
+  Game-specific board state and adjacency queries
+- `server/faction.py`
+  Faction model and per-turn faction state
+- `server/spirit.py`
+  Spirit/player model
 
-Spoils of War agendas are collected and resolved in batch. After all wars are resolved, all spoils draws happen first: guided spirits draw 1 + influence spoils cards each, while non-guided factions auto-draw. Guided spirits submit all their war spoils choices at once (a list of card indices, one per war won). Non-guided auto-choices wait for all guided spirits to submit. Once all choices are in, all spoils resolve simultaneously via `finalize_all_spoils()` in the standard agenda order (Trade → Steal → Expand → Change). If two factions target the same hex via spoils Expand, neither gets it (contested — both receive the `expand_failed` gold bonus instead). If a chosen spoils card is Change, a follow-up modifier sub-choice is triggered (same batched pattern).
+### Network orchestration
 
-### 6. War System (`server/war.py`)
+`server/server.py` owns room management and the transport-facing game loop:
 
-Wars have a two-turn lifecycle:
-1. **Eruption**: Triggered during Steal resolution when regard hits -2 or lower. War is created in "pending" state.
-2. **Resolution**: At the start of the War Phase, all ripe wars from the *previous* turn are resolved **simultaneously**. Territory counts are snapshotted before any war resolves, and all wars use the same pre-resolution power values (number of territories). Each side rolls 1d6 + power. Higher total wins. `War.resolve()` takes pre-computed power values and returns a result dict without side effects. Gold changes from all wars are calculated as net gains/losses first, then applied simultaneously after all wars are resolved. Winners draw spoils (see Spoils section below).
-3. **Ripening**: After resolution, pending wars become ripe. A random border hex pair between the two factions is chosen as the battleground.
+- player join/reconnect
+- ready/start flow
+- per-room submission wakeups
+- broadcasting snapshots and events
+- AI auto-submission
 
-Multiple wars can exist simultaneously. A faction can be involved in multiple wars in the same turn.
+Pending choice prompting is partially de-duplicated through `server/pending_choices.py`, which provides:
 
-### 7. Scoring System (`server/scoring.py`)
+- `PendingChoicePrompt`
+- `send_choice_prompts(...)`
+- `broadcast_waiting_for(...)`
 
-After each turn, for each faction with a spirit's Worship:
-- Count idols in that faction's territory (all idols, regardless of which spirit placed them)
-- Per Battle Idol: +5 VP for each war won this turn
-- Per Affluence Idol: +2 VP for each gold gained this turn
-- Per Spread Idol: +5 VP for each new territory gained this turn
-- Sum and add to the spirit's VP (no flooring — VP values are integers)
+This helper layer centralizes the common `phase_start` + `waiting_for` pattern used by expand, change, ejection, spoils, and respawn flows.
 
-Tracking "gold gained this turn" and "territories gained this turn" requires the game state to record deltas during resolution, not just final values.
+## Phase model
 
-## Networking
+### Main phases
 
-### Protocol (`shared/protocol.py`)
+The game loop runs through:
 
-All messages are JSON objects over WebSocket with a `type` field and a `payload` field:
+`LOBBY -> VAGRANT_PHASE -> AGENDA_PHASE -> WAR_PHASE -> SCORING -> CLEANUP`
 
-```json
-{"type": "submit_action", "payload": {"action": "guide", "target": "plains"}}
-{"type": "phase_result", "payload": {"phase": "agenda", "events": [...]}}
-```
+`Phase.SETUP` exists as an enum value but setup does not run as a standalone phase. The automated opening turn is performed during startup before players begin turn 2 in `VAGRANT_PHASE`.
 
-Message types fall into two categories:
+### Interactive sub-phases
 
-**Client → Server:**
-| Type | When | Payload |
-|---|---|---|
-| `join_game` | Lobby | `{player_name}` |
-| `ready` | Lobby | `{}` |
-| `submit_vagrant_action` | Vagrant phase | `{guide_target, idol_type, idol_q, idol_r}` (guide faction AND/OR place idol) |
-| `submit_agenda_choice` | Agenda phase | `{agenda_index}` (index into drawn hand) |
-| `submit_change_choice` | Agenda/change_choice sub-phase | `{card_index}` (index into drawn change modifier cards) |
-| `submit_expand_choice` | Agenda/expand_choice sub-phase | `{q, r}` (chosen neutral hex to expand into) |
-| `submit_ejection_agenda` | Agenda/ejection_choice sub-phase | `{remove_type, add_type}` (card type to remove and add to faction pool) |
-| `submit_battleground_choice` | War/battleground_choice sub-phase | `{choices: [{war_id, pair_index}]}` (full mode) or `{choices: [{war_id, hex: {q,r}}]}` (enemy_side mode) |
-| `submit_respawn_choice` | War/respawn_choice sub-phase | `{q, r}` (chosen neutral hex for the faction to reappear on) |
-| `submit_spoils_choice` | War/spoils_choice sub-phase | `{card_indices}` (list of indices, one per war won, into each drawn spoils hand) |
-| `submit_spoils_change_choice` | War/spoils_change_choice sub-phase | `{card_index}` (index into drawn change modifier cards) |
+Interactive sub-phases are protocol strings, not `Phase` enum values:
 
-**Server → Client:**
-| Type | When | Payload |
-|---|---|---|
-| `lobby_state` | Lobby updates | `{players, ready_states}` |
-| `game_start` | Game begins | `{full_initial_state}` |
-| `phase_start` | Each main phase or sub-phase begins | `{phase, your_options}` — see sub-phase payload table below |
-| `waiting_for` | Player submits | `{players_remaining}` |
-| `phase_result` | Phase resolves | `{events[], updated_state}` |
-| `game_over` | 100 VP reached | `{winner, final_scores}` |
-| `error` | Invalid action | `{message}` |
+- `change_choice`
+- `ejection_choice`
+- `expand_choice`
+- `winner_choice`
+- `spoils_choice`
+- `spoils_change_choice`
+- `spoils_expand_choice`
+- `respawn_choice`
 
-**`phase_start` payload fields by phase/sub-phase:**
+The client treats these the same way as main phases for UI setup and submission.
 
-| Phase / Sub-phase | `your_options` fields |
-|---|---|
-| `VAGRANT_PHASE` | `available_factions` (list of guideable faction ids), `worship_blocked` (faction ids the spirit worships), `contested_blocked` (faction ids on guidance cooldown for this spirit), `neutral_hexes` (list of `{q,r}` for idol placement — any neutral hex on the map), `idol_types` (list of placeable idol type names), `can_place_idol` (bool), `can_guide` (bool) |
-| `AGENDA_PHASE` | `hand` (list of agenda card names drawn), `influence` (current influence, for display) |
-| `change_choice` | `cards` (list of Change modifier card descriptions drawn) |
-| `expand_choice` | `faction` (faction id), `hexes` (list of `{q,r}` reachable neutral hexes the spirit may expand into) |
-| `ejection_choice` | `faction` (faction id), `agenda_pool` (current list of card types in pool), `agenda_types` (list of all valid card type names) |
-| `battleground_choice` | `wars` (list of war configs; each has `war_id`, `mode` (`"full"` or `"enemy_side"`), `pairs` (full mode: list of `[{q,r},{q,r}]` adjacent hex pairs) or `hexes` (enemy_side mode: list of `{q,r}` from opposing faction's border)) |
-| `respawn_choice` | `faction` (faction id that lost all territory), `hexes` (list of `{q,r}` — all neutral hexes on the map) |
-| `spoils_choice` | `choices` (list of `{cards, loser}`, one entry per war won; `cards` is the drawn spoils hand for that war) |
-| `spoils_change_choice` | `cards` (list of Change modifier card descriptions, one per Change spoils drawn) |
-
-### Information Hiding
-
-The server must not leak secret information. During choice phases:
-- Each player only sees their own drawn cards.
-- `waiting_for` only reveals *which* players haven't submitted, not *what* others chose.
-- After simultaneous reveal, all choices are broadcast in `phase_result`.
-
-### Server Implementation (`server/server.py`)
-
-Uses the `websockets` library. Manages:
-- **Rooms**: Each game is a room with a unique code. Players join by code.
-- **Player sessions**: Maps WebSocket connections to spirit IDs. Handles disconnection/reconnection by holding a player's slot open for a timeout period.
-- **Game lifecycle**: Creates a `GameState` when all players ready up, drives the phase loop, and tears down when the game ends.
-
-A single server process can host multiple concurrent game rooms.
-
-### Client Networking (`client/network.py`)
-
-Runs the WebSocket connection on a **background thread** with a message queue. The PyGame main loop polls the queue each frame for incoming messages. Outgoing messages are sent directly from the main thread (WebSocket send is thread-safe in `websockets`).
-
-This avoids blocking the render loop on network I/O.
-
-```
-Main Thread (PyGame loop):          Network Thread:
-┌─────────────────────┐            ┌─────────────────────┐
-│ poll message queue   │◄───────── │ recv from server     │
-│ handle input         │            │ put in queue         │
-│ update scene         │            │                     │
-│ render               │            │                     │
-│ send actions ────────│──────────►│ (send is direct)     │
-└─────────────────────┘            └─────────────────────┘
-```
+## State and display lifecycle
 
-## Client Architecture
+When the client receives a `PHASE_RESULT`:
 
-### Scene System (`client/app.py`, `client/scenes/`)
+1. It snapshots display state for animation.
+2. It applies the final server snapshot to gameplay state.
+3. It logs the event stream sequentially.
+4. It drives the change tracker and animation orchestrator from those events.
 
-The client uses a simple **scene stack**. One scene is active at a time. Each scene implements:
-- `handle_event(event)` - Process PyGame events and network messages.
-- `update(dt)` - Tick logic and animations.
-- `render(screen)` - Draw to the screen.
+This means:
 
-Scenes: `MenuScene` → `LobbyScene` → `GameScene` → `ResultsScene`.
+- live client state is usually already at the post-resolution snapshot
+- animation/display code must use its own preserved pre-change data when needed
 
-### Game Scene (`client/scenes/game_scene.py`)
+The key display-state helpers live in `GameScene` and `FactionChangeTracker`.
 
-The main gameplay scene. Manages sub-states corresponding to server phases:
-- Displays the hex map, faction info panels, and phase-specific UI.
-- In input phases (Vagrant, Agenda choice), presents clickable options and sends the choice to the server.
-- In resolution phases (War, Scoring), plays back events from the server as animations.
+## Protocol
 
-### Hex Rendering (`client/renderer/hex_renderer.py`)
+Protocol strings live in `shared/protocol.py`.
 
-- Draws flat-top hexagons using polygon vertices computed from axial coords.
-- Each hex is colored by owning faction (or grey for neutral).
-- Idols are drawn as small icons within their hex.
-- War battlegrounds are highlighted.
-- Supports camera pan and zoom for the hex map viewport.
+Important groups:
 
-### UI Rendering (`client/renderer/ui_renderer.py`)
+- `C2S`
+  Client-to-server message names
+- `S2C`
+  Server-to-client message names
+- `SubPhase`
+  Interactive sub-phase identifiers
 
-- HUD: current phase, turn number, player VP totals.
-- Faction info panel: selected faction's gold, territories, regard, modifiers.
-- Card hand: drawn agenda cards during choice phases, clickable to select.
-- Event log: scrollable text log of resolved events.
+The wire format is JSON with `type` and `payload`.
 
-## Shared Data Models (`shared/models.py`)
+## Testing and debug strategy
 
-Serializable dataclasses used by both client and server. These are the canonical representations of game entities that cross the network boundary.
+- Server logic should be covered with `pytest` tests in `tests/`
+- Client rendering is still manually verified
+- `client/local_transport.py` is the preferred path for manual UI/gameplay verification because it exercises the real server
+- replay capture/playback exists to debug client behavior without a live session
 
-```python
-@dataclass
-class HexCoord:
-    q: int
-    r: int
+## Practical modification guidance
 
-@dataclass
-class Idol:
-    type: IdolType          # BATTLE, AFFLUENCE, SPREAD
-    position: HexCoord
-    owner_spirit: str
-
-@dataclass
-class FactionState:
-    faction_id: str
-    color: tuple[int, int, int]
-    gold: int
-    territories: list[HexCoord]
-    agenda_pool: list[AgendaCard]
-    change_modifiers: dict[str, int]
-    regard: dict[str, int]
-    guiding_spirit: str | None
-    worship_spirit: str | None
-
-@dataclass
-class SpiritState:
-    spirit_id: str
-    name: str
-    influence: int
-    is_vagrant: bool
-    guided_faction: str | None
-    idols: list[Idol]
-    victory_points: int
-
-@dataclass
-class WarState:
-    war_id: str
-    faction_a: str
-    faction_b: str
-    is_ripe: bool
-    battleground: tuple[HexCoord, HexCoord] | None
-```
-
-These are serialized to/from JSON for network transit. The server holds the full `GameState`; clients receive a filtered view of these models each phase.
-
-## Distribution (Steam / itch.io)
-
-### Packaging
-
-Use **PyInstaller** to bundle the client into a standalone executable (no Python installation required for players):
-
-```bash
-pyinstaller --onedir --windowed --name Impetus main.py
-```
-
-This produces a `dist/Impetus/` folder with the executable and all dependencies. Assets are bundled alongside it.
-
-### Server Hosting
-
-The game server runs separately from the client and is **not** bundled into the distributed build. It is deployed to a cloud host (a basic VPS or container service is sufficient for WebSocket workloads). Players connect to the server's public address.
-
-For development and local play, the client can launch a server subprocess on `localhost` when hosting a game.
-
-### Steam Integration
-
-For Steam distribution, integrate **Steamworks** via a Python binding (e.g., `steamworks` PyPI package) to support:
-- Steam authentication (verify player identity server-side)
-- Friends list and invites (invite friends to a game room)
-- Achievements
-- Rich presence (show current game state in Steam profile)
-
-This is an additive layer - the game functions without it, and the Steamworks integration is only active when launched through Steam.
-
-### itch.io
-
-itch.io distribution is simpler: upload the PyInstaller output as a zip. The itch.io app (Butler) can handle updates. No special SDK integration needed.
-
-## Testing Strategy
-
-- **Unit tests** for all server game logic (hex math, agenda resolution, war resolution, scoring). These are the most critical tests since the server is authoritative.
-- **Protocol tests** to verify message serialization/deserialization round-trips.
-- **Integration tests** that simulate a full game by driving the `GameState` through multiple turns with scripted inputs, asserting expected outcomes.
-- **No client rendering tests** - visual correctness is verified manually. Client logic is kept minimal (display state, send input) to reduce the testing surface.
-
-Run with: `python -m pytest tests/`
-
-## Dependencies
-
-| Package | Purpose |
-|---|---|
-| `pygame` | Client rendering, input, audio |
-| `websockets` | Client and server WebSocket communication |
-| `pytest` | Testing |
-
-Minimal dependency footprint. No game engine framework beyond PyGame - the game's turn-based nature and 2D hex rendering don't benefit from heavier engines.
+- For new gameplay UI, prefer adding logic to `game_phase_controller.py` rather than expanding `GameScene` directly.
+- For new interaction verbs, update `client/input_actions.py` before adding more raw PyGame branching.
+- For new pending server choices, prefer `server/pending_choices.py` helpers instead of hand-rolled message loops.
+- For new client art, add a stable manifest key first, then load from the manifest-backed loader.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import asyncio
+import os
 import sys
 import pygame
 from shared.constants import (
@@ -10,6 +11,7 @@ from shared.constants import (
 from shared.protocol import S2C
 from client.local_transport import LocalTransport
 from client.network import NetworkClient
+from client.replay import ReplayRecorder
 from client.scenes.menu import MenuScene
 from client.scenes.lobby import LobbyScene
 from client.scenes.game_scene import GameScene
@@ -21,7 +23,8 @@ from client.settings import load_settings, save_settings
 class App:
     """Main application: manages scenes, network, and the game loop."""
 
-    def __init__(self, server_host: str = DEFAULT_HOST, server_port: int = DEFAULT_PORT):
+    def __init__(self, server_host: str = DEFAULT_HOST, server_port: int = DEFAULT_PORT,
+                 network=None):
         pygame.init()
         settings = load_settings()
         self.fullscreen: bool = settings.get("fullscreen", False)
@@ -33,10 +36,12 @@ class App:
 
         self.server_host = server_host
         self.server_port = server_port
-        self.network = NetworkClient()
+        self.network = network or NetworkClient()
         self.my_spirit_id = ""
         self.local_transport: LocalTransport | None = None
         self.tutorial_mode: bool = False
+        replay_log = os.environ.get("IMPETUS_REPLAY_LOG")
+        self.replay_recorder = ReplayRecorder(replay_log) if replay_log else None
 
         self.scenes: dict = {}
         self.current_scene = None
@@ -124,6 +129,8 @@ class App:
     def _handle_network_message(self, msg_type: str, payload: dict):
         scene_name = type(self.current_scene).__name__ if self.current_scene else "None"
         print(f"[app] Message: {msg_type} -> {scene_name}")
+        if self.replay_recorder:
+            self.replay_recorder.record(msg_type, payload)
         # Handle scene transitions
         if msg_type == S2C.GAME_START:
             self.set_scene("game")

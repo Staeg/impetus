@@ -5,6 +5,7 @@ Usage:
     python main.py server              # Launch server on localhost:8765
     python main.py server 0.0.0.0 9000 # Launch server on custom host/port
     python main.py client host port    # Launch client connecting to custom host/port
+    python main.py replay path.jsonl   # Launch client against a recorded replay stream
 """
 
 import sys
@@ -37,6 +38,14 @@ async def main():
                     js.alert("Impetus error:\n" + tb[-800:])
                 except Exception:
                     pass
+    elif args[0] == "replay":
+        if len(args) < 2:
+            print(__doc__)
+            sys.exit(1)
+        from client.app import App
+        from client.replay import ReplayTransport
+        app = App(network=ReplayTransport(args[1]))
+        await app.run()
     elif args[0] == "server":
         from server.server import main as server_main
         host = args[1] if len(args) > 1 else "localhost"

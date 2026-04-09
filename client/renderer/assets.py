@@ -1,16 +1,19 @@
-"""Load and cache agenda card images from graphics/ folder."""
+"""Load and cache agenda card images from graphics/ via manifest keys."""
 
 from __future__ import annotations
-import os
-import sys
 import pygame
+from client.renderer.asset_manifest import (
+    AGENDA_GRAPHIC_KEYS,
+    resolve_graphic_path,
+    validate_graphics_manifest,
+)
 
 # Module-level caches: agenda name -> pygame.Surface
 agenda_images: dict[str, pygame.Surface] = {}        # 48x48 for map animations
 agenda_card_images: dict[str, pygame.Surface] = {}    # 70x70 for card faces
 agenda_ribbon_icons: dict[str, pygame.Surface] = {}   # 15x15 for ribbon pool grid
 
-AGENDA_NAMES = ["steal", "trade", "expand", "change"]
+AGENDA_NAMES = list(AGENDA_GRAPHIC_KEYS)
 
 _loaded = False
 
@@ -25,21 +28,16 @@ def load_assets():
         return
     _loaded = True
 
-    # Use _MEIPASS when running from a PyInstaller bundle, else resolve from source tree
-    if getattr(sys, '_MEIPASS', None):
-        base_dir = os.path.join(sys._MEIPASS, "graphics")
-    else:
-        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "graphics")
-        base_dir = os.path.normpath(base_dir)
+    for missing in validate_graphics_manifest():
+        print(f"[assets] WARNING: Missing manifest asset: {missing}")
 
     for name in AGENDA_NAMES:
-        filename = f"{name.title()}.png"
-        path = os.path.join(base_dir, filename)
-        if not os.path.exists(path):
+        path = resolve_graphic_path(name)
+        try:
+            raw = pygame.image.load(path)
+        except FileNotFoundError:
             print(f"[assets] WARNING: Missing agenda image: {path}")
             continue
-
-        raw = pygame.image.load(path)
         alpha_img = raw.convert_alpha()
 
         agenda_images[name] = pygame.transform.smoothscale(alpha_img, (48, 48))

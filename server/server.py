@@ -18,6 +18,11 @@ except ImportError:
 from shared.constants import Phase, AgendaType, VP_TO_WIN
 from shared.protocol import create_message, parse_message, C2S, S2C, SubPhase
 from server.game_state import GameState
+from server.pending_choices import (
+    PendingChoicePrompt,
+    broadcast_waiting_for,
+    send_choice_prompts,
+)
 from server import ai
 
 
@@ -410,6 +415,9 @@ class GameServer:
                     await self._broadcast_phase_result(room, events)
                     pending_list = room.game_state.spoils_pending.get(spirit_id)
                     if pending_list and any(p.stage == SubPhase.CHANGE_CHOICE for p in pending_list):
+                        ai_evts = await self._auto_resolve_ai_spoils(room)
+                        if ai_evts:
+                            await self._broadcast_phase_result(room, ai_evts)
                         change_pendings = [p for p in pending_list if p.stage == SubPhase.CHANGE_CHOICE]
                         change_options = [{"cards": [c.value for c in p.change_cards], "loser": p.loser}
                                           for p in change_pendings]
@@ -422,13 +430,22 @@ class GameServer:
                         await room.broadcast(create_message(S2C.WAITING_FOR,
                             {"players_remaining": waiting_for}))
                     elif pending_list and any(p.stage == SubPhase.SPOILS_EXPAND_CHOICE for p in pending_list):
+                        ai_evts = await self._auto_resolve_ai_spoils(room)
+                        if ai_evts:
+                            await self._broadcast_phase_result(room, ai_evts)
                         await self._send_spoils_expand_options(room, spirit_id, pending_list)
                     elif not room.game_state.spoils_pending:
                         await self._auto_resolve_phases(room)
                     else:
-                        waiting_for = list(room.game_state.spoils_pending.keys())
-                        await room.broadcast(create_message(S2C.WAITING_FOR,
-                            {"players_remaining": waiting_for}))
+                        ai_evts = await self._auto_resolve_ai_spoils(room)
+                        if ai_evts:
+                            await self._broadcast_phase_result(room, ai_evts)
+                        if not room.game_state.spoils_pending:
+                            await self._auto_resolve_phases(room)
+                        else:
+                            waiting_for = list(room.game_state.spoils_pending.keys())
+                            await room.broadcast(create_message(S2C.WAITING_FOR,
+                                {"players_remaining": waiting_for}))
 
         elif msg_type == C2S.SUBMIT_SPOILS_CHANGE_CHOICE:
             if room.game_state:
@@ -443,14 +460,23 @@ class GameServer:
                     await self._broadcast_phase_result(room, events)
                     pending_list = room.game_state.spoils_pending.get(spirit_id)
                     if pending_list and any(p.stage == SubPhase.SPOILS_EXPAND_CHOICE for p in pending_list):
+                        ai_evts = await self._auto_resolve_ai_spoils(room)
+                        if ai_evts:
+                            await self._broadcast_phase_result(room, ai_evts)
                         await self._send_spoils_expand_options(room, spirit_id, pending_list)
                     elif not room.game_state.spoils_pending:
                         await self._auto_resolve_phases(room)
                     else:
-                        waiting_for = list(room.game_state.spoils_pending.keys())
-                        await room.broadcast(create_message(S2C.WAITING_FOR, {
-                            "players_remaining": waiting_for,
-                        }))
+                        ai_evts = await self._auto_resolve_ai_spoils(room)
+                        if ai_evts:
+                            await self._broadcast_phase_result(room, ai_evts)
+                        if not room.game_state.spoils_pending:
+                            await self._auto_resolve_phases(room)
+                        else:
+                            waiting_for = list(room.game_state.spoils_pending.keys())
+                            await room.broadcast(create_message(S2C.WAITING_FOR, {
+                                "players_remaining": waiting_for,
+                            }))
 
         elif msg_type == C2S.SUBMIT_SPOILS_EXPAND_CHOICE:
             if room.game_state:
@@ -463,10 +489,16 @@ class GameServer:
                     if not room.game_state.spoils_pending:
                         await self._auto_resolve_phases(room)
                     else:
-                        waiting_for = list(room.game_state.spoils_pending.keys())
-                        await room.broadcast(create_message(S2C.WAITING_FOR, {
-                            "players_remaining": waiting_for,
-                        }))
+                        ai_evts = await self._auto_resolve_ai_spoils(room)
+                        if ai_evts:
+                            await self._broadcast_phase_result(room, ai_evts)
+                        if not room.game_state.spoils_pending:
+                            await self._auto_resolve_phases(room)
+                        else:
+                            waiting_for = list(room.game_state.spoils_pending.keys())
+                            await room.broadcast(create_message(S2C.WAITING_FOR, {
+                                "players_remaining": waiting_for,
+                            }))
 
         elif msg_type == C2S.SUBMIT_WINNER_CHOICE:
             if room.game_state:
@@ -610,9 +642,7 @@ class GameServer:
     async def _broadcast_waiting(self, room: GameRoom):
         gs = room.game_state
         remaining = gs.get_spirits_needing_input()
-        await room.broadcast(create_message(S2C.WAITING_FOR, {
-            "players_remaining": remaining,
-        }))
+        await broadcast_waiting_for(room, remaining)
 
     async def _handle_agenda_resolution(self, room: GameRoom):
         """Handle agenda phase after all inputs received: prepare expand/change choices first."""
@@ -637,20 +667,20 @@ class GameServer:
 
         if gs.has_pending_expand_choices():
             # Send expand_choice to each remaining human spirit
+            prompts = []
             for spirit_id, faction_id in gs.expand_pending.items():
                 reachable = gs.hex_map.get_reachable_neutral_hexes(faction_id)
-                await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
-                    "phase": SubPhase.EXPAND_CHOICE,
-                    "turn": gs.turn,
-                    "options": {
+                prompts.append(PendingChoicePrompt(
+                    spirit_id=spirit_id,
+                    phase=SubPhase.EXPAND_CHOICE,
+                    turn=gs.turn,
+                    options={
                         "faction": faction_id,
                         "hexes": [{"q": h[0], "r": h[1]} for h in sorted(reachable)],
                     },
-                }))
-            waiting_for = list(gs.expand_pending.keys())
-            await room.broadcast(create_message(S2C.WAITING_FOR, {
-                "players_remaining": waiting_for,
-            }))
+                ))
+            await send_choice_prompts(room, prompts)
+            await broadcast_waiting_for(room, list(gs.expand_pending.keys()))
             return
 
         # No expand choices pending — proceed to change choices
@@ -674,16 +704,17 @@ class GameServer:
 
         if gs.has_pending_change_choices():
             # Send change_choice to each remaining human spirit
-            for spirit_id, cards in gs.change_pending.items():
-                await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
-                    "phase": "change_choice",
-                    "turn": gs.turn,
-                    "options": {"cards": [c.value for c in cards]},
-                }))
-            waiting_for = list(gs.change_pending.keys())
-            await room.broadcast(create_message(S2C.WAITING_FOR, {
-                "players_remaining": waiting_for,
-            }))
+            prompts = [
+                PendingChoicePrompt(
+                    spirit_id=spirit_id,
+                    phase=SubPhase.CHANGE_CHOICE,
+                    turn=gs.turn,
+                    options={"cards": [c.value for c in cards]},
+                )
+                for spirit_id, cards in gs.change_pending.items()
+            ]
+            await send_choice_prompts(room, prompts)
+            await broadcast_waiting_for(room, list(gs.change_pending.keys()))
             return
 
         # All choices done — broadcast modifier events if any, then resolve
@@ -713,18 +744,20 @@ class GameServer:
         if not gs.respawn_pending:
             await self._auto_resolve_phases(room)
             return
+        prompts = []
         for spirit_id in list(gs.respawn_pending.keys()):
             neutral = [{"q": h[0], "r": h[1]} for h in sorted(gs.hex_map.get_neutral_hexes())]
-            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
-                "phase": SubPhase.RESPAWN_CHOICE,
-                "turn": gs.turn,
-                "options": {
+            prompts.append(PendingChoicePrompt(
+                spirit_id=spirit_id,
+                phase=SubPhase.RESPAWN_CHOICE,
+                turn=gs.turn,
+                options={
                     "faction": gs.respawn_pending[spirit_id],
                     "hexes": neutral,
                 },
-            }))
-        waiting_for = list(gs.respawn_pending.keys())
-        await room.broadcast(create_message(S2C.WAITING_FOR, {"players_remaining": waiting_for}))
+            ))
+        await send_choice_prompts(room, prompts)
+        await broadcast_waiting_for(room, list(gs.respawn_pending.keys()))
 
     async def _send_ejection_options(self, room: GameRoom):
         """Send ejection choice options to spirits that need them."""
@@ -748,37 +781,69 @@ class GameServer:
             return
 
         # Send to remaining human spirits
+        prompts = []
         for spirit_id, faction_id in gs.ejection_pending.items():
             faction = gs.factions[faction_id]
             agenda_pool = [c.agenda_type.value for c in faction.agenda_pool]
-            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
-                "phase": "ejection_choice",
-                "turn": gs.turn,
-                "options": {
+            prompts.append(PendingChoicePrompt(
+                spirit_id=spirit_id,
+                phase=SubPhase.EJECTION_CHOICE,
+                turn=gs.turn,
+                options={
                     "faction": faction_id,
                     "agenda_pool": agenda_pool,
                     "agenda_types": [at.value for at in AgendaType],
                 },
-            }))
-        waiting_for = list(gs.ejection_pending.keys())
-        await room.broadcast(create_message(S2C.WAITING_FOR, {
-            "players_remaining": waiting_for,
-        }))
+            ))
+        await send_choice_prompts(room, prompts)
+        await broadcast_waiting_for(room, list(gs.ejection_pending.keys()))
 
     async def _send_spoils_options(self, room: GameRoom):
         """Send spoils_choice phase_start to all human spirits with pending spoils."""
         gs = room.game_state
+        prompts = []
         for sid, pending_list in gs.spoils_pending.items():
             choices = [{"cards": [c.value for c in p.cards], "loser": p.loser}
                        for p in pending_list]
-            await room.send_to(sid, create_message(S2C.PHASE_START, {
-                "phase": SubPhase.SPOILS_CHOICE,
-                "turn": gs.turn,
-                "options": {"choices": choices},
-            }))
-        waiting_for = list(gs.spoils_pending.keys())
-        await room.broadcast(create_message(S2C.WAITING_FOR,
-            {"players_remaining": waiting_for}))
+            prompts.append(PendingChoicePrompt(
+                spirit_id=sid,
+                phase=SubPhase.SPOILS_CHOICE,
+                turn=gs.turn,
+                options={"choices": choices},
+            ))
+        await send_choice_prompts(room, prompts)
+        await broadcast_waiting_for(room, list(gs.spoils_pending.keys()))
+
+    async def _auto_resolve_ai_spoils(self, room: GameRoom) -> list:
+        """Auto-resolve any AI spirits still in spoils_pending. Returns combined events."""
+        gs = room.game_state
+        ai_events = []
+        for sid in list(room.ai_spirit_ids):
+            if sid in gs.spoils_pending:
+                pending_list = gs.spoils_pending[sid]
+                err, evts = gs.submit_spoils_choice(sid, ai.get_ai_spoils_choice(pending_list))
+                if not err:
+                    ai_events.extend(evts)
+        for sid in list(room.ai_spirit_ids):
+            if sid in gs.spoils_pending:
+                pending_list = gs.spoils_pending[sid]
+                change_pendings = [p for p in pending_list if p.stage == SubPhase.CHANGE_CHOICE]
+                if change_pendings:
+                    err, evts = gs.submit_spoils_change_choice(
+                        sid, ai.get_ai_spoils_change_choice(change_pendings))
+                    if not err:
+                        ai_events.extend(evts)
+        for sid in list(room.ai_spirit_ids):
+            if sid in gs.spoils_pending:
+                pending_list = gs.spoils_pending[sid]
+                expand_pendings = [p for p in pending_list
+                                   if p.stage == SubPhase.SPOILS_EXPAND_CHOICE]
+                if expand_pendings:
+                    err, evts = gs.submit_spoils_expand_choice(
+                        sid, ai.get_ai_spoils_expand_choice(expand_pendings))
+                    if not err:
+                        ai_events.extend(evts)
+        return ai_events
 
     async def _send_spoils_expand_options(self, room: GameRoom, spirit_id: str, pending_list):
         """Send spoils_expand_choice to a spirit whose pending entry needs a target hex."""
@@ -791,14 +856,13 @@ class GameServer:
             }
             for p in expand_pendings
         ]
-        await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
-            "phase": SubPhase.SPOILS_EXPAND_CHOICE,
-            "turn": gs.turn,
-            "options": {"choices": choices},
-        }))
-        waiting_for = list(gs.spoils_pending.keys())
-        await room.broadcast(create_message(S2C.WAITING_FOR,
-            {"players_remaining": waiting_for}))
+        await send_choice_prompts(room, [PendingChoicePrompt(
+            spirit_id=spirit_id,
+            phase=SubPhase.SPOILS_EXPAND_CHOICE,
+            turn=gs.turn,
+            options={"choices": choices},
+        )])
+        await broadcast_waiting_for(room, list(gs.spoils_pending.keys()))
 
     async def _resolve_and_advance(self, room: GameRoom):
         """Resolve current phase and advance. Used for non-agenda phases."""

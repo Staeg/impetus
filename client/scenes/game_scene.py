@@ -24,8 +24,10 @@ import client.theme as theme
 from client.renderer.animation import AnimationManager, TextAnimation, IdolBeamAnimation
 from client.renderer.assets import load_assets, agenda_card_images
 from client.input_handler import InputHandler
+from client.input_actions import map_game_input
 from client.scenes.animation_orchestrator import AnimationOrchestrator
 from client.scenes.change_tracker import FactionChangeTracker
+from client.scenes.game_phase_controller import GamePhaseController
 from client.tutorial import TutorialManager
 from client.renderer.popup_manager import (
     PopupManager, HoverRegion, TooltipDescriptor, TooltipRegistry,
@@ -182,6 +184,7 @@ class GameScene:
         self.input_handler.camera_y = SCREEN_HEIGHT // 2 - _MAP_CENTER_Y
         self.orchestrator = AnimationOrchestrator(
             self.animation, self.hex_renderer, self.input_handler)
+        self.phase_controller = GamePhaseController(self)
         load_assets()
 
         self.game_state: dict = {}
@@ -482,8 +485,9 @@ class GameScene:
 
     def handle_event(self, event):
         self.input_handler.handle_camera_event(event)
+        action = map_game_input(event)
 
-        if event.type == pygame.MOUSEWHEEL:
+        if action and action.kind == "scroll_ui":
             _cur_event_log_h = _EVENT_LOG_H_ENLARGED if self.event_log_enlarged else _EVENT_LOG_H
             _cur_faction_panel_h = _FACTION_PANEL_MAX_H + _EVENT_LOG_H - _cur_event_log_h
             _event_log_y = 102 + _cur_faction_panel_h + 4 + _SPIRIT_PANEL_MAX_H + 4
@@ -492,9 +496,9 @@ class GameScene:
             if log_rect.collidepoint(mx, my):
                 visible_count = (_cur_event_log_h - 26) // 16
                 max_offset = max(0, len(self.event_log) - visible_count)
-                self.event_log_scroll_offset += event.y
+                self.event_log_scroll_offset += action.payload["y"]
                 self.event_log_scroll_offset = max(0, min(self.event_log_scroll_offset, max_offset))
-                self.event_log_h_scroll_offset += event.x * 16
+                self.event_log_h_scroll_offset += action.payload["x"] * 16
                 self.event_log_h_scroll_offset = max(0, self.event_log_h_scroll_offset)
             # Faction panel scroll
             fp_rect = self.ui_renderer.faction_panel_rect
@@ -502,79 +506,81 @@ class GameScene:
                 content_h = getattr(self.ui_renderer, '_faction_panel_content_h', 0)
                 max_scroll = max(0, content_h - _cur_faction_panel_h)
                 self.faction_panel_scroll_offset = max(0, min(
-                    self.faction_panel_scroll_offset - event.y * 16, max_scroll))
+                    self.faction_panel_scroll_offset - action.payload["y"] * 16, max_scroll))
 
-        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+        if action and action.kind == "cancel":
             if self.game_over:
                 self.app.set_scene("menu")
                 return
             self.popup_manager.handle_escape()
 
-        if event.type == pygame.MOUSEMOTION:
+        if action and action.kind == "hover":
+            mouse_pos = action.payload
             for btn in self.action_buttons + self.remove_buttons + self.faction_buttons + self.idol_buttons:
-                btn.update(event.pos)
+                btn.update(mouse_pos)
             if self.submit_button:
-                self.submit_button.update(event.pos)
+                self.submit_button.update(mouse_pos)
             # Title label hover tracking
             if self.guidance_title_rect:
-                self.guidance_title_hovered = self.guidance_title_rect.collidepoint(event.pos)
+                self.guidance_title_hovered = self.guidance_title_rect.collidepoint(mouse_pos)
             if self.idol_title_rect:
-                self.idol_title_hovered = self.idol_title_rect.collidepoint(event.pos)
+                self.idol_title_hovered = self.idol_title_rect.collidepoint(mouse_pos)
             # Idol hover detection on hex map
-            self._update_idol_hover(event.pos)
+            self._update_idol_hover(mouse_pos)
             # Agenda card/label/animation hover detection
-            self._update_agenda_hover(event.pos)
+            self._update_agenda_hover(mouse_pos)
             # Faction panel guided/worship hover detection
-            self._update_panel_hover(event.pos)
+            self._update_panel_hover(mouse_pos)
             # Spirit panel hover detection
-            self._update_spirit_panel_hover(event.pos)
+            self._update_spirit_panel_hover(mouse_pos)
             # Ejection title keyword hover detection
-            self._update_ejection_title_hover(event.pos)
+            self._update_ejection_title_hover(mouse_pos)
             # Agenda pool icon hover detection
             self.hovered_pool_faction = None
             for fid, rect in self.pool_icon_rects.items():
-                if rect.collidepoint(event.pos):
+                if rect.collidepoint(mouse_pos):
                     self.hovered_pool_faction = fid
                     break
             # Ribbon war indicator hover detection
             self.hovered_ribbon_war_fid = None
             for fid, rect in self.ribbon_war_rects.items():
-                if rect.collidepoint(event.pos):
+                if rect.collidepoint(mouse_pos):
                     self.hovered_ribbon_war_fid = fid
                     break
             # Ribbon worship sigil hover detection
             self.hovered_ribbon_worship_fid = None
             for fid, rect in self.ribbon_worship_rects.items():
-                if rect.collidepoint(event.pos):
+                if rect.collidepoint(mouse_pos):
                     self.hovered_ribbon_worship_fid = fid
                     break
             # Guided hex sigil hover detection
-            self._update_guided_hex_hover(event.pos)
+            self._update_guided_hex_hover(mouse_pos)
             # Popup keyword hover
-            self.popup_manager.update_hover(event.pos)
+            self.popup_manager.update_hover(mouse_pos)
             # Tutorial: notify when player hovers something with a tooltip
             if self.tutorial and (self.hovered_card_tooltip or self.hovered_idol
                                   or self.hovered_pool_faction or self.hovered_ribbon_war_fid):
                 self.tutorial.notify_action("tooltip_hovered", {})
 
-        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        if action and action.kind == "primary_click":
+            click_pos = action.payload
             # In-game menu: confirm exit dialog takes priority
             if self._ingame_menu_confirm_exit:
-                if self._ingame_confirm_yes_rect and self._ingame_confirm_yes_rect.collidepoint(event.pos):
+                if self._ingame_confirm_yes_rect and self._ingame_confirm_yes_rect.collidepoint(click_pos):
                     self.app.set_scene("menu")
                     return
-                if self._ingame_confirm_no_rect and self._ingame_confirm_no_rect.collidepoint(event.pos):
+                if self._ingame_confirm_no_rect and self._ingame_confirm_no_rect.collidepoint(click_pos):
                     self._ingame_menu_confirm_exit = False
                     return
                 return  # swallow all clicks while confirm is open
             # In-game menu button toggle
-            if self._ingame_menu_btn_rect and self._ingame_menu_btn_rect.collidepoint(event.pos):
+            if self._ingame_menu_btn_rect and self._ingame_menu_btn_rect.collidepoint(click_pos):
                 self._ingame_menu_open = not self._ingame_menu_open
                 return
             # In-game menu items (when open)
             if self._ingame_menu_open:
                 for label, rect in self._ingame_menu_item_rects:
-                    if rect.collidepoint(event.pos):
+                    if rect.collidepoint(click_pos):
                         self._ingame_menu_open = False
                         if label == "settings":
                             settings_scene = self.app.scenes.get("settings")
@@ -589,7 +595,7 @@ class GameScene:
 
             # Tutorial input gate: let tutorial consume/block clicks first
             if self.tutorial:
-                consumed = self.tutorial.handle_click(event.pos)
+                consumed = self.tutorial.handle_click(click_pos)
                 if self.tutorial.return_to_menu_requested:
                     self.app.set_scene("menu")
                     return
@@ -599,7 +605,7 @@ class GameScene:
                     return  # block all game input
             # Event log expand/collapse toggle (always accessible)
             if (self.ui_renderer.event_log_expand_rect and
-                    self.ui_renderer.event_log_expand_rect.collidepoint(event.pos)):
+                    self.ui_renderer.event_log_expand_rect.collidepoint(click_pos)):
                 self.event_log_enlarged = not self.event_log_enlarged
                 return
 
@@ -784,14 +790,14 @@ class GameScene:
             if hex_coord:
                 self._handle_hex_click(hex_coord)
 
-        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+        if action and action.kind == "secondary_click":
             if self.popup_manager.has_popups():
                 self.popup_manager.handle_right_click(
-                    event.pos, self.small_font, SCREEN_WIDTH)
+                    action.payload, self.small_font, SCREEN_WIDTH)
                 if self.tutorial:
                     self.tutorial.notify_action("tooltip_unfrozen", {})
             else:
-                pinned = self._try_pin_hovered_tooltip(event.pos)
+                pinned = self._try_pin_hovered_tooltip(action.payload)
                 if self.tutorial and pinned:
                     self.tutorial.notify_action("tooltip_frozen", {})
 
@@ -862,87 +868,7 @@ class GameScene:
                     self.tutorial.notify_action("faction_selected", {"faction": owner})
 
     def _submit_action(self):
-        if self.phase == Phase.VAGRANT_PHASE.value:
-            can_swell = self.phase_options.get("can_swell", False)
-            payload = {}
-            if can_swell:
-                payload["swell"] = True
-            if self.selected_faction:
-                payload["guide_target"] = self.selected_faction
-            if self.selected_idol_type and self.selected_hex:
-                payload["idol_type"] = self.selected_idol_type
-                payload["idol_q"] = self.selected_hex[0]
-                payload["idol_r"] = self.selected_hex[1]
-            if payload:
-                # Store previews before clearing
-                if self.selected_faction:
-                    self.preview_guidance = self.selected_faction
-                if self.selected_idol_type and self.selected_hex:
-                    self.preview_idol = (self.selected_idol_type,
-                                         self.selected_hex[0], self.selected_hex[1])
-                self.app.network.send(C2S.SUBMIT_VAGRANT_ACTION, payload)
-                self._clear_selection()
-                self.has_submitted = True
-                if self.tutorial:
-                    self.tutorial.notify_action("vagrant_submitted", {})
-        elif self.phase == Phase.AGENDA_PHASE.value:
-            if self.selected_agenda_index >= 0:
-                self.app.network.send(C2S.SUBMIT_AGENDA_CHOICE, {
-                    "agenda_index": self.selected_agenda_index,
-                })
-                self._clear_selection()
-                self.has_submitted = True
-                if self.tutorial:
-                    self.tutorial.notify_action("agenda_submitted", {})
-        elif self.phase == SubPhase.EJECTION_CHOICE:
-            if (
-                self.selected_ejection_remove_type
-                and self.selected_ejection_add_type
-                and self.selected_ejection_remove_type != self.selected_ejection_add_type
-            ):
-                self.app.network.send(C2S.SUBMIT_EJECTION_AGENDA, {
-                    "remove_type": self.selected_ejection_remove_type,
-                    "add_type": self.selected_ejection_add_type,
-                })
-                self._clear_selection()
-                self.ejection_pending = False
-                self.has_submitted = True
-                if self.tutorial:
-                    self.tutorial.notify_action("ejection_submitted", {})
-        elif self.phase == SubPhase.SPOILS_CHOICE:
-            if all(e.selected >= 0 for e in self.spoils_entries):
-                self.app.network.send(C2S.SUBMIT_SPOILS_CHOICE,
-                    {"card_indices": [e.selected for e in self.spoils_entries]})
-                self.spoils_entries = []
-                self.has_submitted = True
-        elif self.phase == SubPhase.SPOILS_CHANGE_CHOICE:
-            if all(e.selected >= 0 for e in self.spoils_change_entries):
-                self.app.network.send(C2S.SUBMIT_SPOILS_CHANGE_CHOICE,
-                    {"card_indices": [e.selected for e in self.spoils_change_entries]})
-                self.spoils_change_entries = []
-                self.has_submitted = True
-        elif self.phase == SubPhase.EXPAND_CHOICE:
-            if self.selected_hex:
-                q, r = self.selected_hex
-                self.app.network.send(C2S.SUBMIT_EXPAND_CHOICE, {"q": q, "r": r})
-                self.expand_choice_hexes = set()
-                self.expand_choice_faction = ""
-                self.selected_hex = None
-                self.has_submitted = True
-        elif self.phase == SubPhase.RESPAWN_CHOICE:
-            if self.selected_hex:
-                q, r = self.selected_hex
-                self.app.network.send(C2S.SUBMIT_RESPAWN_CHOICE, {"q": q, "r": r})
-                self.respawn_choice_hexes = set()
-                self.respawn_choice_faction = ""
-                self.selected_hex = None
-                self.has_submitted = True
-        elif self.phase == SubPhase.WINNER_CHOICE:
-            if len(self.winner_selections) >= len(self.winner_choice_wars):
-                self._do_submit_winner_choice()
-        elif self.phase == SubPhase.SPOILS_EXPAND_CHOICE:
-            if all(s is not None for s in self.spoils_expand_selections):
-                self._do_submit_spoils_expand_choice()
+        self.phase_controller.submit_current_phase()
 
     def _submit_card_choice(self, index: int, msg_type: str, card_attr: str):
         self.app.network.send(msg_type, {"card_index": index})
@@ -1201,137 +1127,25 @@ class GameScene:
         self.event_log.append(f"Error: {payload.get('message', '?')}")
 
     def _setup_change_choice_ui(self):
-        self.change_cards = self.phase_options.get("cards") or []
-        if self.tutorial:
-            my_spirit = self.spirits.get(self.app.my_spirit_id, {})
-            influence = my_spirit.get("influence", 0)
-            self.tutorial.notify_game_event("change_drawn", {
-                "influence": influence,
-                "card_count": len(self.change_cards),
-            })
+        self.phase_controller._setup_change_choice_ui()
 
     def _setup_spoils_choice_ui(self):
-        if self.tutorial:
-            self.tutorial.notify_game_event("guided_spoils_drawn", {})
-        choices = self.phase_options.get("choices", [])
-        if choices:
-            self.spoils_entries = [
-                SpoilsEntry(cards=c.get("cards", []), loser=c.get("loser", ""))
-                for c in choices
-            ]
-        else:
-            # Backwards compat: single-war format
-            cards = self.phase_options.get("cards", [])
-            loser = self.phase_options.get("loser", "")
-            self.spoils_entries = [SpoilsEntry(cards=cards, loser=loser)] if cards else []
-        self.spoils_display_index = 0
-        self.submit_button = Button(
-            pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
-            "Confirm", (60, 130, 60)
-        )
+        self.phase_controller._setup_spoils_choice_ui()
 
     def _setup_spoils_change_choice_ui(self):
-        choices = self.phase_options.get("choices", [])
-        if choices:
-            self.spoils_change_entries = [
-                SpoilsEntry(cards=c.get("cards", []), loser=c.get("loser", ""))
-                for c in choices
-            ]
-        else:
-            cards = self.phase_options.get("cards", [])
-            loser = self.phase_options.get("loser", "")
-            self.spoils_change_entries = [SpoilsEntry(cards=cards, loser=loser)] if cards else []
-        self.spoils_display_index = 0
-        self.submit_button = Button(
-            pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
-            "Confirm", (60, 130, 60)
-        )
+        self.phase_controller._setup_spoils_change_choice_ui()
 
     def _setup_ejection_choice_ui(self):
-        self.ejection_pending = True
-        self.ejection_faction = self.phase_options.get("faction", "")
-        self.ejection_pool = self.phase_options.get("agenda_pool", [])
-        self.selected_ejection_remove_type = None
-        self.selected_ejection_add_type = None
-        modifiers = self._get_faction_modifiers(self.ejection_faction)
-        btn_x, btn_w, btn_h, btn_gap = 20, 157, 36, 6
-        # Build remove buttons (one per unique type in the current pool) — vertical
-        y_remove = 300
-        self.remove_buttons = []
-        seen_types: list[str] = []
-        for at_str in self.ejection_pool:
-            if at_str not in seen_types:
-                seen_types.append(at_str)
-        for i, at_str in enumerate(seen_types):
-            tooltip = build_agenda_tooltip(at_str, modifiers)
-            btn = Button(
-                pygame.Rect(btn_x, y_remove + i * (btn_h + btn_gap), btn_w, btn_h),
-                at_str.title(), (110, 50, 50),
-                tooltip=tooltip,
-                tooltip_always=True,
-            )
-            self.remove_buttons.append(btn)
-        # Build add buttons (all agenda types) — vertical, below remove buttons
-        n_remove = len(seen_types)
-        y_add = y_remove + n_remove * (btn_h + btn_gap) + 28
-        self.action_buttons = []
-        for i, at in enumerate(AgendaType):
-            tooltip = build_agenda_tooltip(at.value, modifiers)
-            btn = Button(
-                pygame.Rect(btn_x, y_add + i * (btn_h + btn_gap), btn_w, btn_h),
-                at.value.title(), (80, 60, 130),
-                tooltip=tooltip,
-                tooltip_always=True,
-            )
-            self.action_buttons.append(btn)
-        self.submit_button = Button(
-            pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
-            "Confirm", (60, 130, 60)
-        )
+        self.phase_controller._setup_ejection_choice_ui()
 
     def _setup_expand_choice_ui(self):
-        """Set up state for the expand_choice sub-phase."""
-        hexes = self.phase_options.get("hexes", [])
-        self.expand_choice_hexes = {(h["q"], h["r"]) for h in hexes}
-        self.expand_choice_faction = self.phase_options.get("faction", "")
-        self.selected_hex = None
-        self.submit_button = Button(
-            pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
-            "Confirm", (60, 130, 60)
-        )
+        self.phase_controller._setup_expand_choice_ui()
 
     def _setup_respawn_choice_ui(self):
-        """Set up state for the respawn_choice sub-phase."""
-        hexes = self.phase_options.get("hexes", [])
-        self.respawn_choice_hexes = {(h["q"], h["r"]) for h in hexes}
-        self.respawn_choice_faction = self.phase_options.get("faction", "")
-        self.selected_hex = None
-        self.submit_button = Button(
-            pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
-            "Confirm", (60, 130, 60)
-        )
+        self.phase_controller._setup_respawn_choice_ui()
 
     def _setup_winner_choice_ui(self):
-        """Set up state for the winner_choice sub-phase."""
-        wars = self.phase_options.get("choices", [])
-        self.winner_choice_wars = wars
-        self.winner_selections = {}
-        self.winner_choice_buttons = []
-        # Build one pair of faction buttons per war
-        import pygame as _pg
-        btn_y = 200
-        for wc in wars:
-            fa = wc["faction_a"]
-            fb = wc["faction_b"]
-            rect_a = _pg.Rect(40, btn_y, 180, 44)
-            rect_b = _pg.Rect(240, btn_y, 180, 44)
-            self.winner_choice_buttons.append({"war_id": wc["war_id"], "faction": fa, "rect": rect_a})
-            self.winner_choice_buttons.append({"war_id": wc["war_id"], "faction": fb, "rect": rect_b})
-            btn_y += 60
-        self.submit_button = Button(
-            pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
-            "Confirm", (60, 130, 60)
-        )
+        self.phase_controller._setup_winner_choice_ui()
 
     def _do_submit_winner_choice(self):
         """Send winner choices to the server and reset state."""
@@ -1348,16 +1162,7 @@ class GameScene:
         self.has_submitted = True
 
     def _setup_spoils_expand_choice_ui(self):
-        """Set up state for the spoils_expand_choice sub-phase."""
-        choices = self.phase_options.get("choices", [])
-        self.spoils_expand_choices = choices
-        self.spoils_expand_display_index = 0
-        self.spoils_expand_selections = [None] * len(choices)
-        self._refresh_spoils_expand_hex_set()
-        self.submit_button = Button(
-            pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48),
-            "Confirm", (60, 130, 60)
-        )
+        self.phase_controller._setup_spoils_expand_choice_ui()
 
     def _refresh_spoils_expand_hex_set(self):
         """Rebuild the selectable hex set for the currently displayed expand choice."""
@@ -1383,40 +1188,9 @@ class GameScene:
 
     def _setup_phase_ui(self):
         """Build UI elements for the current phase."""
-        self._clear_selection()
-        self.has_submitted = False
-        action = self.phase_options.get("action", "none")
-        # Tutorial phase notifications (fired when UI is actually set up)
-        if self.tutorial:
-            if self.phase == Phase.VAGRANT_PHASE.value and action == "choose":
-                self.tutorial.notify_game_event("vagrant_phase_started", {
-                    "turn": self.turn,
-                })
-            elif self.phase == Phase.AGENDA_PHASE.value and action == "choose_agenda":
-                hand = self.phase_options.get("hand", [])
-                self.tutorial.notify_game_event("agenda_phase_started", {
-                    "turn": self.turn,
-                    "draw_count": len(hand),
-                })
-            elif self.phase == SubPhase.EJECTION_CHOICE:
-                self.tutorial.notify_game_event("ejection_phase_started", {
-                    "turn": self.turn,
-                })
+        self.phase_controller.setup_phase_ui()
 
-        _SUB_PHASE_SETUP = {
-            SubPhase.CHANGE_CHOICE:        self._setup_change_choice_ui,
-            SubPhase.SPOILS_CHOICE:        self._setup_spoils_choice_ui,
-            SubPhase.SPOILS_CHANGE_CHOICE: self._setup_spoils_change_choice_ui,
-            SubPhase.SPOILS_EXPAND_CHOICE: self._setup_spoils_expand_choice_ui,
-            SubPhase.WINNER_CHOICE:        self._setup_winner_choice_ui,
-            SubPhase.EJECTION_CHOICE:      self._setup_ejection_choice_ui,
-            SubPhase.EXPAND_CHOICE:        self._setup_expand_choice_ui,
-            SubPhase.RESPAWN_CHOICE:       self._setup_respawn_choice_ui,
-        }
-        if self.phase in _SUB_PHASE_SETUP:
-            _SUB_PHASE_SETUP[self.phase]()
-            return
-
+    def _setup_main_phase_ui(self, action: str):
         if self.phase == Phase.VAGRANT_PHASE.value and action == "choose":
             # Build faction buttons (left) and idol buttons (right)
             self._build_faction_buttons()
