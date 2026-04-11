@@ -6,7 +6,7 @@ Used by both client and server for network communication.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
-from shared.constants import IdolType, AgendaType, Phase, ChangeModifierTarget, FACTION_NAMES
+from shared.constants import IdolType, AgendaType, Phase, ChangeModifierTarget, FACTION_NAMES, Era
 
 
 @dataclass
@@ -83,6 +83,10 @@ class FactionState:
     guiding_spirit: Optional[str] = None
     worship_spirit: Optional[str] = None
     race: str = ""
+    guidance_step: str = ""
+    restrained_agenda: Optional[str] = None
+    queued_agendas: list[str] = field(default_factory=list)
+    shaping_effects: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -99,6 +103,10 @@ class FactionState:
             "guiding_spirit": self.guiding_spirit,
             "worship_spirit": self.worship_spirit,
             "race": self.race,
+            "guidance_step": self.guidance_step,
+            "restrained_agenda": self.restrained_agenda,
+            "queued_agendas": self.queued_agendas,
+            "shaping_effects": self.shaping_effects,
         }
 
     @staticmethod
@@ -113,6 +121,10 @@ class FactionState:
             guiding_spirit=d.get("guiding_spirit"),
             worship_spirit=d.get("worship_spirit"),
             race=d.get("race", ""),
+            guidance_step=d.get("guidance_step", ""),
+            restrained_agenda=d.get("restrained_agenda"),
+            queued_agendas=d.get("queued_agendas", []),
+            shaping_effects=d.get("shaping_effects", []),
         )
 
 
@@ -127,6 +139,7 @@ class SpiritState:
     victory_points: int = 0
     habitat_affinity: str = ""
     race_affinity: str = ""
+    adaptation_effects: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -139,6 +152,7 @@ class SpiritState:
             "victory_points": self.victory_points,
             "habitat_affinity": self.habitat_affinity,
             "race_affinity": self.race_affinity,
+            "adaptation_effects": self.adaptation_effects,
         }
 
     @staticmethod
@@ -153,6 +167,7 @@ class SpiritState:
             victory_points=d.get("victory_points", 0),
             habitat_affinity=d.get("habitat_affinity", ""),
             race_affinity=d.get("race_affinity", ""),
+            adaptation_effects=d.get("adaptation_effects", []),
         )
 
 
@@ -161,12 +176,22 @@ class WarState:
     war_id: str
     faction_a: str
     faction_b: str
+    battleground_a: Optional[HexCoord] = None
+    battleground_b: Optional[HexCoord] = None
+    resolve_turn: int = 0
+    declared_turn: int = 0
+    is_staged: bool = False
 
     def to_dict(self) -> dict:
         return {
             "war_id": self.war_id,
             "faction_a": self.faction_a,
             "faction_b": self.faction_b,
+            "battleground_a": self.battleground_a.to_dict() if self.battleground_a else None,
+            "battleground_b": self.battleground_b.to_dict() if self.battleground_b else None,
+            "resolve_turn": self.resolve_turn,
+            "declared_turn": self.declared_turn,
+            "is_staged": self.is_staged,
         }
 
     @staticmethod
@@ -175,6 +200,11 @@ class WarState:
             war_id=d["war_id"],
             faction_a=d["faction_a"],
             faction_b=d["faction_b"],
+            battleground_a=HexCoord.from_dict(d["battleground_a"]) if d.get("battleground_a") else None,
+            battleground_b=HexCoord.from_dict(d["battleground_b"]) if d.get("battleground_b") else None,
+            resolve_turn=d.get("resolve_turn", 0),
+            declared_turn=d.get("declared_turn", 0),
+            is_staged=d.get("is_staged", False),
         )
 
 
@@ -189,6 +219,8 @@ class GameStateSnapshot:
     all_idols: list[Idol]
     hex_ownership: dict[str, Optional[str]]  # "q,r" -> faction_id or None
     faction_order: list[str] = None
+    era: Era = Era.ERA_1
+    vp_target: int = 0
 
     def __post_init__(self):
         if self.faction_order is None:
@@ -204,6 +236,8 @@ class GameStateSnapshot:
             "all_idols": [i.to_dict() for i in self.all_idols],
             "hex_ownership": self.hex_ownership,
             "faction_order": self.faction_order,
+            "era": self.era.value,
+            "vp_target": self.vp_target,
         }
 
     @staticmethod
@@ -217,4 +251,6 @@ class GameStateSnapshot:
             all_idols=[Idol.from_dict(i) for i in d["all_idols"]],
             hex_ownership=d["hex_ownership"],
             faction_order=d.get("faction_order", list(FACTION_NAMES)),
+            era=Era(d.get("era", Era.ERA_1.value)),
+            vp_target=d.get("vp_target", 0),
         )

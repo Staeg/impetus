@@ -42,6 +42,19 @@ class HexMap:
                     reachable.add((nq, nr))
         return reachable
 
+    def get_expand_targets(self, faction_id: str, allow_enemy: bool = False) -> set[tuple[int, int]]:
+        """Return all hexes this faction may target with a normal Expand."""
+        targets = set(self.get_reachable_neutral_hexes(faction_id))
+        if not allow_enemy:
+            return targets
+        territories = self.get_faction_territories(faction_id)
+        for (q, r) in territories:
+            for nq, nr in hex_neighbors(q, r):
+                owner = self.ownership.get((nq, nr))
+                if owner is not None and owner != faction_id:
+                    targets.add((nq, nr))
+        return targets
+
     def get_border_hex_pairs(self, faction_a: str, faction_b: str) -> list[tuple[tuple[int, int], tuple[int, int]]]:
         """Return pairs of adjacent hexes where one belongs to faction_a and the other to faction_b."""
         terr_a = self.get_faction_territories(faction_a)

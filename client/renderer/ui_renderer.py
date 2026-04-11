@@ -230,7 +230,7 @@ def build_agenda_tooltip(agenda_type: str, modifiers: dict,
         "trade": (f"Trade\n+1 gold, +{1 + trade_mod} gold for every other Faction playing Trade this turn, "
                   f"+1 gold for every Faction playing Expand this turn.\n"
                   f"+{1 + trade_mod} Regard with each other Faction playing Trade (not Expand) this turn."),
-        "steal": f"Steal\n-{1 + steal_mod} Regard with and -{1 + steal_mod} gold to all neighbors. +1 gold for each gold lost. War erupts at -2 Regard.",
+        "steal": f"Steal\n-{1 + steal_mod} Regard with and -{1 + steal_mod} gold to all neighbors. +1 gold for each gold lost. War is declared at -2 Regard.",
         "expand": f"Expand\nSpend gold equal to territories{' -' + str(expand_mod) if expand_mod else ''} to claim a neutral hex. If unavailable or lacking gold, +{1 + expand_mod} gold instead. Idol hexes prioritized.",
         "change": "Change\nDraw a modifier card. If guided, draw extra cards equal to Influence and choose 1.",
     }
@@ -330,49 +330,61 @@ class UIRenderer:
         return self._title_font
 
     def draw_hud(self, surface: pygame.Surface, phase: str, turn: int,
-                 spirits: dict, my_spirit_id: str):
-        """Draw the top HUD bar: phase, turn, VP totals."""
-        bar_rect = pygame.Rect(0, 0, surface.get_width(), 40)
+                 spirits: dict, my_spirit_id: str, era: str = "era_1",
+                 vp_target: int = 0):
+        """Draw the top HUD bar: phase status on the left, VP entries on the right."""
+        bar_rect = pygame.Rect(0, 0, surface.get_width(), 44)
         pygame.draw.rect(surface, theme.BG_HUD, bar_rect)
-        pygame.draw.line(surface, theme.BORDER_PANEL, (0, 40), (surface.get_width(), 40))
+        pygame.draw.line(surface, theme.BORDER_PANEL, (0, 44), (surface.get_width(), 44))
 
-        phase_text = self.font.render(f"Turn {turn} | {phase.replace('_', ' ').title()}", True, theme.TEXT_HIGHLIGHT)
-        surface.blit(phase_text, (10, 10))
+        era_label = era.replace("_", " ").title()
+        phase_text = self.small_font.render(
+            f"Turn {turn} | {era_label} | {phase.replace('_', ' ').title()} | Goal {vp_target} VP",
+            True,
+            theme.TEXT_HIGHLIGHT,
+        )
+        surface.blit(phase_text, (10, 13))
 
         # Build spirit index map for sigil lookup (sorted for stability)
         spirit_index_map = {sid: i for i, sid in enumerate(sorted(spirits.keys()))}
 
         # VP display
-        x = 300
         self.vp_hover_rects.clear()
+        self.vp_positions.clear()
+        entries = []
         for sid, spirit in spirits.items():
             color = theme.TEXT_SPIRIT_NAME if sid == my_spirit_id else theme.TEXT_NORMAL
             name = spirit.get("name", sid[:6])
             vp = spirit.get("victory_points", 0)
-            faction_id = spirit.get("guided_faction")
+            name_surf = self.small_font.render(name, True, color)
+            vp_surf = self.small_font.render(
+                f"{vp:.1f}VP" if isinstance(vp, float) else f"{vp}VP",
+                True,
+                color,
+            )
+            entries.append((sid, name_surf, vp_surf))
 
             # Render name
-            entry_start_x = x
-            name_surf = self.small_font.render(name, True, color)
-            surface.blit(name_surf, (x, 12))
-            x += name_surf.get_width()
 
             # Render identity symbol (always, vagrant or guiding) — silver
-            sigil_r = 14
-            sigil_cx = x + 4 + sigil_r
-            draw_spirit_symbol(surface, sigil_cx, 20, sigil_r * 2,
+
+        right_x = surface.get_width() - 12
+        min_left = max(320, phase_text.get_width() + 34)
+        for sid, name_surf, vp_surf in reversed(entries):
+            sigil_r = 10
+            entry_w = name_surf.get_width() + 8 + sigil_r * 2 + 8 + vp_surf.get_width()
+            entry_start_x = right_x - entry_w
+            if entry_start_x < min_left:
+                break
+            surface.blit(name_surf, (entry_start_x, 12))
+            sigil_cx = entry_start_x + name_surf.get_width() + 8 + sigil_r
+            draw_spirit_symbol(surface, sigil_cx, 21, sigil_r * 2,
                                spirit_index_map.get(sid, 0))
-            x += sigil_r * 2 + 10  # left-pad(4) + diameter + right-pad(4)
-
-            # Render VP
-            self.vp_positions[sid] = (x, 12)
-            vp_surf = self.small_font.render(f": {vp}VP", True, color)
-            surface.blit(vp_surf, (x, 12))
-            x += vp_surf.get_width()
-
-            # Store hover rect covering name+sigil+VP (for click detection)
-            self.vp_hover_rects[sid] = pygame.Rect(entry_start_x, 4, x - entry_start_x, 28)
-            x += 20
+            vp_x = sigil_cx + sigil_r + 8
+            self.vp_positions[sid] = (vp_x, 12)
+            surface.blit(vp_surf, (vp_x, 12))
+            self.vp_hover_rects[sid] = pygame.Rect(entry_start_x, 6, entry_w, 28)
+            right_x = entry_start_x - 14
 
     def draw_faction_overview(self, surface: pygame.Surface, factions: dict,
                               faction_agendas: dict[str, str], wars=None,
@@ -1092,7 +1104,7 @@ class UIRenderer:
                 if battle_c:
                     idol_parts.append(f"Battle: {battle_c}")
                 if spread_c:
-                    idol_parts.append(f"Spread: {spread_c}")
+                    idol_parts.append(f"Sprawl: {spread_c}")
                 if affluence_c:
                     idol_parts.append(f"Affluence: {affluence_c}")
                 idol_text = ", ".join(idol_parts) if idol_parts else "no idols"

@@ -38,7 +38,8 @@ class LobbyScene:
         _START_Y    = SCREEN_HEIGHT - 98    # start game button
         _TIP_Y      = SCREEN_HEIGHT - 172   # tooltip tip line
         _VP_ROW_Y   = SCREEN_HEIGHT - 212   # VP to Win row
-        _AI_ROW_Y   = SCREEN_HEIGHT - 250   # AI Players row
+        _ERA_ROW_Y  = SCREEN_HEIGHT - 256   # Era selection row
+        _AI_ROW_Y   = SCREEN_HEIGHT - 300   # AI Players row
         # x positions for the ± spinner buttons — far enough from the centred label
         _SPIN_MINUS_X = _CX - 115   # right edge at _CX-87 (≥20 px clear of text)
         _SPIN_PLUS_X  = _CX + 87    # left  edge at _CX+87
@@ -68,6 +69,7 @@ class LobbyScene:
         # Store layout y-values for use in render
         self._tip_y    = _TIP_Y
         self._vp_row_y = _VP_ROW_Y
+        self._era_row_y = _ERA_ROW_Y
         self._ai_row_y = _AI_ROW_Y
 
         self.room_code = ""
@@ -77,11 +79,15 @@ class LobbyScene:
         self.host_spirit_id = ""
         self.vp_to_win = 100
         self.ai_player_count = 0
+        self.play_era1 = True
+        self.play_era2 = True
         self.all_ready = False
         self.error_message = ""
         self._tutorial_ready_sent = False
         self._tutorial_start_sent = False
         self._tip_phrase_rect = pygame.Rect(0, 0, 0, 0)
+        self.era1_checkbox_rect = pygame.Rect(_CX - 36, _ERA_ROW_Y + 22, 18, 18)
+        self.era2_checkbox_rect = pygame.Rect(_CX + 62, _ERA_ROW_Y + 22, 18, 18)
         self.popup_manager = PopupManager()
         # Hold-to-repeat state for VP ± buttons
         self._vp_held = None        # 'minus' | 'plus' | None
@@ -157,6 +163,10 @@ class LobbyScene:
                 elif self.ai_plus.clicked(event.pos):
                     new_ai = min(5, self.ai_player_count + 1)
                     self.app.network.send(C2S.SET_LOBBY_OPTIONS, {"ai_count": new_ai})
+                elif self.era1_checkbox_rect.collidepoint(event.pos):
+                    self.app.network.send(C2S.SET_LOBBY_OPTIONS, {"play_era1": not self.play_era1})
+                elif self.era2_checkbox_rect.collidepoint(event.pos):
+                    self.app.network.send(C2S.SET_LOBBY_OPTIONS, {"play_era2": not self.play_era2})
 
         if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
             self._vp_held = None
@@ -196,6 +206,10 @@ class LobbyScene:
                 self.vp_to_win = payload["vp_to_win"]
             if "ai_player_count" in payload:
                 self.ai_player_count = payload["ai_player_count"]
+            if "play_era1" in payload:
+                self.play_era1 = bool(payload["play_era1"])
+            if "play_era2" in payload:
+                self.play_era2 = bool(payload["play_era2"])
             if "all_ready" in payload:
                 self.all_ready = payload["all_ready"]
             # Tutorial mode: auto-ready and auto-start
@@ -302,6 +316,7 @@ class LobbyScene:
 
         # ── Host controls: VP and AI count ───────────────────────────────
         vp_y = self._vp_row_y
+        era_y = self._era_row_y
         ai_y = self._ai_row_y
 
         if i_am_host:
@@ -310,6 +325,8 @@ class LobbyScene:
             vp_text = self.font.render(f"VP to Win: {self.vp_to_win}", True, (200, 200, 160))
             screen.blit(vp_text, (_CX - vp_text.get_width() // 2, vp_y + 6))
             self.vp_plus.draw(screen, self.font)
+            era_text = self.small_font.render("Play Eras", True, (200, 200, 160))
+            screen.blit(era_text, (_CX - era_text.get_width() // 2, era_y + 2))
             # AI count row
             self.ai_minus.draw(screen, self.font)
             ai_text = self.font.render(f"AI Players: {self.ai_player_count}", True, (200, 200, 160))
@@ -319,8 +336,17 @@ class LobbyScene:
             # Non-host: read-only display
             vp_disp = self.small_font.render(f"VP to Win: {self.vp_to_win}", True, (160, 160, 140))
             screen.blit(vp_disp, (_CX - vp_disp.get_width() // 2, vp_y + 8))
+            era_title = self.small_font.render("Play Eras", True, (160, 160, 140))
+            screen.blit(era_title, (_CX - era_title.get_width() // 2, era_y + 2))
+            era_disp = self.small_font.render(
+                f"Play Eras: {'Era 1' if self.play_era1 else ''}{' + ' if self.play_era1 and self.play_era2 else ''}{'Era 2' if self.play_era2 else ''}",
+                True, (160, 160, 140))
+            screen.blit(era_disp, (_CX - era_disp.get_width() // 2, era_y + 24))
             ai_disp = self.small_font.render(f"AI Players: {self.ai_player_count}", True, (160, 160, 140))
             screen.blit(ai_disp, (_CX - ai_disp.get_width() // 2, ai_y + 8))
+
+        self._draw_era_checkbox(screen, self.era1_checkbox_rect, self.play_era1, "Era 1")
+        self._draw_era_checkbox(screen, self.era2_checkbox_rect, self.play_era2, "Era 2")
 
         # ── Buttons ──────────────────────────────────────────────────────
         if i_am_spectator:
@@ -371,3 +397,14 @@ class LobbyScene:
         if self.error_message:
             err = self.small_font.render(self.error_message, True, (255, 100, 100))
             screen.blit(err, (_CX - err.get_width() // 2, SCREEN_HEIGHT - 22))
+
+    def _draw_era_checkbox(self, screen: pygame.Surface, rect: pygame.Rect, checked: bool, label: str):
+        border = (130, 150, 170)
+        fill = (45, 58, 72) if checked else (24, 28, 36)
+        pygame.draw.rect(screen, fill, rect, border_radius=3)
+        pygame.draw.rect(screen, border, rect, 1, border_radius=3)
+        if checked:
+            inner = rect.inflate(-6, -6)
+            pygame.draw.rect(screen, (90, 200, 120), inner, border_radius=2)
+        label_surf = self.small_font.render(label, True, (200, 200, 180))
+        screen.blit(label_surf, (rect.right + 8, rect.y - 1))

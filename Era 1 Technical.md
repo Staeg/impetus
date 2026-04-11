@@ -77,7 +77,7 @@ class FactionId(Enum):
 | `VP_TO_WIN` | 100 | Default Era 1 end threshold |
 | `BATTLE_IDOL_VP` | 5 | VP per Battle Idol per War won |
 | `AFFLUENCE_IDOL_VP` | 2 | VP per Affluence Idol per gold gained |
-| `SPREAD_IDOL_VP` | 5 | VP per Spread Idol per territory gained |
+| `SPREAD_IDOL_VP` | 5 | VP per Sprawl Idol per territory gained |
 | `MAP_SIDE_LENGTH` | 5 | Hex grid side length (31 total hexes) |
 
 ### Map constants
@@ -340,8 +340,8 @@ for faction in factions.values():
     idols = hex_map.get_idols_in_territories(faction.faction_id)
     battle = count(idols, BATTLE)  * BATTLE_IDOL_VP  * faction.wars_won_this_turn
     affluence = count(idols, AFFLUENCE) * AFFLUENCE_IDOL_VP * faction.gold_gained_this_turn
-    spread = count(idols, SPREAD)   * SPREAD_IDOL_VP  * faction.territories_gained_this_turn
-    spirit.victory_points += battle + affluence + spread
+    sprawl = count(idols, SPREAD)   * SPREAD_IDOL_VP  * faction.territories_gained_this_turn
+    spirit.victory_points += battle + affluence + sprawl
 ```
 
 If any spirit reaches `vp_to_win`, the game transitions to `GAME_OVER`.
@@ -839,7 +839,7 @@ tooltip: str, tooltip_always: bool
 - **PHASE_RESULT queue**: Processed one at a time; next payload held until `orchestrator.has_animations_playing()` is False.
 - **Change tracker timing**: `snapshot_and_reset()` is called on `turn_start` events, before any agenda events. By the time `process_event()` runs per-event, `self.factions` already reflects final state — the tracker uses its own `old_state` snapshot for delta computation.
 - **Worship stability**: `_check_worship()` is only called on guidance take/leave, never mid-phase.
-- **War finality**: Resolved wars are removed from `self.wars`. Ripe wars stay until resolved next turn.
+- **War finality**: Resolved wars are removed from `self.wars`. Staged wars stay until resolved next turn.
 - **Faction respawn**: 0 territories → faction loses all gold and gains a new hex anywhere on the map. If guided, the spirit picks the hex via `respawn_choice` sub-phase (after war spoils); otherwise a random neutral hex is chosen. The faction always persists and continues playing normally.
 
 ---

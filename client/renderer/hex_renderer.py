@@ -284,8 +284,13 @@ class HexRenderer:
                          screen_w, screen_h):
         """Draw bidirectional arrows for all active wars."""
         for war in wars:
-            # In Era 1 wars have no battleground — draw arrows on all border hexes
-            pairs = self._get_border_pairs(hex_ownership, war.faction_a, war.faction_b)
+            if getattr(war, "battleground_a", None) and getattr(war, "battleground_b", None):
+                pairs = [(
+                    (war.battleground_a["q"], war.battleground_a["r"]) if isinstance(war.battleground_a, dict) else (war.battleground_a.q, war.battleground_a.r),
+                    (war.battleground_b["q"], war.battleground_b["r"]) if isinstance(war.battleground_b, dict) else (war.battleground_b.q, war.battleground_b.r),
+                )]
+            else:
+                pairs = self._get_border_pairs(hex_ownership, war.faction_a, war.faction_b)
             for h1, h2 in pairs:
                 self._draw_hex_arrow(surface, h1, h2, (220, 60, 60),
                                      camera, screen_w, screen_h,

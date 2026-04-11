@@ -1,9 +1,43 @@
 """Victory point calculation per phase."""
 
-from shared.constants import IdolType, BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPREAD_IDOL_VP
+from shared.constants import (
+    IdolType,
+    BATTLE_IDOL_VP,
+    AFFLUENCE_IDOL_VP,
+    SPRAWL_IDOL_VP,
+    ERA2_AFFLUENCE_IDOL_VP_MULTIPLIER,
+    Era,
+)
 
 
-def calculate_scoring(factions: dict, spirits: dict, hex_map) -> list[dict]:
+def _spirit_faction_multiplier(spirit, faction_id: str) -> float:
+    devotion_map = {
+        "Mesa Devotion": "mesa",
+        "Mountain Devotion": "mountain",
+        "Sand Devotion": "sand",
+        "Jungle Devotion": "jungle",
+        "River Devotion": "river",
+        "Plains Devotion": "plains",
+    }
+    for card_name, devoted_faction in devotion_map.items():
+        if card_name in spirit.adaptation_effects:
+            return 3.0 if devoted_faction == faction_id else 0.5
+    return 1.0
+
+
+def _spirit_idol_multiplier(spirit, idol_type) -> float:
+    avatar_map = {
+        "Avatar of War": IdolType.BATTLE,
+        "Avatar of Affluence": IdolType.AFFLUENCE,
+        "Avatar of Sprawl": IdolType.SPRAWL,
+    }
+    for card_name, matching_type in avatar_map.items():
+        if card_name in spirit.adaptation_effects:
+            return 2.0 if idol_type == matching_type else 0.5
+    return 1.0
+
+
+def calculate_scoring(factions: dict, spirits: dict, hex_map, era: Era = Era.ERA_1) -> list[dict]:
     """Calculate VP for all spirits based on Worship and idols.
 
     Returns a list of scoring event dicts.
@@ -14,8 +48,8 @@ def calculate_scoring(factions: dict, spirits: dict, hex_map) -> list[dict]:
         if not faction.worship_spirit:
             continue
 
-        spirit = spirits.get(faction.worship_spirit)
-        if not spirit:
+        worship_spirit = spirits.get(faction.worship_spirit)
+        if not worship_spirit:
             continue
 
         idols = hex_map.get_idols_in_territories(faction_id)
@@ -24,26 +58,61 @@ def calculate_scoring(factions: dict, spirits: dict, hex_map) -> list[dict]:
 
         battle_idols = sum(1 for i in idols if i.type == IdolType.BATTLE)
         affluence_idols = sum(1 for i in idols if i.type == IdolType.AFFLUENCE)
-        spread_idols = sum(1 for i in idols if i.type == IdolType.SPREAD)
+        sprawl_idols = sum(1 for i in idols if i.type == IdolType.SPRAWL)
 
-        vp_gained = (battle_idols * BATTLE_IDOL_VP * faction.wars_won_this_turn
-                     + affluence_idols * AFFLUENCE_IDOL_VP * faction.gold_gained_this_turn
-                     + spread_idols * SPREAD_IDOL_VP * faction.territories_gained_this_turn)
+        recipients = {faction.worship_spirit}
+        if era == Era.ERA_2:
+            recipients.update({idol.owner_spirit for idol in idols})
 
-        if vp_gained > 0:
-            spirit.victory_points += vp_gained
-            events.append({
-                "type": "vp_scored",
-                "spirit": spirit.spirit_id,
-                "faction": faction_id,
-                "battle_idols": battle_idols,
-                "affluence_idols": affluence_idols,
-                "spread_idols": spread_idols,
-                "wars_won": faction.wars_won_this_turn,
-                "gold_gained": faction.gold_gained_this_turn,
-                "territories_gained": faction.territories_gained_this_turn,
-                "vp_gained": vp_gained,
-                "total_vp": spirit.victory_points,
-            })
+        for spirit_id in recipients:
+            spirit = spirits.get(spirit_id)
+            if not spirit:
+                continue
+            battle_share = 0.0
+            affluence_share = 0.0
+            sprawl_share = 0.0
+
+            for idol in idols:
+                if era == Era.ERA_1:
+                    if spirit_id != faction.worship_spirit:
+                        continue
+                    share = 1.0
+                else:
+                    share = 0.0
+                    if spirit_id == faction.worship_spirit:
+                        share += 0.5
+                    if spirit_id == idol.owner_spirit:
+                        share += 0.5
+                    if "Usurper" in spirit.adaptation_effects and spirit_id == faction.worship_spirit:
+                        share += 0.5
+                share *= _spirit_faction_multiplier(spirit, faction_id)
+                share *= _spirit_idol_multiplier(spirit, idol.type)
+
+                if idol.type == IdolType.BATTLE:
+                    battle_share += share * BATTLE_IDOL_VP * faction.wars_won_this_turn
+                elif idol.type == IdolType.AFFLUENCE:
+                    affluence_base = AFFLUENCE_IDOL_VP * faction.gold_gained_this_turn
+                    if era == Era.ERA_2:
+                        affluence_base *= ERA2_AFFLUENCE_IDOL_VP_MULTIPLIER
+                    affluence_share += share * affluence_base
+                elif idol.type == IdolType.SPRAWL:
+                    sprawl_share += share * SPRAWL_IDOL_VP * faction.territories_gained_this_turn
+
+            vp_gained = battle_share + affluence_share + sprawl_share
+            if vp_gained > 0:
+                spirit.victory_points += vp_gained
+                events.append({
+                    "type": "vp_scored",
+                    "spirit": spirit.spirit_id,
+                    "faction": faction_id,
+                    "battle_idols": battle_idols,
+                    "affluence_idols": affluence_idols,
+                    "sprawl_idols": sprawl_idols,
+                    "wars_won": faction.wars_won_this_turn,
+                    "gold_gained": faction.gold_gained_this_turn,
+                    "territories_gained": faction.territories_gained_this_turn,
+                    "vp_gained": vp_gained,
+                    "total_vp": spirit.victory_points,
+                })
 
     return events

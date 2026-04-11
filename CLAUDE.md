@@ -59,10 +59,10 @@ Several phases trigger sub-phases where the server waits for a specific player c
 - **Spirits** (players) indirectly control factions via guidance and influence
 - **Agenda pool** — cards are sampled with replacement (`random.choices`), never consumed. Duplicates are possible. `replace_agenda_card()` (ejection) swaps one card type for another, keeping the pool size constant.
 - **Agenda resolution order** is always: Trade → Steal → Expand → Change (same-type resolves simultaneously)
-- **Wars** have a two-turn lifecycle: erupt → ripen → resolve. All ripe wars resolve simultaneously using snapshotted territory counts; gold changes are applied as a net batch after all wars resolve.
+- **Wars** have a two-turn lifecycle: declaration → staging → resolve. All staged wars resolve simultaneously using snapshotted territory counts; gold changes are applied as a net batch after all wars resolve.
 - **Guidance cooldown**: if two or more spirits contest the same faction in the same vagrant phase (neither gets it), all contesting spirits are blocked from targeting that faction for the next vagrant phase. Tracked in `game_state.guidance_cooldowns` (dict of spirit_id → set of blocked faction_ids); cleared at the start of each vagrant phase.
 - **Worship** (`worship_spirit` on factions): spirits compete for faction Worship via idol counts; a spirit cannot guide a faction that Worships them
-- **Scoring**: VP from idols in faction territories where the spirit has Worship (Battle/Affluence/Spread idol types)
+- **Scoring**: VP from idols in faction territories where the spirit has Worship (Battle/Affluence/Sprawl idol types)
 - **Faction respawn**: factions with 0 territories lose all gold and gain a new hex anywhere on the map; if guided, the spirit picks the hex (`respawn_choice` sub-phase after war spoils); factions always persist and continue playing normally
 
 ### Simultaneous resolution
@@ -70,7 +70,7 @@ Several phases trigger sub-phases where the server waits for a specific player c
 - **Steal**: If A and B both Steal and are neighbors, neither takes gold from the other (both had gold reduced "at the same time"), but regard still drops
 - **Expand**: If two factions expand into the same neutral hex, neither gets it (contested). If a faction expands into a hex adjacent to multiple factions, all neighbor regard changes apply. For spoils expand, if two factions target the same battleground hex, neither gets it (contested — both get expand_failed gold bonus). Spoils Expand costs the same as normal Expand (territory count − modifier); if a faction can't afford it, they also receive the expand_failed gold bonus.
 - **Trade**: All gold gains and regard changes are calculated from pre-resolution state. +1 gold per faction playing Expand this turn (no regard bonus for Expand factions). Regard bonus only applies to other Trade factions.
-- **Wars**: All ripe wars resolve using territory counts snapshotted before any war resolves. Gold changes are applied as net deltas after all wars complete.
+- **Wars**: All staged wars resolve using territory counts snapshotted before any war resolves. Gold changes are applied as net deltas after all wars complete.
 
 ### War spoils
 Wars can generate spoils choices. When a faction wins a war, a spoils card is drawn from the faction's agenda pool. If the winning faction is guided by a spirit, the spirit draws `1 + influence` cards (with replacement, duplicates possible) and chooses one. If the chosen card is Change, a follow-up modifier choice is triggered. All spoils are collected in batch: non-guided auto choices wait for all guided spirits to submit, then everything resolves simultaneously via `finalize_all_spoils()` in standard agenda order. If two factions target the same hex via spoils Expand, neither gets it (contested — both receive the expand_failed gold bonus). Spoils Expand costs gold equal to territory count − expand modifier (same as normal Expand); if a faction cannot afford it or no valid target exists, they receive the expand_failed gold bonus. A spirit winning multiple wars submits all spoils choices at once (list of card indices).

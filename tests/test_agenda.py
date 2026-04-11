@@ -44,7 +44,7 @@ class TestSteal:
         # Regard with neighbors should be negative
         assert factions["mountain"].get_regard("mesa") < 0
 
-    def test_steal_erupts_war(self):
+    def test_steal_declares_war(self):
         factions = make_factions()
         hm = HexMap()
         # Set regard to -1 so steal pushes to -2
@@ -130,6 +130,23 @@ class TestChange:
         total = sum(factions["mountain"].change_modifiers.values())
         assert total == 1
 
+    def test_havoc_changes_an_idol_type(self):
+        from shared.constants import IdolType
+        from shared.models import Idol, HexCoord
+
+        factions = make_factions()
+        hm = HexMap()
+        factions["mountain"].shaping_effects.append("Havoc")
+        idol = Idol(IdolType.BATTLE, HexCoord(1, -1), "s1")
+        hm.place_idol(idol)
+        events = []
+        wars = []
+
+        resolve_agendas(factions, hm, {"mountain": AgendaType.CHANGE}, wars, events)
+
+        assert idol.type != IdolType.BATTLE
+        assert any(e["type"] == "havoc" for e in events)
+
 
 class TestResolutionOrder:
     def test_order_is_trade_first(self):
@@ -159,6 +176,45 @@ class TestResolutionOrder:
         assert "steal" in types
         assert "expand_failed" in types
         assert types.index("steal") < types.index("expand_failed")
+
+    def test_globalization_hits_non_neighbors_without_declaring_war(self):
+        factions = make_factions()
+        hm = HexMap()
+        factions["mountain"].shaping_effects.append("Globalization")
+        factions["river"].gold = 3
+        factions["mountain"].regard["river"] = -1
+        factions["river"].regard["mountain"] = -1
+        wars = []
+        events = []
+
+        resolve_agendas(factions, hm, {"mountain": AgendaType.STEAL}, wars, events)
+
+        assert factions["river"].gold < 3
+        assert factions["mountain"].get_regard("river") <= -2
+        assert not any(
+            {w.faction_a, w.faction_b} == {"mountain", "river"}
+            for w in wars
+        )
+
+    def test_special_military_operations_expand_can_take_enemy_hex(self):
+        factions = make_factions()
+        hm = HexMap()
+        factions["mountain"].shaping_effects.append("Special Military Operations")
+        factions["mountain"].gold = 5
+        wars = []
+        events = []
+
+        resolve_agendas(
+            factions,
+            hm,
+            {"mountain": AgendaType.EXPAND},
+            wars,
+            events,
+            guided_expand_choices={"mountain": (1, 0)},
+        )
+
+        assert hm.ownership[(1, 0)] == "mountain"
+        assert any(e["type"] == "expand" and e["hex"] == {"q": 1, "r": 0} for e in events)
 
 
 class TestEventFields:

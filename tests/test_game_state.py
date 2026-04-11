@@ -4,8 +4,10 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from shared.constants import Phase, AgendaType, IdolType, ChangeModifierTarget
+from shared.constants import Phase, AgendaType, IdolType, ChangeModifierTarget, Era
 from server.game_state import GameState
+from server.server import GameServer, GameRoom
+from server import ai
 
 
 def make_game(num_players=3):
@@ -103,12 +105,19 @@ class TestGameStateSetup:
         gs = make_game()
         assert gs.turn == 2
         # In Era 1, wars resolve immediately on the same turn they erupt.
-        # Any wars remaining after setup are freshly erupted (e.g. from spoils Steal)
-        # and have no is_ripe or battleground concept.
+        # Any wars remaining after setup are freshly declared (e.g. from spoils Steal)
+        # and have no staged-war or battleground concept.
         for w in gs.wars:
             assert hasattr(w, "war_id")
             assert hasattr(w, "faction_a")
             assert hasattr(w, "faction_b")
+
+    def test_setup_can_disable_era2(self):
+        gs = GameState()
+        players = [{"spirit_id": "s0", "name": "P0"}]
+        gs.setup_game(players, enabled_eras={Era.ERA_1})
+        assert gs.should_play_era(Era.ERA_1) is True
+        assert gs.should_play_era(Era.ERA_2) is False
 
 
 class TestVagrantPhase:
@@ -116,6 +125,23 @@ class TestVagrantPhase:
         gs = make_game(2)
         assert gs.needs_input("spirit_0") is True
         assert gs.needs_input("spirit_1") is True
+
+    def test_era2_guidance_no_longer_requires_idol(self):
+        gs = make_game(2)
+        gs.current_era = Era.ERA_2
+        err = gs.submit_action("spirit_0", {"guide_target": "mountain"})
+        assert err is None
+
+    def test_era2_ai_vagrant_action_does_not_expect_idol(self):
+        gs = make_game(2)
+        gs.current_era = Era.ERA_2
+
+        action = ai.get_ai_vagrant_action(gs, "spirit_0")
+
+        assert action.get("guide_target") in gs.get_phase_options("spirit_0")["available_factions"]
+        assert "idol_type" not in action
+        assert "idol_q" not in action
+        assert "idol_r" not in action
 
     def test_submit_guide(self):
         gs = make_game(2)
@@ -326,6 +352,67 @@ class TestVagrantPhase:
             "guide_target": "mesa",
         })
         assert err is None
+
+
+class TestEraTransitions:
+    def test_era_transition_queues_ejections_for_all_guided_spirits(self):
+        gs = GameState()
+        players = [{"spirit_id": f"s{i}", "name": f"P{i}"} for i in range(2)]
+        gs.setup_game(players)
+
+        for spirit_id, faction_id in [("s0", "mountain"), ("s1", "plains")]:
+            gs.spirits[spirit_id].guide_faction(faction_id)
+            gs.factions[faction_id].guiding_spirit = spirit_id
+
+        gs.spirits["s0"].victory_points = gs.vp_to_win
+        events = gs._resolve_scoring()
+
+        assert gs.current_era == Era.ERA_2
+        assert gs.phase == Phase.SCORING
+        assert gs.ejection_pending == {"s0": "mountain", "s1": "plains"}
+        assert any(e["type"] == "era_transition" for e in events)
+        assert len([e for e in events if e["type"] == "ejection_pending"]) == 2
+
+    def test_era1_only_lobby_ends_game_at_first_target(self):
+        gs = GameState()
+        players = [{"spirit_id": "s0", "name": "P0"}]
+        gs.setup_game(players, enabled_eras={Era.ERA_1})
+
+        gs.spirits["s0"].victory_points = gs.vp_to_win
+        events = gs._resolve_scoring()
+
+        assert gs.phase == Phase.GAME_OVER
+        assert gs.current_era == Era.ERA_1
+        assert any(e["type"] == "game_over" for e in events)
+
+    def test_simulated_era1_transition_resets_vp_target_and_scores(self):
+        gs = GameState()
+        players = [{"spirit_id": "s0", "name": "P0"}]
+        gs.setup_game(players)
+        gs.started_from_simulated_era1 = True
+        gs.spirits["s0"].victory_points = gs.vp_to_win
+
+        events = gs._resolve_scoring()
+
+        assert gs.current_era == Era.ERA_2
+        assert gs.vp_to_win == gs.base_vp_target
+        assert gs.spirits["s0"].victory_points == 0
+        assert any(e["type"] == "era_vp_reset" for e in events)
+
+    def test_simulated_era1_handoff_starts_clean_era2(self):
+        room = GameRoom("TEST")
+        room.game_state = GameState()
+        room.game_state.setup_game([{"spirit_id": "s0", "name": "P0"}], enabled_eras={Era.ERA_1, Era.ERA_2})
+        room.game_state.started_from_simulated_era1 = True
+        server = GameServer()
+
+        server._simulate_until_era2(room)
+
+        assert room.game_state.current_era == Era.ERA_2
+        assert room.game_state.phase == Phase.VAGRANT_PHASE
+        assert room.game_state.ejection_pending == {}
+        assert all(spirit.is_vagrant for spirit in room.game_state.spirits.values())
+        assert all(spirit.victory_points == 0 for spirit in room.game_state.spirits.values())
 
     def test_can_place_idol_flag_in_options(self):
         gs = make_game(2)

@@ -59,7 +59,7 @@ After all Agendas are chosen, they resolve in a fixed order: **Trade → Steal �
 +1 gold, plus +1 gold for every other Faction also playing Trade this turn, plus +1 gold for every Faction playing Expand this turn. Gain +1 Regard with each co-trading Faction (not Expand Factions).
 
 ### Steal
-−1 gold and −1 Regard to each neighbouring Faction. +1 gold for each neighbour who loses gold. If any neighbour's Regard with you drops to −2 or lower, a **War erupts** between you.
+−1 gold and −1 Regard to each neighbouring Faction. +1 gold for each neighbour who loses gold. If any neighbour's Regard with you drops to −2 or lower, a **War is declared** between you.
 
 Resolution is simultaneous — if two neighbours both Steal from each other, neither gains gold from the other (both lost simultaneously), but both take the Regard penalty.
 
@@ -98,9 +98,9 @@ Each Faction begins the game with a head start in Change modifiers based on thei
 
 Each Faction's **Power** equals the number of territories it controls.
 
-Wars resolve **immediately** — a War that erupts during the Agenda Phase is resolved in that same turn's War Phase.
+Wars resolve **immediately** — a War that is declared during the Agenda Phase is resolved in that same turn's War Phase.
 
-**War erupts** at the end of a Steal resolution when two neighbouring Factions reach −2 Regard or lower.
+**War is declared** at the end of a Steal resolution when two neighbouring Factions reach −2 Regard or lower.
 
 **Resolving the War**:
 All Wars resolve simultaneously. Each Faction's Power is snapshotted at the start of the War Phase — territory changes from one War do not affect another's Power.
@@ -130,7 +130,7 @@ There are three Idol types, each rewarding different Faction behaviour:
 |--------------|-----------------------------|---------------------|
 | Battle Idol  | Faction wins a War           | 5 VP per Idol per War won |
 | Affluence Idol | Faction gains gold this turn | 2 VP per Idol per gold gained |
-| Spread Idol  | Faction gains territory      | 5 VP per Idol per territory gained |
+| Sprawl Idol  | Faction gains territory      | 5 VP per Idol per territory gained |
 
 You score VP only from Factions whose **Worship** you hold. Once you have a Faction's Worship, every Idol in that Faction's territory counts for you — not just your own.
 

@@ -6,8 +6,18 @@ from typing import Any, Optional
 from shared.constants import (
     Phase, AgendaType, IdolType, FACTION_NAMES, RACES, VP_TO_WIN,
     STARTING_INFLUENCE, CHANGE_DECK, FACTION_START_HEXES, HABITAT_STARTING_MODIFIERS,
+    Era, ERA2_DEFAULT_CARD_DRAW, ERA2_SHORT_DEAL_VP,
 )
 from shared.protocol import SubPhase
+from shared.era_data import (
+    ADAPTATION_CARDS,
+    GUIDANCE_STEP_ADAPT,
+    GUIDANCE_STEP_EJECT,
+    GUIDANCE_STEP_ORDER,
+    GUIDANCE_STEP_RESTRAIN,
+    GUIDANCE_STEP_SHAPE,
+    SHAPING_CARDS,
+)
 
 # Left-to-right ribbon order: sorted by x then y of flat-top axial hex positions
 RIBBON_HEX_ORDER = [(-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0)]
@@ -40,6 +50,10 @@ class GameState:
         self.turn: int = 0
         self.phase: Phase = Phase.LOBBY
         self.vp_to_win: int = VP_TO_WIN
+        self.base_vp_target: int = VP_TO_WIN
+        self.current_era: Era = Era.ERA_1
+        self.enabled_eras: set[Era] = {Era.ERA_1, Era.ERA_2}
+        self.started_from_simulated_era1: bool = False
         self.hex_map = HexMap()
         self.factions: dict[str, Faction] = {}
         self.spirits: dict[str, Spirit] = {}
@@ -49,6 +63,12 @@ class GameState:
         self.drawn_hands: dict[str, list] = {}
         # Spirits needing to submit ejection agenda choice
         self.ejection_pending: dict[str, str] = {}  # spirit_id -> faction_id
+        self.forced_ejection_spirits: set[str] = set()
+        self.restrain_pending: dict[str, list[AgendaType]] = {}
+        self.shaping_pending: dict[str, list[str]] = {}
+        self.adaptation_pending: dict[str, list[str]] = {}
+        self.battleground_pending: dict[str, list[dict]] = {}
+        self.war_support_pending: dict[str, list[dict]] = {}
         # Spirits needing to submit change choice
         self.change_pending: dict[str, list] = {}  # spirit_id -> drawn change cards
         # Track trade/expand factions for spoils bonuses
@@ -70,6 +90,7 @@ class GameState:
         self._stored_agenda_choices: dict[str, AgendaType] = {}
         self._guided_change_factions: list[str] = []
         self._guided_change_modifiers: dict[str, str] = {}
+        self._era2_agenda_events: list[dict] = []
         # Guided expand hex choices (spirit_id -> faction_id pending, spirit_id -> (q,r) chosen)
         self.expand_pending: dict[str, str] = {}
         self.expand_chosen: dict[str, tuple] = {}
@@ -77,8 +98,11 @@ class GameState:
         self.respawn_pending: dict[str, str] = {}
         # Faction display order (left-to-right by starting hex x-position)
         self.faction_order: list[str] = list(FACTION_NAMES)
+        self.shaping_deck: list[str] = list(SHAPING_CARDS)
+        self.adaptation_deck: list[str] = list(ADAPTATION_CARDS)
 
-    def setup_game(self, player_info: list[dict], vp_to_win: int = VP_TO_WIN) -> tuple[GameStateSnapshot, list[tuple[list[dict], GameStateSnapshot]]]:
+    def setup_game(self, player_info: list[dict], vp_to_win: int = VP_TO_WIN,
+                   enabled_eras: Optional[set[Era]] = None) -> tuple[GameStateSnapshot, list[tuple[list[dict], GameStateSnapshot]]]:
         """Initialize the game with the given players.
 
         Returns (initial_snapshot, turn_results) where:
@@ -88,6 +112,10 @@ class GameState:
         player_info: list of {spirit_id, name}
         """
         self.vp_to_win = vp_to_win
+        self.base_vp_target = vp_to_win
+        self.current_era = Era.ERA_1
+        self.enabled_eras = set(enabled_eras or {Era.ERA_1, Era.ERA_2})
+        self.started_from_simulated_era1 = False
         # Create factions
         for faction_id in FACTION_NAMES:
             faction = Faction(faction_id)
@@ -154,7 +182,8 @@ class GameState:
                 fid for fid, at in agenda_choices.items()
                 if at == AgendaType.EXPAND
             ]
-            resolve_agendas(self.factions, self.hex_map, agenda_choices, self.wars, events)
+            resolve_agendas(self.factions, self.hex_map, agenda_choices, self.wars, events,
+                           era=self.current_era, current_turn=turn_number)
             events.extend(self._resolve_war_phase())
             events.extend(self._resolve_scoring())
 
@@ -166,7 +195,13 @@ class GameState:
             self.pending_actions.clear()
             self.drawn_hands.clear()
             self.change_pending.clear()
+            self.restrain_pending.clear()
+            self.shaping_pending.clear()
+            self.adaptation_pending.clear()
+            self.battleground_pending.clear()
+            self.war_support_pending.clear()
             self.ejection_pending.clear()
+            self.forced_ejection_spirits.clear()
             self.spoils_pending.clear()
             self.auto_spoils_choices.clear()
             self.winner_choice_pending.clear()
@@ -213,7 +248,39 @@ class GameState:
             all_idols=list(self.hex_map.idols),
             hex_ownership=self.hex_map.get_ownership_dict(),
             faction_order=self.faction_order,
+            era=self.current_era,
+            vp_target=self.vp_to_win,
         )
+
+    def is_era2(self) -> bool:
+        return self.current_era == Era.ERA_2
+
+    def should_play_era(self, era: Era) -> bool:
+        return era in self.enabled_eras
+
+    def prepare_global_ejection(self, events: list[dict]) -> None:
+        """On era transition, every guiding spirit gets an agenda replacement choice."""
+        self.ejection_pending.clear()
+        self.forced_ejection_spirits.clear()
+        for spirit in self.spirits.values():
+            if not spirit.is_vagrant and spirit.guided_faction:
+                self.ejection_pending[spirit.spirit_id] = spirit.guided_faction
+                self.forced_ejection_spirits.add(spirit.spirit_id)
+                events.append({
+                    "type": "ejection_pending",
+                    "spirit": spirit.spirit_id,
+                    "faction": spirit.guided_faction,
+                })
+
+    def reset_victory_points_for_era_start(self, events: list[dict]) -> None:
+        for spirit in self.spirits.values():
+            spirit.victory_points = 0
+        self.vp_to_win = self.base_vp_target
+        events.append({
+            "type": "era_vp_reset",
+            "era": self.current_era.value,
+            "new_vp_target": self.vp_to_win,
+        })
 
     def get_phase_options(self, spirit_id: str) -> dict:
         """Return the options available to a spirit for the current phase."""
@@ -247,7 +314,7 @@ class GameState:
                 "contested_blocked": contested_blocked,
                 "neutral_hexes": neutral_hexes,
                 "idol_types": [t.value for t in IdolType],
-                "can_place_idol": not spirit.has_placed_idol_as_vagrant,
+                "can_place_idol": (not self.is_era2()) and (not spirit.has_placed_idol_as_vagrant),
                 "can_swell": not available_factions,
             }
 
@@ -256,6 +323,13 @@ class GameState:
                 return {"action": "none", "reason": "vagrant"}
             if spirit.guided_faction is None:
                 return {"action": "none", "reason": "no_faction"}
+            if self.is_era2():
+                faction = self.factions[spirit.guided_faction]
+                return {
+                    "action": "era2_guidance",
+                    "guidance_step": faction.guidance_step,
+                    "influence": spirit.influence,
+                }
             # Guard against double-draw on reconnection
             if spirit_id in self.drawn_hands:
                 hand = self.drawn_hands[spirit_id]
@@ -281,6 +355,8 @@ class GameState:
         if self.phase == Phase.VAGRANT_PHASE:
             return spirit.is_vagrant
         elif self.phase == Phase.AGENDA_PHASE:
+            if self.is_era2():
+                return False
             return not spirit.is_vagrant and spirit.guided_faction is not None
         return False
 
@@ -332,6 +408,8 @@ class GameState:
             if i.owner_spirit == spirit.spirit_id
         }
         can_place_idol = (
+            not self.is_era2()
+            and
             not spirit.has_placed_idol_as_vagrant
             and any(
                 self.hex_map.ownership.get(h) is None and h not in spirit_idol_hexes
@@ -359,6 +437,8 @@ class GameState:
                 return "Contested guidance cooldown: cannot target this faction this turn"
 
         if idol_type:
+            if self.is_era2():
+                return "Idols can no longer be placed in Era 2"
             if spirit.has_placed_idol_as_vagrant:
                 return "Already placed an idol this vagrant stint"
             hex_q = action.get("idol_q")
@@ -378,6 +458,16 @@ class GameState:
 
         self.pending_actions[spirit.spirit_id] = action
         return None
+
+    def _start_guidance_cycle(self, faction: Faction):
+        if not self.is_era2():
+            faction.guidance_step = ""
+            faction.restrained_agenda = None
+            faction.queued_agendas = []
+            return
+        faction.guidance_step = GUIDANCE_STEP_RESTRAIN
+        faction.restrained_agenda = None
+        faction.queued_agendas = []
 
     def _validate_agenda_action(self, spirit: Spirit, action: dict) -> Optional[str]:
         if spirit.is_vagrant or spirit.guided_faction is None:
@@ -407,6 +497,11 @@ class GameState:
         if remove_at not in pool_types:
             return f"Type {remove_type} not in faction's agenda pool"
         faction.replace_agenda_card(remove_at, add_at)
+        spirit = self.spirits[spirit_id]
+        if "Changer of Ways" in spirit.adaptation_effects:
+            pool_types = [c.agenda_type for c in faction.agenda_pool]
+            if pool_types:
+                faction.replace_agenda_card(random.choice(pool_types), random.choice(list(AgendaType)))
         del self.ejection_pending[spirit_id]
         return None
 
@@ -472,6 +567,7 @@ class GameState:
                 faction = self.factions[target_faction]
                 spirit.guide_faction(target_faction)
                 faction.guiding_spirit = spirit_id
+                self._start_guidance_cycle(faction)
                 events.append({
                     "type": "guided",
                     "spirit": spirit_id,
@@ -502,6 +598,7 @@ class GameState:
                     winner = self.spirits[winner_id]
                     faction.guiding_spirit = winner_id
                     winner.guide_faction(target_faction)
+                    self._start_guidance_cycle(faction)
                     events.append({
                         "type": "guided",
                         "spirit": winner_id,
@@ -522,6 +619,7 @@ class GameState:
                     winner = self.spirits[winner_id]
                     faction.guiding_spirit = winner_id
                     winner.guide_faction(target_faction)
+                    self._start_guidance_cycle(faction)
                     events.append({
                         "type": "guided",
                         "spirit": winner_id,
@@ -549,6 +647,7 @@ class GameState:
                             winner = self.spirits[winner_id]
                             faction.guiding_spirit = winner_id
                             winner.guide_faction(target_faction)
+                            self._start_guidance_cycle(faction)
                             events.append({
                                 "type": "guided",
                                 "spirit": winner_id,
@@ -666,6 +765,272 @@ class GameState:
             self.phase = Phase.SCORING
         return None, events
 
+    def _advance_guidance_step(self, faction: Faction):
+        if not self.is_era2() or not faction.guidance_step:
+            return
+        if faction.guidance_step == GUIDANCE_STEP_RESTRAIN:
+            faction.guidance_step = GUIDANCE_STEP_SHAPE
+        elif faction.guidance_step == GUIDANCE_STEP_SHAPE:
+            faction.guidance_step = GUIDANCE_STEP_ADAPT
+        elif faction.guidance_step == GUIDANCE_STEP_ADAPT:
+            faction.guidance_step = GUIDANCE_STEP_EJECT
+
+    def _build_era2_agenda_choices(self, events: list[dict]) -> dict[str, AgendaType]:
+        agenda_choices: dict[str, AgendaType] = {}
+        for fid, faction in self.factions.items():
+            if not faction.guiding_spirit:
+                card = faction.draw_random_agenda()
+                faction.played_agenda_this_turn.append(card)
+                agenda_choices[fid] = card.agenda_type
+                events.append({
+                    "type": "agenda_random",
+                    "faction": fid,
+                    "agenda": card.agenda_type.value,
+                })
+                continue
+            if faction.guidance_step == GUIDANCE_STEP_RESTRAIN:
+                events.append({
+                    "type": "restrain",
+                    "faction": fid,
+                })
+                continue
+            if not faction.queued_agendas:
+                candidates = [card.agenda_type for card in faction.agenda_pool]
+                if faction.restrained_agenda in candidates:
+                    candidates.remove(faction.restrained_agenda)
+                random.shuffle(candidates)
+                faction.queued_agendas = candidates[:3]
+            if faction.queued_agendas:
+                chosen_agenda = faction.queued_agendas.pop(0)
+                agenda_choices[fid] = chosen_agenda
+                faction.played_agenda_this_turn.append(type("AgendaCardLite", (), {"agenda_type": chosen_agenda})())
+                events.append({
+                    "type": "agenda_scripted",
+                    "faction": fid,
+                    "agenda": chosen_agenda.value,
+                    "guidance_step": faction.guidance_step,
+                })
+        return agenda_choices
+
+    def _deal_cards_evenly(self, spirit_ids: list[str], deck: list[str], draw_count: int) -> dict[str, list[str]]:
+        if not spirit_ids or not deck:
+            return {}
+        pool = list(deck)
+        random.shuffle(pool)
+        deals = {sid: [] for sid in spirit_ids}
+        total_cards = min(len(pool), len(spirit_ids) * draw_count)
+        winners = spirit_ids[:]
+        random.shuffle(winners)
+        for i in range(total_cards):
+            sid = winners[i % len(winners)]
+            deals[sid].append(pool[i])
+        return deals
+
+    def prepare_restrain_choices(self) -> list[dict]:
+        events = []
+        self.restrain_pending.clear()
+        if not self.is_era2():
+            return events
+        for fid, faction in self.factions.items():
+            if faction.guiding_spirit and faction.guidance_step == GUIDANCE_STEP_RESTRAIN:
+                unique_pool = []
+                for card in faction.agenda_pool:
+                    if card.agenda_type not in unique_pool:
+                        unique_pool.append(card.agenda_type)
+                self.restrain_pending[faction.guiding_spirit] = unique_pool
+                events.append({
+                    "type": "restrain_pending",
+                    "faction": fid,
+                    "spirit": faction.guiding_spirit,
+                    "cards": [card.value for card in unique_pool],
+                })
+        return events
+
+    def submit_restrain_choice(self, spirit_id: str, agenda_type: str) -> tuple[Optional[str], list[dict]]:
+        if spirit_id not in self.restrain_pending:
+            return "No restrain choice pending", []
+        try:
+            restrained = AgendaType(agenda_type)
+        except ValueError:
+            return f"Invalid agenda type: {agenda_type}", []
+        available = self.restrain_pending[spirit_id]
+        if restrained not in available:
+            return f"{agenda_type} is not available to restrain", []
+        spirit = self.spirits[spirit_id]
+        faction = self.factions[spirit.guided_faction]
+        faction.restrained_agenda = restrained
+        remaining = [card for card in available if card != restrained]
+        random.shuffle(remaining)
+        faction.queued_agendas = remaining
+        faction.guidance_step = GUIDANCE_STEP_SHAPE
+        del self.restrain_pending[spirit_id]
+        return None, [{
+            "type": "restrained",
+            "faction": faction.faction_id,
+            "agenda": restrained.value,
+        }]
+
+    def prepare_shaping_choices(self) -> list[dict]:
+        events = []
+        self.shaping_pending.clear()
+        if not self.is_era2():
+            return events
+        spirit_ids = [
+            faction.guiding_spirit for faction in self.factions.values()
+            if faction.guiding_spirit and faction.guidance_step == GUIDANCE_STEP_SHAPE
+        ]
+        deals = self._deal_cards_evenly(spirit_ids, self.shaping_deck, ERA2_DEFAULT_CARD_DRAW)
+        for sid, cards in deals.items():
+            if len(cards) >= 2:
+                self.shaping_pending[sid] = cards
+            else:
+                spirit = self.spirits[sid]
+                spirit.victory_points += ERA2_SHORT_DEAL_VP
+                events.append({
+                    "type": "shaping_skipped",
+                    "spirit": sid,
+                    "vp_gained": ERA2_SHORT_DEAL_VP,
+                    "total_vp": spirit.victory_points,
+                })
+            events.append({
+                "type": "shaping_draw",
+                "spirit": sid,
+                "faction": self.spirits[sid].guided_faction,
+                "cards": list(cards),
+            })
+        return events
+
+    def submit_shaping_choice(self, spirit_id: str, card_name: str) -> tuple[Optional[str], list[dict]]:
+        cards = self.shaping_pending.get(spirit_id)
+        if not cards:
+            return "No shaping choice pending", []
+        if card_name not in cards:
+            return f"{card_name} is not available", []
+        spirit = self.spirits[spirit_id]
+        faction = self.factions[spirit.guided_faction]
+        faction.shaping_effects.append(card_name)
+        if card_name in self.shaping_deck:
+            self.shaping_deck.remove(card_name)
+        del self.shaping_pending[spirit_id]
+        return None, [{
+            "type": "shaping_chosen",
+            "spirit": spirit_id,
+            "faction": faction.faction_id,
+            "card": card_name,
+        }]
+
+    def prepare_adaptation_choices(self) -> list[dict]:
+        events = []
+        self.adaptation_pending.clear()
+        if not self.is_era2():
+            return events
+        spirit_ids = [
+            faction.guiding_spirit for faction in self.factions.values()
+            if faction.guiding_spirit and faction.guidance_step == GUIDANCE_STEP_ADAPT
+        ]
+        deals = self._deal_cards_evenly(spirit_ids, self.adaptation_deck, ERA2_DEFAULT_CARD_DRAW)
+        for sid, cards in deals.items():
+            if len(cards) >= 2:
+                self.adaptation_pending[sid] = cards
+            else:
+                spirit = self.spirits[sid]
+                spirit.victory_points += ERA2_SHORT_DEAL_VP
+                events.append({
+                    "type": "adaptation_skipped",
+                    "spirit": sid,
+                    "vp_gained": ERA2_SHORT_DEAL_VP,
+                    "total_vp": spirit.victory_points,
+                })
+            events.append({
+                "type": "adaptation_draw",
+                "spirit": sid,
+                "cards": list(cards),
+            })
+        return events
+
+    def submit_adaptation_choice(self, spirit_id: str, card_name: str) -> tuple[Optional[str], list[dict]]:
+        cards = self.adaptation_pending.get(spirit_id)
+        if not cards:
+            return "No adaptation choice pending", []
+        if card_name not in cards:
+            return f"{card_name} is not available", []
+        spirit = self.spirits[spirit_id]
+        spirit.adaptation_effects.append(card_name)
+        if card_name in self.adaptation_deck:
+            self.adaptation_deck.remove(card_name)
+        del self.adaptation_pending[spirit_id]
+        return None, [{
+            "type": "adaptation_chosen",
+            "spirit": spirit_id,
+            "card": card_name,
+        }]
+
+    def prepare_battleground_choices(self) -> list[dict]:
+        events = []
+        self.battleground_pending.clear()
+        if not self.is_era2():
+            return events
+        for war in self.wars:
+            if war.declared_turn != self.turn or war.is_staged:
+                continue
+            pairs = self.hex_map.get_border_hex_pairs(war.faction_a, war.faction_b)
+            if not pairs:
+                continue
+            guided_a = self.factions[war.faction_a].guiding_spirit
+            guided_b = self.factions[war.faction_b].guiding_spirit
+            if (guided_a and not guided_b) or (guided_b and not guided_a):
+                spirit_id = guided_a or guided_b
+                self.battleground_pending.setdefault(spirit_id, []).append({
+                    "war_id": war.war_id,
+                    "faction_a": war.faction_a,
+                    "faction_b": war.faction_b,
+                    "pairs": pairs,
+                })
+            else:
+                pair = random.choice(pairs)
+                war.stage(pair[0], pair[1], self.turn + 1)
+                events.append({
+                    "type": "war_staged",
+                    "war_id": war.war_id,
+                    "faction_a": war.faction_a,
+                    "faction_b": war.faction_b,
+                    "battleground_a": {"q": pair[0][0], "r": pair[0][1]},
+                    "battleground_b": {"q": pair[1][0], "r": pair[1][1]},
+                    "resolve_turn": self.turn + 1,
+                })
+        return events
+
+    def has_pending_battleground_choices(self) -> bool:
+        return bool(self.battleground_pending)
+
+    def submit_battleground_choice(self, spirit_id: str, choices: list[dict]) -> tuple[Optional[str], list[dict]]:
+        pending = self.battleground_pending.get(spirit_id)
+        if pending is None:
+            return "No battleground choice pending", []
+        if len(choices) != len(pending):
+            return f"Expected {len(pending)} battleground choices, got {len(choices)}", []
+        events = []
+        for entry, choice in zip(pending, choices):
+            war = next((w for w in self.wars if w.war_id == entry["war_id"]), None)
+            if war is None:
+                return f"War {entry['war_id']} not found", []
+            pair_index = int(choice.get("pair_index", -1))
+            if pair_index < 0 or pair_index >= len(entry["pairs"]):
+                return f"Invalid battleground choice {pair_index}", []
+            pair = entry["pairs"][pair_index]
+            war.stage(pair[0], pair[1], self.turn + 1)
+            events.append({
+                "type": "war_staged",
+                "war_id": war.war_id,
+                "faction_a": war.faction_a,
+                "faction_b": war.faction_b,
+                "battleground_a": {"q": pair[0][0], "r": pair[0][1]},
+                "battleground_b": {"q": pair[1][0], "r": pair[1][1]},
+                "resolve_turn": self.turn + 1,
+            })
+        del self.battleground_pending[spirit_id]
+        return None, events
+
     def prepare_change_choices(self) -> list[dict]:
         """Process agenda inputs and identify Change choices needed before resolution.
 
@@ -676,39 +1041,39 @@ class GameState:
         events = []
         agenda_choices: dict[str, AgendaType] = {}
 
-        # Resolve spirit choices
-        for spirit_id, action in self.pending_actions.items():
-            spirit = self.spirits[spirit_id]
-            hand = self.drawn_hands.get(spirit_id, [])
-            idx = action["agenda_index"]
-            chosen = hand[idx]
-            agenda_choices[spirit.guided_faction] = chosen.agenda_type
-            # Track chosen card for scoring/cleanup (pool is static, no return needed)
-            faction = self.factions[spirit.guided_faction]
-            faction.played_agenda_this_turn.append(chosen)
-            events.append({
-                "type": "agenda_chosen",
-                "spirit": spirit_id,
-                "faction": spirit.guided_faction,
-                "agenda": chosen.agenda_type.value,
-            })
-
-        # Non-guided factions draw random agenda
-        for fid, faction in self.factions.items():
-            if fid not in agenda_choices:
-                card = faction.draw_random_agenda()
-                faction.played_agenda_this_turn.append(card)
-                agenda_choices[fid] = card.agenda_type
+        if self.is_era2():
+            agenda_choices = self._build_era2_agenda_choices(events)
+        else:
+            # Resolve spirit choices
+            for spirit_id, action in self.pending_actions.items():
+                spirit = self.spirits[spirit_id]
+                hand = self.drawn_hands.get(spirit_id, [])
+                idx = action["agenda_index"]
+                chosen = hand[idx]
+                agenda_choices[spirit.guided_faction] = chosen.agenda_type
+                faction = self.factions[spirit.guided_faction]
+                faction.played_agenda_this_turn.append(chosen)
                 events.append({
-                    "type": "agenda_random",
-                    "faction": fid,
-                    "agenda": card.agenda_type.value,
+                    "type": "agenda_chosen",
+                    "spirit": spirit_id,
+                    "faction": spirit.guided_faction,
+                    "agenda": chosen.agenda_type.value,
                 })
 
-        # All spirits lose 1 influence
-        for spirit in self.spirits.values():
-            if not spirit.is_vagrant and spirit.guided_faction:
-                spirit.lose_influence(1)
+            for fid, faction in self.factions.items():
+                if fid not in agenda_choices:
+                    card = faction.draw_random_agenda()
+                    faction.played_agenda_this_turn.append(card)
+                    agenda_choices[fid] = card.agenda_type
+                    events.append({
+                        "type": "agenda_random",
+                        "faction": fid,
+                        "agenda": card.agenda_type.value,
+                    })
+
+            for spirit in self.spirits.values():
+                if not spirit.is_vagrant and spirit.guided_faction:
+                    spirit.lose_influence(1)
 
         # Track trade/expand factions before resolving (for spoils bonuses)
         self.normal_trade_factions = [
@@ -773,7 +1138,8 @@ class GameState:
             expand_discount = faction.change_modifiers.get(ChangeModifierTarget.EXPAND, 0)
             territory_count = len(self.hex_map.get_faction_territories(fid))
             cost = max(0, territory_count - expand_discount)
-            reachable = self.hex_map.get_reachable_neutral_hexes(fid)
+            allow_enemy = "Special Military Operations" in faction.shaping_effects
+            reachable = self.hex_map.get_expand_targets(fid, allow_enemy=allow_enemy)
             if not reachable or faction.gold < cost:
                 continue
             self.expand_pending[spirit_id] = fid
@@ -787,12 +1153,38 @@ class GameState:
         if spirit_id not in self.expand_pending:
             return "No expand choice pending"
         faction_id = self.expand_pending[spirit_id]
-        reachable = self.hex_map.get_reachable_neutral_hexes(faction_id)
+        faction = self.factions[faction_id]
+        reachable = self.hex_map.get_expand_targets(
+            faction_id,
+            allow_enemy="Special Military Operations" in faction.shaping_effects,
+        )
         if (q, r) not in reachable:
-            return f"Hex ({q},{r}) is not a reachable neutral hex for this faction"
+            return f"Hex ({q},{r}) is not a valid Expand target for this faction"
         self.expand_chosen[spirit_id] = (q, r)
         del self.expand_pending[spirit_id]
         return None
+
+    def _apply_post_war_shaping(self, result: dict, events: list[dict]) -> None:
+        winner = result.get("winner")
+        loser = result.get("loser")
+        if not winner or not loser:
+            return
+        for faction_id, other_id in ((winner, loser), (loser, winner)):
+            if "Turn the Other Cheek" not in self.factions[faction_id].shaping_effects:
+                continue
+            current = self.factions[faction_id].get_regard(other_id)
+            if current >= 0:
+                continue
+            delta = abs(current)
+            self.factions[faction_id].modify_regard(other_id, delta)
+            self.factions[other_id].modify_regard(faction_id, delta)
+            events.append({
+                "type": "regard_shift",
+                "faction": faction_id,
+                "other_faction": other_id,
+                "delta": delta,
+                "source": "turn_the_other_cheek",
+            })
 
     def submit_change_choice(self, spirit_id: str, card_index: int) -> tuple[Optional[str], list[dict]]:
         """Submit the change card choice for guiding spirits. Returns (error, events)."""
@@ -848,7 +1240,9 @@ class GameState:
 
         resolve_agendas(self.factions, self.hex_map, resolve_choices,
                        self.wars, events,
-                       guided_expand_choices=guided_expand_choices)
+                       guided_expand_choices=guided_expand_choices,
+                       era=self.current_era,
+                       current_turn=self.turn)
 
         # Add visual change events for guided change factions.
         # The modifier was already applied; this puts them in the
@@ -865,6 +1259,23 @@ class GameState:
         self._guided_change_modifiers = {}
         self.expand_chosen.clear()
 
+        if self.is_era2():
+            for fid, agenda_type in agenda_choices.items():
+                faction = self.factions[fid]
+                if not faction.guiding_spirit:
+                    continue
+                spirit = self.spirits[faction.guiding_spirit]
+                if faction.guidance_step in (GUIDANCE_STEP_SHAPE, GUIDANCE_STEP_ADAPT, GUIDANCE_STEP_EJECT):
+                    spirit.lose_influence(1)
+                    if faction.guidance_step == GUIDANCE_STEP_SHAPE:
+                        faction.guidance_step = GUIDANCE_STEP_ADAPT
+                    elif faction.guidance_step == GUIDANCE_STEP_ADAPT:
+                        faction.guidance_step = GUIDANCE_STEP_EJECT
+                    elif faction.guidance_step == GUIDANCE_STEP_EJECT:
+                        faction.guidance_step = ""
+
+        battleground_events = self.prepare_battleground_choices()
+        events.extend(battleground_events)
         self._finalize_agenda_phase(events)
 
         self._stored_agenda_choices = {}
@@ -880,17 +1291,34 @@ class GameState:
         """
         if not self._stored_agenda_choices:
             # Need to prepare first (direct call path)
-            events = self.prepare_change_choices()
+            events: list[dict] = []
+            if self.is_era2():
+                events.extend(self.prepare_restrain_choices())
+                for sid, cards in list(self.restrain_pending.items()):
+                    self.submit_restrain_choice(sid, random.choice(cards).value)
+                events.extend(self.prepare_shaping_choices())
+                for sid, cards in list(self.shaping_pending.items()):
+                    self.submit_shaping_choice(sid, random.choice(cards))
+                events.extend(self.prepare_adaptation_choices())
+                for sid, cards in list(self.adaptation_pending.items()):
+                    self.submit_adaptation_choice(sid, random.choice(cards))
+                events.extend(self.prepare_change_choices())
+            else:
+                events = self.prepare_change_choices()
             # Auto-resolve guided expand choices (non-interactive direct path)
             self.prepare_expand_choices()
             for spirit_id, faction_id in list(self.expand_pending.items()):
-                reachable = list(self.hex_map.get_reachable_neutral_hexes(faction_id))
+                allow_enemy = "Special Military Operations" in self.factions[faction_id].shaping_effects
+                reachable = list(self.hex_map.get_expand_targets(faction_id, allow_enemy=allow_enemy))
                 if reachable:
                     self.expand_chosen[spirit_id] = random.choice(reachable)
                 del self.expand_pending[spirit_id]
+            for sid, entries in list(self.battleground_pending.items()):
+                choices = [{"pair_index": 0} for _ in entries]
+                self.submit_battleground_choice(sid, choices)
             if self.change_pending:
-                # Change choices needed - can't resolve yet
-                return events
+                for sid, cards in list(self.change_pending.items()):
+                    self.submit_change_choice(sid, random.randrange(len(cards)))
             events.extend(self.resolve_agenda_phase_after_changes())
             return events
         return self.resolve_agenda_phase_after_changes()
@@ -904,19 +1332,27 @@ class GameState:
 
     def _finalize_agenda_phase(self, events: list):
         """Clear agenda state and advance to war phase."""
-        self.phase = Phase.WAR_PHASE
+        if self.battleground_pending:
+            self.phase = Phase.AGENDA_PHASE
+        else:
+            self.phase = Phase.WAR_PHASE
 
     def _process_ejections(self, events: list):
         """Eject all 0-influence spirits whose ejection choices have been submitted."""
         spirits_to_eject = []
         for spirit in self.spirits.values():
-            if not spirit.is_vagrant and spirit.guided_faction and spirit.influence == 0:
+            if not spirit.is_vagrant and spirit.guided_faction and (
+                spirit.influence == 0 or spirit.spirit_id in self.forced_ejection_spirits
+            ):
                 if spirit.spirit_id not in self.ejection_pending:
                     spirits_to_eject.append(spirit)
 
         for spirit in spirits_to_eject:
             faction = self.factions[spirit.guided_faction]
             faction.guiding_spirit = None
+            faction.guidance_step = ""
+            faction.restrained_agenda = None
+            faction.queued_agendas = []
             # Check worship on leaving
             self._check_worship(faction, spirit, events)
             spirit.become_vagrant()
@@ -927,6 +1363,26 @@ class GameState:
             })
 
         self.ejection_pending.clear()
+        self.forced_ejection_spirits.clear()
+
+    def has_pending_war_support_choices(self) -> bool:
+        return any(
+            any("support_target" not in entry for entry in entries)
+            for entries in self.war_support_pending.values()
+        )
+
+    def submit_war_support_choice(self, spirit_id: str, choices: list[dict]) -> tuple[Optional[str], list[dict]]:
+        pending_entries = self.war_support_pending.get(spirit_id)
+        if pending_entries is None:
+            return "No war support choice pending", []
+        if len(choices) != len(pending_entries):
+            return f"Expected {len(pending_entries)} war support choices, got {len(choices)}", []
+        for entry, choice in zip(pending_entries, choices):
+            target = choice.get("target")
+            if target not in (entry["faction_a"], entry["faction_b"]):
+                return f"Invalid support target {target}", []
+            entry["support_target"] = target
+        return None, []
 
     def _resolve_war_phase(self) -> list[dict]:
         events = []
@@ -938,8 +1394,54 @@ class GameState:
             for fid in self.factions
         }
 
-        # Resolve all wars that erupted this turn
-        for war in list(self.wars):
+        wars_to_resolve = [
+            war for war in list(self.wars)
+            if (not self.is_era2()) or (war.is_staged and war.resolve_turn <= self.turn)
+        ]
+
+        if self.is_era2():
+            if not self.war_support_pending:
+                for war in wars_to_resolve:
+                    spirit_ids = [
+                        sid for sid in (
+                            self.factions[war.faction_a].guiding_spirit,
+                            self.factions[war.faction_b].guiding_spirit,
+                        ) if sid
+                    ]
+                    for spirit_id in spirit_ids:
+                        self.war_support_pending.setdefault(spirit_id, []).append({
+                            "spirit": spirit_id,
+                            "war_id": war.war_id,
+                            "faction_a": war.faction_a,
+                            "faction_b": war.faction_b,
+                        })
+                if self.war_support_pending:
+                    return events
+
+            support_bonus: dict[tuple[str, str], int] = {}
+            for entries in self.war_support_pending.values():
+                for entry in entries:
+                    target = entry.get("support_target")
+                    if target:
+                        multiplier = 3 if "Battle Blessing" in self.spirits[entry["spirit"]].adaptation_effects else 1
+                        support_bonus[(entry["war_id"], target)] = support_bonus.get((entry["war_id"], target), 0) + multiplier
+            self.war_support_pending.clear()
+
+            for war in wars_to_resolve:
+                result = war.resolve(
+                    power_snapshot[war.faction_a] + support_bonus.get((war.war_id, war.faction_a), 0),
+                    power_snapshot[war.faction_b] + support_bonus.get((war.war_id, war.faction_b), 0),
+                )
+                dice_results.append(result)
+                events.append({"type": "war_resolved", **result})
+                if result.get("winner"):
+                    self.factions[result["winner"]].wars_won_this_turn += 1
+                self._apply_post_war_shaping(result, events)
+                self.wars.remove(war)
+            self._setup_spoils(dice_results, events)
+            return events
+
+        for war in wars_to_resolve:
             guided_a = self.factions[war.faction_a].guiding_spirit
             guided_b = self.factions[war.faction_b].guiding_spirit
 
@@ -961,6 +1463,7 @@ class GameState:
                 events.append({"type": "war_resolved", **result})
                 if result.get("winner"):
                     self.factions[result["winner"]].wars_won_this_turn += 1
+                self._apply_post_war_shaping(result, events)
                 self.wars.remove(war)
 
         # If winner choices are pending, save dice results and wait
@@ -975,8 +1478,22 @@ class GameState:
     def _setup_spoils(self, war_results: list[dict], events: list[dict]) -> None:
         """Set up spoils pending state for the given war_results and finalize if no choices needed."""
         if war_results:
+            expanded_results: list[dict] = []
+            for result in war_results:
+                winner = result.get("winner")
+                loser = result.get("loser")
+                if not winner:
+                    continue
+                expanded_results.append(result)
+                if "Glory in War" in self.factions[winner].shaping_effects:
+                    expanded_results.append(dict(result))
+                if loser and "Pyrrhic Defeat" in self.factions[loser].shaping_effects:
+                    mirrored = dict(result)
+                    mirrored["winner"] = loser
+                    mirrored["loser"] = winner
+                    expanded_results.append(mirrored)
             raw_pending, self.auto_spoils_choices = resolve_spoils(
-                self.factions, self.hex_map, war_results, self.wars,
+                self.factions, self.hex_map, expanded_results, self.wars,
                 events, self.normal_trade_factions, spirits=self.spirits)
             # Convert plain dicts from resolve_spoils into SpoilsPendingEntry objects
             self.spoils_pending = {
@@ -1034,6 +1551,7 @@ class GameState:
             events.append({"type": "war_resolved", **result})
             if result.get("winner"):
                 self.factions[result["winner"]].wars_won_this_turn += 1
+            self._apply_post_war_shaping(result, events)
             self.wars.remove(war)
 
         del self.winner_choice_pending[spirit_id]
@@ -1053,7 +1571,7 @@ class GameState:
                 if spirit:
                     self._check_worship(faction, spirit, events)
 
-        events.extend(calculate_scoring(self.factions, self.spirits, self.hex_map))
+        events.extend(calculate_scoring(self.factions, self.spirits, self.hex_map, era=self.current_era))
 
         # Check for winner
         winner = None
@@ -1065,15 +1583,42 @@ class GameState:
                     winner = spirit.spirit_id
 
         if winner:
-            # Check for ties
-            winners = [s.spirit_id for s in self.spirits.values()
-                      if s.victory_points == max_vp]
-            self.phase = Phase.GAME_OVER
-            events.append({
-                "type": "game_over",
-                "winners": winners,
-                "scores": {s.spirit_id: s.victory_points for s in self.spirits.values()},
-            })
+            if self.current_era == Era.ERA_1:
+                if self.should_play_era(Era.ERA_2):
+                    self.current_era = Era.ERA_2
+                    if self.started_from_simulated_era1:
+                        self.reset_victory_points_for_era_start(events)
+                    else:
+                        self.vp_to_win = max_vp + self.base_vp_target
+                    events.append({
+                        "type": "era_transition",
+                        "era": self.current_era.value,
+                        "new_vp_target": self.vp_to_win,
+                        "vp_reset": self.started_from_simulated_era1,
+                    })
+                    self.prepare_global_ejection(events)
+                    if self.ejection_pending:
+                        self.phase = Phase.SCORING
+                    else:
+                        self.phase = Phase.CLEANUP
+                else:
+                    winners = [s.spirit_id for s in self.spirits.values()
+                              if s.victory_points == max_vp]
+                    self.phase = Phase.GAME_OVER
+                    events.append({
+                        "type": "game_over",
+                        "winners": winners,
+                        "scores": {s.spirit_id: s.victory_points for s in self.spirits.values()},
+                    })
+            else:
+                winners = [s.spirit_id for s in self.spirits.values()
+                          if s.victory_points == max_vp]
+                self.phase = Phase.GAME_OVER
+                events.append({
+                    "type": "game_over",
+                    "winners": winners,
+                    "scores": {s.spirit_id: s.victory_points for s in self.spirits.values()},
+                })
         else:
             # Check for ejection (0 influence spirits) before cleanup
             for spirit in self.spirits.values():
@@ -1103,7 +1648,13 @@ class GameState:
         self.pending_actions.clear()
         self.drawn_hands.clear()
         self.change_pending.clear()
+        self.restrain_pending.clear()
+        self.shaping_pending.clear()
+        self.adaptation_pending.clear()
+        self.battleground_pending.clear()
+        self.war_support_pending.clear()
         self.ejection_pending.clear()
+        self.forced_ejection_spirits.clear()
         self.spoils_pending.clear()
         self.auto_spoils_choices.clear()
         self.winner_choice_pending.clear()
@@ -1291,7 +1842,9 @@ class GameState:
                 batch.append(entry)
             finalize_all_spoils(self.factions, self.hex_map, self.wars, events,
                                batch, self.normal_trade_factions,
-                               normal_expand_factions=self.normal_expand_factions)
+                               normal_expand_factions=self.normal_expand_factions,
+                               era=self.current_era,
+                               current_turn=self.turn)
         self.auto_spoils_choices = []
         self._check_respawns(events)
         if not self.respawn_pending:

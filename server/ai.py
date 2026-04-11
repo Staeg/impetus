@@ -109,6 +109,14 @@ def get_ai_change_choice(cards: list) -> int:
     return random.randrange(len(cards))
 
 
+def get_ai_restrain_choice(cards: list) -> str:
+    return random.choice(cards).value if cards else ""
+
+
+def get_ai_card_name_choice(cards: list[str]) -> str:
+    return random.choice(cards) if cards else ""
+
+
 def get_ai_ejection_choice(agenda_pool: list, agenda_types: list) -> tuple[str, str]:
     return random.choice(agenda_pool), random.choice(agenda_types)
 
@@ -146,6 +154,25 @@ def get_ai_winner_choice(winner_choices: list[dict]) -> list[dict]:
     """AI always picks its own guided faction to win."""
     return [{"war_id": wc["war_id"], "winner": wc["guided_faction"]}
             for wc in winner_choices]
+
+
+def get_ai_battleground_choice(entries: list[dict]) -> list[dict]:
+    return [
+        {"pair_index": random.randrange(len(entry["pairs"])) if entry.get("pairs") else 0}
+        for entry in entries
+    ]
+
+
+def get_ai_war_support_choice(entries: list[dict], guided_faction: str | None = None) -> list[dict]:
+    choices = []
+    for entry in entries:
+        valid = [entry["faction_a"], entry["faction_b"]]
+        if guided_faction in valid:
+            target = guided_faction
+        else:
+            target = random.choice(valid)
+        choices.append({"target": target})
+    return choices
 
 
 def get_ai_spoils_expand_choice(expand_pendings) -> list[dict]:

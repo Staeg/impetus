@@ -321,14 +321,14 @@ class AnimationOrchestrator:
         base_delay = self._get_append_delay_from_existing_agendas() + max(0.0, delay_offset)
 
         # Extract war events for tagging onto steal animations
-        war_events = [e for e in agenda_events if e.get("type") == "war_erupted"]
+        war_events = [e for e in agenda_events if e.get("type") == "war_declared"]
         war_by_faction: dict[str, list[dict]] = {}
         for we in war_events:
             war_by_faction.setdefault(we["faction_a"], []).append(we)
             war_by_faction.setdefault(we["faction_b"], []).append(we)
 
         regular_events = [e for e in agenda_events
-                          if not e.get("is_spoils") and e.get("type") != "war_erupted"]
+                          if not e.get("is_spoils") and e.get("type") != "war_declared"]
         spoils_events = [e for e in agenda_events if e.get("is_spoils")]
 
         def _claim_row(faction_id: str, base_row: int = 0) -> int:

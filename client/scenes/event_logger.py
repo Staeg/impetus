@@ -1,7 +1,7 @@
 """Event logging: transforms game events into human-readable log strings."""
 
 from shared.constants import (
-    BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPREAD_IDOL_VP,
+    BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPRAWL_IDOL_VP,
 )
 from client.faction_names import faction_full_name
 
@@ -90,10 +90,15 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
         cards = event.get("cards", [])
         event_log.append(f"{fname} draw Change: {', '.join(cards)}")
 
-    elif etype == "war_erupted":
+    elif etype == "war_declared":
         fa = faction_full_name(event["faction_a"])
         fb = faction_full_name(event["faction_b"])
-        event_log.append(f"War erupted between {fa} and {fb}!")
+        event_log.append(f"War declared between {fa} and {fb}!")
+
+    elif etype == "war_staged":
+        fa = faction_full_name(event["faction_a"])
+        fb = faction_full_name(event["faction_b"])
+        event_log.append(f"War staged between {fa} and {fb}.")
 
     elif etype == "war_resolved":
         winner = event.get("winner")
@@ -143,11 +148,49 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
         if a_idols and a_gold:
             a_vp = a_idols * AFFLUENCE_IDOL_VP * a_gold
             event_log.append(f"  Affluence: {a_idols} idol x {a_gold} gold = {a_vp:.1f}")
-        s_idols = event.get("spread_idols", 0)
+        s_idols = event.get("sprawl_idols", event.get("spread_idols", 0))
         s_terr = event.get("territories_gained", 0)
         if s_idols and s_terr:
-            s_vp = s_idols * SPREAD_IDOL_VP * s_terr
-            event_log.append(f"  Spread: {s_idols} idol x {s_terr} terr = {s_vp:.1f}")
+            s_vp = s_idols * SPRAWL_IDOL_VP * s_terr
+            event_log.append(f"  Sprawl: {s_idols} idol x {s_terr} terr = {s_vp:.1f}")
+
+    elif etype == "era_transition":
+        if event.get("vp_reset"):
+            event_log.append(
+                f"Era 2 begins. VP totals reset to 0. New VP target: {event.get('new_vp_target', '?')}"
+            )
+        else:
+            event_log.append(
+                f"Era 2 begins. New VP target: {event.get('new_vp_target', '?')}"
+            )
+
+    elif etype == "era_vp_reset":
+        event_log.append(
+            f"VP totals reset for Era start. Target: {event.get('new_vp_target', '?')}"
+        )
+
+    elif etype == "restrained":
+        fname = faction_full_name(event["faction"])
+        event_log.append(f"{fname} restrained {event.get('agenda', '?')}.")
+
+    elif etype == "shaping_chosen":
+        fname = faction_full_name(event["faction"])
+        event_log.append(f"{fname} was shaped by {event.get('card', '?')}.")
+
+    elif etype == "adaptation_chosen":
+        name = spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
+        event_log.append(f"{name} adapted with {event.get('card', '?')}.")
+
+    elif etype == "havoc":
+        fname = faction_full_name(event["faction"])
+        event_log.append(
+            f"{fname} caused Havoc: {event.get('old_type', '?')} became {event.get('new_type', '?')}."
+        )
+
+    elif etype == "regard_shift":
+        fname = faction_full_name(event["faction"])
+        other = faction_full_name(event["other_faction"])
+        event_log.append(f"{fname} regained {event.get('delta', 0)} Regard with {other}.")
 
     elif etype == "ejected":
         name = spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])

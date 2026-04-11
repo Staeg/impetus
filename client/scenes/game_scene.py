@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from shared.constants import (
     Phase, AgendaType, IdolType, MAP_SIDE_LENGTH,
     SCREEN_WIDTH, SCREEN_HEIGHT, HEX_SIZE, FACTION_NAMES, FACTION_COLORS,
-    BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPREAD_IDOL_VP,
+    BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPRAWL_IDOL_VP, SPREAD_IDOL_VP,
 )
 from shared.protocol import C2S, S2C, SubPhase
 from shared.hex_utils import axial_to_pixel
@@ -116,7 +116,7 @@ _WAR_RESOLVES_TOOLTIP = (
 _GOLD_TOOLTIP = "Resource used to pay for Expand Agendas. Cannot go below 0."
 
 _TRADE_AGENDA_TOOLTIP = "Trade\n+1 gold, +1 gold for every other Faction playing Trade this turn, +1 gold for every Faction playing Expand this turn.\n+1 Regard with each other Faction playing Trade (not Expand) this turn."
-_STEAL_AGENDA_TOOLTIP = "Steal\n-1 Regard with and -1 gold to all neighbors. +1 gold for each gold lost. War erupts at -2 Regard and resolves immediately."
+_STEAL_AGENDA_TOOLTIP = "Steal\n-1 Regard with and -1 gold to all neighbors. +1 gold for each gold lost. War is declared at -2 Regard and resolves immediately."
 _EXPAND_AGENDA_TOOLTIP = "Expand\nGuided: choose a reachable neutral hex to claim (cost = territories). If multiple Spirits pick the same hex, both fail. Unguided: random. If unavailable or lacking gold, +1 gold instead."
 
 _MODIFIER_TOOLTIP = (
@@ -190,6 +190,8 @@ class GameScene:
         self.game_state: dict = {}
         self.phase = ""
         self.turn = 0
+        self.current_era = "era_1"
+        self.vp_target = 0
         self.factions: dict = {}
         self.spirits: dict = {}
         self.wars: list = []
@@ -238,6 +240,13 @@ class GameScene:
 
         # Change/ejection/spoils state
         self.change_cards: list[str] = []
+        self.battleground_choice_entries: list[dict] = []
+        self.battleground_choice_buttons: list[dict] = []
+        self.battleground_choice_index: int = 0
+        self.battleground_selections: dict[str, int] = {}
+        self.war_support_entries: list[dict] = []
+        self.war_support_buttons: list[dict] = []
+        self.war_support_selections: dict[str, str] = {}
         self.ejection_pending = False
         self.ejection_faction = ""
         self.ejection_pool: list[str] = []
@@ -392,10 +401,12 @@ class GameScene:
             self._small_font = get_font(13)
         return self._small_font
 
-    def _update_state_from_snapshot(self, data: dict):
+    def _update_state_from_snapshot(self, data: dict, suppress_animations: bool = False):
         """Update local state from a game state snapshot dict."""
         self.turn = data.get("turn", self.turn)
         self.phase = data.get("phase", self.phase)
+        self.current_era = data.get("era", self.current_era)
+        self.vp_target = data.get("vp_target", self.vp_target)
         self.factions = data.get("factions", self.factions)
         update_faction_races({
             fid: fdata.get("race", "") if isinstance(fdata, dict) else ""
@@ -408,7 +419,7 @@ class GameScene:
         for sid, spirit in self.spirits.items():
             new_inf = spirit.get("influence", 0)
             old_inf = old_influences.get(sid, self._influence_prev.get(sid, new_inf))
-            if old_inf > new_inf:
+            if (not suppress_animations) and old_inf > new_inf:
                 for idx in range(new_inf, old_inf):
                     self.animation.add_tween(f"infl_{sid}_{idx}", 1.0, 0.0, 3.0)
             self._influence_prev[sid] = new_inf
@@ -657,7 +668,20 @@ class GameScene:
                 if self.change_cards:
                     for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.change_cards))):
                         if rect.collidepoint(event.pos):
-                            self._submit_card_choice(i, C2S.SUBMIT_CHANGE_CHOICE, "change_cards")
+                            if self.phase == SubPhase.CHANGE_CHOICE:
+                                self._submit_card_choice(i, C2S.SUBMIT_CHANGE_CHOICE, "change_cards")
+                            elif self.phase == SubPhase.RESTRAIN_CHOICE:
+                                self.app.network.send(C2S.SUBMIT_RESTRAIN_CHOICE, {"agenda_type": self.change_cards[i]})
+                                self.change_cards = []
+                                self.has_submitted = True
+                            elif self.phase == SubPhase.SHAPING_CHOICE:
+                                self.app.network.send(C2S.SUBMIT_SHAPING_CHOICE, {"card_name": self.change_cards[i]})
+                                self.change_cards = []
+                                self.has_submitted = True
+                            elif self.phase == SubPhase.ADAPTATION_CHOICE:
+                                self.app.network.send(C2S.SUBMIT_ADAPTATION_CHOICE, {"card_name": self.change_cards[i]})
+                                self.change_cards = []
+                                self.has_submitted = True
                             return
 
                 # Check spoils card clicks (one-at-a-time display)
@@ -682,6 +706,18 @@ class GameScene:
                     for btn in self.winner_choice_buttons:
                         if btn["rect"].collidepoint(event.pos):
                             self.winner_selections[btn["war_id"]] = btn["faction"]
+                            return
+
+                if self.phase == SubPhase.BATTLEGROUND_CHOICE and self.battleground_choice_buttons:
+                    for btn in self.battleground_choice_buttons:
+                        if btn["rect"].collidepoint(event.pos):
+                            self.battleground_selections[btn["war_id"]] = btn["pair_index"]
+                            return
+
+                if self.phase == SubPhase.WAR_SUPPORT_CHOICE and self.war_support_buttons:
+                    for btn in self.war_support_buttons:
+                        if btn["rect"].collidepoint(event.pos):
+                            self.war_support_selections[btn["war_id"]] = btn["faction"]
                             return
 
                 # Spoils expand nav arrows (multiple wars)
@@ -899,6 +935,12 @@ class GameScene:
         self.winner_choice_wars = []
         self.winner_selections = {}
         self.winner_choice_buttons = []
+        self.battleground_choice_entries = []
+        self.battleground_choice_buttons = []
+        self.battleground_selections = {}
+        self.war_support_entries = []
+        self.war_support_buttons = []
+        self.war_support_selections = {}
         self.spoils_expand_choices = []
         self.spoils_expand_selections = []
         self.spoils_expand_selectable_hexes = set()
@@ -933,9 +975,11 @@ class GameScene:
         phase = payload.get("phase", "")
         action = payload.get("options", {}).get("action", "")
         needs_input = action not in ("none", "") or phase in (
-            SubPhase.CHANGE_CHOICE, SubPhase.SPOILS_CHOICE,
+            SubPhase.CHANGE_CHOICE, SubPhase.RESTRAIN_CHOICE, SubPhase.SHAPING_CHOICE,
+            SubPhase.ADAPTATION_CHOICE, SubPhase.SPOILS_CHOICE,
             SubPhase.SPOILS_CHANGE_CHOICE, SubPhase.SPOILS_EXPAND_CHOICE,
-            SubPhase.WINNER_CHOICE, SubPhase.EJECTION_CHOICE,
+            SubPhase.WINNER_CHOICE, SubPhase.BATTLEGROUND_CHOICE, SubPhase.WAR_SUPPORT_CHOICE,
+            SubPhase.EJECTION_CHOICE,
             SubPhase.EXPAND_CHOICE, SubPhase.RESPAWN_CHOICE)
         should_defer = (
             needs_input
@@ -964,10 +1008,12 @@ class GameScene:
 
     def _process_phase_result(self, payload):
         active_sub_phase = self.phase if self.phase in (
-            SubPhase.CHANGE_CHOICE, SubPhase.SPOILS_CHOICE, SubPhase.SPOILS_CHANGE_CHOICE,
-            SubPhase.SPOILS_EXPAND_CHOICE, SubPhase.WINNER_CHOICE,
-            SubPhase.EJECTION_CHOICE, SubPhase.EXPAND_CHOICE,
+            SubPhase.CHANGE_CHOICE, SubPhase.RESTRAIN_CHOICE, SubPhase.SHAPING_CHOICE,
+            SubPhase.ADAPTATION_CHOICE, SubPhase.SPOILS_CHOICE, SubPhase.SPOILS_CHANGE_CHOICE,
+            SubPhase.SPOILS_EXPAND_CHOICE, SubPhase.WINNER_CHOICE, SubPhase.BATTLEGROUND_CHOICE,
+            SubPhase.WAR_SUPPORT_CHOICE, SubPhase.EJECTION_CHOICE, SubPhase.EXPAND_CHOICE,
             SubPhase.RESPAWN_CHOICE) else None
+        suppress_animations = bool(payload.get("suppress_animations"))
         # Snapshot display state before updating so animations render old state
         events = payload.get("events", [])
         _ANIM_ORDER = {
@@ -977,14 +1023,14 @@ class GameScene:
         }
         agenda_events = [e for e in events if e.get("type", "") in _ANIM_ORDER
                        and not e.get("is_guided_modifier")]
-        if agenda_events and "state" in payload:
+        if (not suppress_animations) and agenda_events and "state" in payload:
             # Clear any stale display state before re-snapshotting so that
             # fast AI-only games (queue never fully drains) always get a fresh
             # baseline for hex-reveal and war-reveal animations each turn.
             self._clear_display_state()
             self._snapshot_display_state()
         if "state" in payload:
-            self._update_state_from_snapshot(payload["state"])
+            self._update_state_from_snapshot(payload["state"], suppress_animations=suppress_animations)
         # Preserve sub-phases while this player still has cards to choose
         if active_sub_phase == SubPhase.CHANGE_CHOICE and self.change_cards:
             self.phase = active_sub_phase
@@ -1005,7 +1051,7 @@ class GameScene:
         # Log events (consolidate agenda play + resolution into one line)
         self._log_events_batch(events)
         # VP gain animations
-        for event in events:
+        for event in ([] if suppress_animations else events):
             if event.get("type") == "vp_scored":
                 vp = event.get("vp_gained", 0)
                 sid = event.get("spirit", "")
@@ -1028,7 +1074,7 @@ class GameScene:
                             active_types["battle"] = (255, 60, 80)
                         if event.get("affluence_idols", 0) > 0 and gold_gained_ev > 0:
                             active_types["affluence"] = (255, 200, 50)
-                        if event.get("spread_idols", 0) > 0 and territories_gained > 0:
+                        if event.get("sprawl_idols", event.get("spread_idols", 0)) > 0 and territories_gained > 0:
                             active_types["spread"] = (60, 220, 100)
                         if faction_id and active_types:
                             spirit_idx_map = {
@@ -1072,7 +1118,7 @@ class GameScene:
                         ))
         # Trigger agenda events immediately, but preserve turn_start segmentation
         # for bootstrap payloads so Turn 1 and Turn 2 do not animate concurrently.
-        if agenda_events:
+        if agenda_events and not suppress_animations:
             turn_batched_events: list[list[dict]] = []
             current_turn_batch: list[dict] = []
             saw_turn_markers = False
@@ -1084,13 +1130,13 @@ class GameScene:
                         turn_batched_events.append(current_turn_batch)
                         current_turn_batch = []
                     continue
-                if (etype in _ANIM_ORDER or etype == "war_erupted") and not event.get("is_guided_modifier"):
+                if (etype in _ANIM_ORDER or etype == "war_declared") and not event.get("is_guided_modifier"):
                     current_turn_batch.append(event)
             if current_turn_batch:
                 turn_batched_events.append(current_turn_batch)
 
             if not saw_turn_markers:
-                war_events = [e for e in events if e.get("type") == "war_erupted"]
+                war_events = [e for e in events if e.get("type") == "war_declared"]
                 anim_events = agenda_events + war_events
                 self.orchestrator.process_agenda_events(
                     anim_events, self.hex_ownership, self.small_font)
@@ -1535,7 +1581,7 @@ class GameScene:
     def _count_idol_vp_for_faction(self, faction_id: str):
         """Count total VP per event type from idols in a faction's territory.
 
-        Returns (battle_vp, spread_vp, affluence_vp) totals.
+        Returns (battle_vp, sprawl_vp, affluence_vp) totals.
         """
         battle_count = 0
         spread_count = 0
@@ -1702,9 +1748,9 @@ class GameScene:
                 self.preview_guidance = None
             if self.tutorial:
                 self.tutorial.notify_game_event("guide_contested", event)
-        elif etype == "war_erupted":
+        elif etype == "war_declared":
             if self.tutorial:
-                self.tutorial.notify_game_event("war_erupted", event)
+                self.tutorial.notify_game_event("war_declared", event)
         elif etype == "faction_respawned":
             if self.tutorial:
                 self.tutorial.notify_game_event("faction_respawned", event)
@@ -2026,7 +2072,8 @@ class GameScene:
 
         # Draw HUD
         self.ui_renderer.draw_hud(screen, self.phase, self.turn,
-                                   self.spirits, self.app.my_spirit_id)
+                                  self.spirits, self.app.my_spirit_id,
+                                  era=self.current_era, vp_target=self.vp_target)
 
         # Compute preview guidance dict
         preview_guid_dict = None
@@ -2177,7 +2224,8 @@ class GameScene:
         elif self.phase == Phase.AGENDA_PHASE.value:
             if not (self.tutorial and self.tutorial.hide_phase_ui):
                 self._render_agenda_ui(screen)
-        elif self.phase == SubPhase.CHANGE_CHOICE:
+        elif self.phase in (SubPhase.CHANGE_CHOICE, SubPhase.RESTRAIN_CHOICE,
+                            SubPhase.SHAPING_CHOICE, SubPhase.ADAPTATION_CHOICE):
             self._render_change_ui(screen)
         elif self.phase == SubPhase.EJECTION_CHOICE:
             self._render_ejection_ui(screen)
@@ -2193,6 +2241,10 @@ class GameScene:
             self._render_expand_choice_ui(screen)
         elif self.phase == SubPhase.RESPAWN_CHOICE:
             self._render_respawn_choice_ui(screen)
+        elif self.phase == SubPhase.BATTLEGROUND_CHOICE:
+            self._render_battleground_choice_ui(screen)
+        elif self.phase == SubPhase.WAR_SUPPORT_CHOICE:
+            self._render_war_support_choice_ui(screen)
 
         # Register UI rects for tooltip placement scoring
         self._register_ui_rects_for_tooltips()
@@ -2827,13 +2879,24 @@ class GameScene:
 
         hand = []
         for card_name in self.change_cards:
-            desc = self.ui_renderer._build_modifier_description(card_name)
+            if self.phase == SubPhase.CHANGE_CHOICE:
+                desc = self.ui_renderer._build_modifier_description(card_name)
+            else:
+                desc = _wrap_text(card_name, self.small_font, 90)[:3]
             hand.append({"agenda_type": card_name, "description": desc})
         card_rects = self._calc_left_choice_card_rects(len(hand))
         start_x = card_rects[0].x if card_rects else 20
         start_y = card_rects[0].y if card_rects else _CHOICE_CARD_Y
 
-        title = self.font.render(f"Choose modifier for {faction_name}:", True, theme.TEXT_HIGHLIGHT)
+        if self.phase == SubPhase.RESTRAIN_CHOICE:
+            title_text = f"Restrain {faction_name}: choose the agenda to skip"
+        elif self.phase == SubPhase.SHAPING_CHOICE:
+            title_text = f"Shape {faction_name}: choose one card"
+        elif self.phase == SubPhase.ADAPTATION_CHOICE:
+            title_text = "Adapt: choose one card"
+        else:
+            title_text = f"Choose modifier for {faction_name}:"
+        title = self.font.render(title_text, True, theme.TEXT_HIGHLIGHT)
         screen.blit(title, (max(4, start_x + 2), 102))
 
         modifiers = self._get_current_faction_modifiers()
@@ -2845,6 +2908,58 @@ class GameScene:
             show_preview_plus=True,
             vertical=True,
         )
+
+    def _render_battleground_choice_ui(self, screen):
+        if not self.battleground_choice_entries:
+            return
+        title = self.font.render("Stage War: choose a battleground", True, theme.TEXT_HIGHLIGHT)
+        screen.blit(title, (20, 102))
+        self.battleground_choice_buttons = []
+        y = 150
+        for entry in self.battleground_choice_entries:
+            war_id = entry["war_id"]
+            label = f"{faction_full_name(entry['faction_a'])} vs {faction_full_name(entry['faction_b'])}"
+            surf = self.font.render(label, True, theme.TEXT_NORMAL)
+            screen.blit(surf, (20, y))
+            y += 26
+            for idx, pair in enumerate(entry.get("pairs", [])):
+                rect = pygame.Rect(20, y, 220, 34)
+                selected = self.battleground_selections.get(war_id) == idx
+                pygame.draw.rect(screen, (70, 120, 150) if selected else (50, 50, 70), rect, border_radius=6)
+                pygame.draw.rect(screen, (190, 190, 210), rect, 1, border_radius=6)
+                pair_label = f"({pair['a']['q']},{pair['a']['r']}) / ({pair['b']['q']},{pair['b']['r']})"
+                pair_surf = self.small_font.render(pair_label, True, (240, 240, 240))
+                screen.blit(pair_surf, pair_surf.get_rect(center=rect.center))
+                self.battleground_choice_buttons.append({"war_id": war_id, "pair_index": idx, "rect": rect})
+                y += 40
+            y += 8
+        if self.submit_button:
+            ready = len(self.battleground_selections) >= len(self.battleground_choice_entries)
+            self.submit_button.enabled = ready
+            self._draw_submit_button(screen)
+
+    def _render_war_support_choice_ui(self, screen):
+        if not self.war_support_entries:
+            return
+        title = self.font.render("War Support: assign your extra die", True, theme.TEXT_HIGHLIGHT)
+        screen.blit(title, (20, 102))
+        self.war_support_buttons = []
+        y = 150
+        for entry in self.war_support_entries:
+            war_id = entry["war_id"]
+            for faction_id, x in ((entry["faction_a"], 20), (entry["faction_b"], 250)):
+                rect = pygame.Rect(x, y, 180, 42)
+                selected = self.war_support_selections.get(war_id) == faction_id
+                pygame.draw.rect(screen, (70, 130, 70) if selected else (60, 60, 80), rect, border_radius=6)
+                pygame.draw.rect(screen, (190, 190, 210), rect, 1, border_radius=6)
+                label = self.font.render(faction_full_name(faction_id), True, (255, 255, 255))
+                screen.blit(label, label.get_rect(center=rect.center))
+                self.war_support_buttons.append({"war_id": war_id, "faction": faction_id, "rect": rect})
+            y += 60
+        if self.submit_button:
+            ready = len(self.war_support_selections) >= len(self.war_support_entries)
+            self.submit_button.enabled = ready
+            self._draw_submit_button(screen)
 
     def _render_ejection_ui(self, screen):
         faction_name = faction_full_name(self.ejection_faction)

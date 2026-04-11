@@ -16,6 +16,7 @@ except ImportError:
     ServerConnection = None  # type: ignore
 
 from shared.constants import Phase, AgendaType, VP_TO_WIN
+from shared.constants import Era
 from shared.protocol import create_message, parse_message, C2S, S2C, SubPhase
 from server.game_state import GameState
 from server.pending_choices import (
@@ -47,6 +48,8 @@ class GameRoom:
         self.ai_player_count: int = 0
         self.ai_spirit_ids: set[str] = set()
         self.tutorial_mode: bool = False
+        self.play_era1: bool = True
+        self.play_era2: bool = True
         self._submission_event: asyncio.Event = asyncio.Event()
 
     def signal_submission(self) -> None:
@@ -251,6 +254,8 @@ class GameServer:
             "host_spirit_id": room.host_spirit_id,
             "vp_to_win": room.vp_to_win,
             "ai_player_count": room.ai_player_count,
+            "play_era1": room.play_era1,
+            "play_era2": room.play_era2,
             "all_ready": room.can_start(),
         }))
 
@@ -293,6 +298,12 @@ class GameServer:
                 room.ai_player_count = ai_count
             if "tutorial_mode" in payload:
                 room.tutorial_mode = bool(payload["tutorial_mode"])
+            if "play_era1" in payload or "play_era2" in payload:
+                next_era1 = bool(payload.get("play_era1", room.play_era1))
+                next_era2 = bool(payload.get("play_era2", room.play_era2))
+                if next_era1 or next_era2:
+                    room.play_era1 = next_era1
+                    room.play_era2 = next_era2
             await self._broadcast_lobby_state(room)
 
         elif msg_type == C2S.TOGGLE_SPECTATOR:
@@ -380,6 +391,74 @@ class GameServer:
                         # Now resolve all agendas
                         events = room.game_state.resolve_agenda_phase_after_changes()
                         await self._broadcast_phase_result(room, events)
+                        if room.game_state.has_pending_battleground_choices():
+                            await self._send_battleground_options(room)
+                        else:
+                            await self._auto_resolve_phases(room)
+
+        elif msg_type == C2S.SUBMIT_RESTRAIN_CHOICE:
+            if room.game_state:
+                error, events = room.game_state.submit_restrain_choice(
+                    spirit_id, payload.get("agenda_type", ""))
+                if error:
+                    await room.send_to(spirit_id, create_message(S2C.ERROR, {"message": error}))
+                else:
+                    await self._broadcast_phase_result(room, events)
+                    if room.game_state.restrain_pending:
+                        await broadcast_waiting_for(room, list(room.game_state.restrain_pending.keys()))
+                    else:
+                        await self._handle_shaping_choices(room)
+
+        elif msg_type == C2S.SUBMIT_SHAPING_CHOICE:
+            if room.game_state:
+                error, events = room.game_state.submit_shaping_choice(
+                    spirit_id, payload.get("card_name", ""))
+                if error:
+                    await room.send_to(spirit_id, create_message(S2C.ERROR, {"message": error}))
+                else:
+                    await self._broadcast_phase_result(room, events)
+                    if room.game_state.shaping_pending:
+                        await broadcast_waiting_for(room, list(room.game_state.shaping_pending.keys()))
+                    else:
+                        await self._handle_adaptation_choices(room)
+
+        elif msg_type == C2S.SUBMIT_ADAPTATION_CHOICE:
+            if room.game_state:
+                error, events = room.game_state.submit_adaptation_choice(
+                    spirit_id, payload.get("card_name", ""))
+                if error:
+                    await room.send_to(spirit_id, create_message(S2C.ERROR, {"message": error}))
+                else:
+                    await self._broadcast_phase_result(room, events)
+                    if room.game_state.adaptation_pending:
+                        await broadcast_waiting_for(room, list(room.game_state.adaptation_pending.keys()))
+                    else:
+                        await self._handle_expand_and_change_choices(room)
+
+        elif msg_type == C2S.SUBMIT_BATTLEGROUND_CHOICE:
+            if room.game_state:
+                error, events = room.game_state.submit_battleground_choice(
+                    spirit_id, payload.get("choices", []))
+                if error:
+                    await room.send_to(spirit_id, create_message(S2C.ERROR, {"message": error}))
+                else:
+                    await self._broadcast_phase_result(room, events)
+                    if room.game_state.has_pending_battleground_choices():
+                        await broadcast_waiting_for(room, list(room.game_state.battleground_pending.keys()))
+                    else:
+                        await self._auto_resolve_phases(room)
+
+        elif msg_type == C2S.SUBMIT_WAR_SUPPORT_CHOICE:
+            if room.game_state:
+                error, events = room.game_state.submit_war_support_choice(
+                    spirit_id, payload.get("choices", []))
+                if error:
+                    await room.send_to(spirit_id, create_message(S2C.ERROR, {"message": error}))
+                else:
+                    await self._broadcast_phase_result(room, events)
+                    if room.game_state.has_pending_war_support_choices():
+                        await broadcast_waiting_for(room, list(room.game_state.war_support_pending.keys()))
+                    else:
                         await self._auto_resolve_phases(room)
 
         elif msg_type == C2S.SUBMIT_EJECTION_AGENDA:
@@ -553,8 +632,18 @@ class GameServer:
         room.game_state = GameState()
         room.game_state.tutorial_mode = room.tutorial_mode
         room.game_state.ai_spirit_ids = set(room.ai_spirit_ids)
+        enabled_eras = set()
+        if room.play_era1:
+            enabled_eras.add(Era.ERA_1)
+        if room.play_era2:
+            enabled_eras.add(Era.ERA_2)
         initial_snapshot, turn_results = room.game_state.setup_game(
-            player_info, vp_to_win=room.vp_to_win)
+            player_info, vp_to_win=room.vp_to_win, enabled_eras=enabled_eras)
+
+        if not room.play_era1 and room.play_era2:
+            room.game_state.started_from_simulated_era1 = True
+            sim_results = self._simulate_until_era2(room)
+            turn_results.extend(sim_results)
 
         # Send initial state (pre-setup) so client starts with just starting hexes
         await room.broadcast(create_message(S2C.GAME_START, initial_snapshot.to_dict()))
@@ -566,10 +655,132 @@ class GameServer:
                 "phase": room.game_state.phase.value,
                 "events": events,
                 "state": snapshot.to_dict(),
+                "suppress_animations": room.game_state.started_from_simulated_era1,
             }))
 
-        # Spawn game loop task to drive phase transitions
+        await self._auto_resolve_phases(room)
         asyncio.create_task(self._run_game_loop(room))
+
+    def _simulate_until_era2(self, room: GameRoom) -> list[tuple[list[dict], object]]:
+        """Run a full AI-controlled Era 1 until Era 2 is reached."""
+        gs = room.game_state
+        results: list[tuple[list[dict], object]] = []
+        all_spirit_ids = list(gs.spirits.keys())
+
+        while gs.current_era == Era.ERA_1 and gs.phase != Phase.GAME_OVER:
+            if gs.phase == Phase.VAGRANT_PHASE:
+                for sid in all_spirit_ids:
+                    if gs.needs_input(sid) and sid not in gs.pending_actions:
+                        action = ai.get_ai_vagrant_action(gs, sid)
+                        if action:
+                            gs.submit_action(sid, action)
+                events = gs.resolve_current_phase()
+                results.append((events, gs.get_snapshot()))
+                continue
+
+            if gs.phase == Phase.AGENDA_PHASE:
+                for sid in all_spirit_ids:
+                    if gs.needs_input(sid) and sid not in gs.pending_actions:
+                        action = ai.get_ai_agenda_choice(gs, sid)
+                        if action:
+                            gs.submit_action(sid, action)
+                events = gs.resolve_current_phase()
+                results.append((events, gs.get_snapshot()))
+                if gs.has_pending_battleground_choices():
+                    bg_events: list[dict] = []
+                    for sid, entries in list(gs.battleground_pending.items()):
+                        _, evts = gs.submit_battleground_choice(sid, ai.get_ai_battleground_choice(entries))
+                        bg_events.extend(evts)
+                    results.append((bg_events, gs.get_snapshot()))
+                continue
+
+            if gs.phase == Phase.WAR_PHASE:
+                if gs.has_pending_winner_choices():
+                    events: list[dict] = []
+                    for sid, entries in list(gs.winner_choice_pending.items()):
+                        _, evts = gs.submit_winner_choice(sid, ai.get_ai_winner_choice(entries))
+                        events.extend(evts)
+                    results.append((events, gs.get_snapshot()))
+                    continue
+                if gs.has_pending_war_support_choices():
+                    events = []
+                    for sid, entries in list(gs.war_support_pending.items()):
+                        guided_faction = gs.spirits[sid].guided_faction if sid in gs.spirits else None
+                        _, evts = gs.submit_war_support_choice(
+                            sid, ai.get_ai_war_support_choice(entries, guided_faction))
+                        events.extend(evts)
+                    results.append((events, gs.get_snapshot()))
+                    continue
+                if gs.spoils_pending:
+                    events = []
+                    for sid in list(gs.spoils_pending.keys()):
+                        pending_list = gs.spoils_pending[sid]
+                        _, evts = gs.submit_spoils_choice(sid, ai.get_ai_spoils_choice(pending_list))
+                        events.extend(evts)
+                    for sid in list(gs.spoils_pending.keys()):
+                        pending_list = gs.spoils_pending[sid]
+                        change_pendings = [p for p in pending_list if p.stage == SubPhase.CHANGE_CHOICE]
+                        if change_pendings:
+                            _, evts = gs.submit_spoils_change_choice(
+                                sid, ai.get_ai_spoils_change_choice(change_pendings))
+                            events.extend(evts)
+                    for sid in list(gs.spoils_pending.keys()):
+                        pending_list = gs.spoils_pending[sid]
+                        expand_pendings = [p for p in pending_list if p.stage == SubPhase.SPOILS_EXPAND_CHOICE]
+                        if expand_pendings:
+                            _, evts = gs.submit_spoils_expand_choice(
+                                sid, ai.get_ai_spoils_expand_choice(expand_pendings))
+                            events.extend(evts)
+                    results.append((events, gs.get_snapshot()))
+                    continue
+                if gs.respawn_pending:
+                    events = []
+                    for sid in list(gs.respawn_pending.keys()):
+                        neutral = list(gs.hex_map.get_neutral_hexes())
+                        if neutral:
+                            _, evts = gs.submit_respawn_choice(sid, neutral[0][0], neutral[0][1])
+                            events.extend(evts)
+                    results.append((events, gs.get_snapshot()))
+                    continue
+                events = gs.resolve_current_phase()
+                results.append((events, gs.get_snapshot()))
+                continue
+
+            if gs.phase == Phase.SCORING:
+                if gs.ejection_pending:
+                    events = []
+                    for sid, faction_id in list(gs.ejection_pending.items()):
+                        pool = [c.agenda_type.value for c in gs.factions[faction_id].agenda_pool]
+                        remove_type, add_type = ai.get_ai_ejection_choice(pool, [at.value for at in AgendaType])
+                        gs.submit_ejection_choice(sid, remove_type, add_type)
+                    events = gs.finalize_sub_choices()
+                    results.append((events, gs.get_snapshot()))
+                    continue
+                events = gs.resolve_current_phase()
+                results.append((events, gs.get_snapshot()))
+                if gs.started_from_simulated_era1 and gs.current_era == Era.ERA_2:
+                    if gs.ejection_pending:
+                        transition_events: list[dict] = []
+                        for sid, faction_id in list(gs.ejection_pending.items()):
+                            pool = [c.agenda_type.value for c in gs.factions[faction_id].agenda_pool]
+                            remove_type, add_type = ai.get_ai_ejection_choice(pool, [at.value for at in AgendaType])
+                            gs.submit_ejection_choice(sid, remove_type, add_type)
+                        transition_events.extend(gs.finalize_sub_choices())
+                        results.append((transition_events, gs.get_snapshot()))
+                    if gs.phase == Phase.CLEANUP:
+                        cleanup_events = gs.resolve_current_phase()
+                        results.append((cleanup_events, gs.get_snapshot()))
+                    break
+                continue
+
+            if gs.phase == Phase.CLEANUP:
+                events = gs.resolve_current_phase()
+                results.append((events, gs.get_snapshot()))
+                continue
+
+            break
+
+        return results
 
     async def _run_game_loop(self, room: GameRoom):
         """Drive VAGRANT and AGENDA phase transitions using event-based waiting."""
@@ -647,6 +858,9 @@ class GameServer:
     async def _handle_agenda_resolution(self, room: GameRoom):
         """Handle agenda phase after all inputs received: prepare expand/change choices first."""
         gs = room.game_state
+        if gs.is_era2():
+            await self._handle_restrain_choices(room)
+            return
         change_events = gs.prepare_change_choices()
         await self._broadcast_phase_result(room, change_events)
 
@@ -660,7 +874,8 @@ class GameServer:
         for sid in list(room.ai_spirit_ids):
             if sid in gs.expand_pending:
                 faction_id = gs.expand_pending[sid]
-                reachable = list(gs.hex_map.get_reachable_neutral_hexes(faction_id))
+                allow_enemy = "Special Military Operations" in gs.factions[faction_id].shaping_effects
+                reachable = list(gs.hex_map.get_expand_targets(faction_id, allow_enemy=allow_enemy))
                 if reachable:
                     chosen = ai.get_ai_expand_choice(reachable, gs.hex_map, sid)
                     gs.submit_expand_choice(sid, chosen[0], chosen[1])
@@ -669,7 +884,8 @@ class GameServer:
             # Send expand_choice to each remaining human spirit
             prompts = []
             for spirit_id, faction_id in gs.expand_pending.items():
-                reachable = gs.hex_map.get_reachable_neutral_hexes(faction_id)
+                allow_enemy = "Special Military Operations" in gs.factions[faction_id].shaping_effects
+                reachable = gs.hex_map.get_expand_targets(faction_id, allow_enemy=allow_enemy)
                 prompts.append(PendingChoicePrompt(
                     spirit_id=spirit_id,
                     phase=SubPhase.EXPAND_CHOICE,
@@ -684,6 +900,121 @@ class GameServer:
             return
 
         # No expand choices pending — proceed to change choices
+        await self._handle_change_choices_after_expand(room)
+
+    async def _handle_restrain_choices(self, room: GameRoom):
+        gs = room.game_state
+        events = gs.prepare_restrain_choices()
+        if events:
+            await self._broadcast_phase_result(room, events)
+        for sid in list(room.ai_spirit_ids):
+            if sid in gs.restrain_pending:
+                cards = gs.restrain_pending[sid]
+                err, evts = gs.submit_restrain_choice(sid, ai.get_ai_restrain_choice(cards))
+                if not err and evts:
+                    await self._broadcast_phase_result(room, evts)
+        if gs.restrain_pending:
+            prompts = [
+                PendingChoicePrompt(
+                    spirit_id=spirit_id,
+                    phase=SubPhase.RESTRAIN_CHOICE,
+                    turn=gs.turn,
+                    options={"cards": [card.value for card in cards]},
+                )
+                for spirit_id, cards in gs.restrain_pending.items()
+            ]
+            await send_choice_prompts(room, prompts)
+            await broadcast_waiting_for(room, list(gs.restrain_pending.keys()))
+            return
+        await self._handle_shaping_choices(room)
+
+    async def _handle_shaping_choices(self, room: GameRoom):
+        gs = room.game_state
+        events = gs.prepare_shaping_choices()
+        if events:
+            await self._broadcast_phase_result(room, events)
+        for sid in list(room.ai_spirit_ids):
+            if sid in gs.shaping_pending:
+                err, evts = gs.submit_shaping_choice(sid, ai.get_ai_card_name_choice(gs.shaping_pending[sid]))
+                if not err and evts:
+                    await self._broadcast_phase_result(room, evts)
+        if gs.shaping_pending:
+            prompts = [
+                PendingChoicePrompt(
+                    spirit_id=spirit_id,
+                    phase=SubPhase.SHAPING_CHOICE,
+                    turn=gs.turn,
+                    options={"cards": cards},
+                )
+                for spirit_id, cards in gs.shaping_pending.items()
+            ]
+            await send_choice_prompts(room, prompts)
+            await broadcast_waiting_for(room, list(gs.shaping_pending.keys()))
+            return
+        await self._handle_adaptation_choices(room)
+
+    async def _handle_adaptation_choices(self, room: GameRoom):
+        gs = room.game_state
+        events = gs.prepare_adaptation_choices()
+        if events:
+            await self._broadcast_phase_result(room, events)
+        for sid in list(room.ai_spirit_ids):
+            if sid in gs.adaptation_pending:
+                err, evts = gs.submit_adaptation_choice(sid, ai.get_ai_card_name_choice(gs.adaptation_pending[sid]))
+                if not err and evts:
+                    await self._broadcast_phase_result(room, evts)
+        if gs.adaptation_pending:
+            prompts = [
+                PendingChoicePrompt(
+                    spirit_id=spirit_id,
+                    phase=SubPhase.ADAPTATION_CHOICE,
+                    turn=gs.turn,
+                    options={"cards": cards},
+                )
+                for spirit_id, cards in gs.adaptation_pending.items()
+            ]
+            await send_choice_prompts(room, prompts)
+            await broadcast_waiting_for(room, list(gs.adaptation_pending.keys()))
+            return
+        await self._handle_expand_and_change_choices(room)
+
+    async def _handle_expand_and_change_choices(self, room: GameRoom):
+        gs = room.game_state
+        change_events = gs.prepare_change_choices()
+        await self._broadcast_phase_result(room, change_events)
+
+        if not hasattr(room, '_pending_change_events'):
+            room._pending_change_events = []
+
+        gs.prepare_expand_choices()
+
+        for sid in list(room.ai_spirit_ids):
+            if sid in gs.expand_pending:
+                faction_id = gs.expand_pending[sid]
+                allow_enemy = "Special Military Operations" in gs.factions[faction_id].shaping_effects
+                reachable = list(gs.hex_map.get_expand_targets(faction_id, allow_enemy=allow_enemy))
+                if reachable:
+                    chosen = ai.get_ai_expand_choice(reachable, gs.hex_map, sid)
+                    gs.submit_expand_choice(sid, chosen[0], chosen[1])
+
+        if gs.has_pending_expand_choices():
+            prompts = []
+            for spirit_id, faction_id in gs.expand_pending.items():
+                allow_enemy = "Special Military Operations" in gs.factions[faction_id].shaping_effects
+                reachable = gs.hex_map.get_expand_targets(faction_id, allow_enemy=allow_enemy)
+                prompts.append(PendingChoicePrompt(
+                    spirit_id=spirit_id,
+                    phase=SubPhase.EXPAND_CHOICE,
+                    turn=gs.turn,
+                    options={
+                        "faction": faction_id,
+                        "hexes": [{"q": h[0], "r": h[1]} for h in sorted(reachable)],
+                    },
+                ))
+            await send_choice_prompts(room, prompts)
+            await broadcast_waiting_for(room, list(gs.expand_pending.keys()))
+            return
+
         await self._handle_change_choices_after_expand(room)
 
     async def _handle_change_choices_after_expand(self, room: GameRoom):
@@ -725,7 +1056,75 @@ class GameServer:
 
         events = gs.resolve_agenda_phase_after_changes()
         await self._broadcast_phase_result(room, events)
-        await self._auto_resolve_phases(room)
+        if gs.has_pending_battleground_choices():
+            await self._send_battleground_options(room)
+        else:
+            await self._auto_resolve_phases(room)
+
+    async def _send_battleground_options(self, room: GameRoom):
+        gs = room.game_state
+        ai_events = []
+        for sid in list(room.ai_spirit_ids):
+            if sid in gs.battleground_pending:
+                err, evts = gs.submit_battleground_choice(
+                    sid, ai.get_ai_battleground_choice(gs.battleground_pending[sid]))
+                if not err:
+                    ai_events.extend(evts)
+        if ai_events:
+            await self._broadcast_phase_result(room, ai_events)
+        if not gs.has_pending_battleground_choices():
+            await self._auto_resolve_phases(room)
+            return
+        prompts = []
+        for sid, entries in gs.battleground_pending.items():
+            choice_entries = []
+            for entry in entries:
+                choice_entries.append({
+                    "war_id": entry["war_id"],
+                    "faction_a": entry["faction_a"],
+                    "faction_b": entry["faction_b"],
+                    "pairs": [
+                        {
+                            "a": {"q": pair[0][0], "r": pair[0][1]},
+                            "b": {"q": pair[1][0], "r": pair[1][1]},
+                        }
+                        for pair in entry["pairs"]
+                    ],
+                })
+            prompts.append(PendingChoicePrompt(
+                spirit_id=sid,
+                phase=SubPhase.BATTLEGROUND_CHOICE,
+                turn=gs.turn,
+                options={"choices": choice_entries},
+            ))
+        await send_choice_prompts(room, prompts)
+        await broadcast_waiting_for(room, list(gs.battleground_pending.keys()))
+
+    async def _send_war_support_options(self, room: GameRoom):
+        gs = room.game_state
+        ai_events = []
+        for sid in list(room.ai_spirit_ids):
+            if sid in gs.war_support_pending:
+                guided_faction = gs.spirits[sid].guided_faction if sid in gs.spirits else None
+                err, evts = gs.submit_war_support_choice(
+                    sid, ai.get_ai_war_support_choice(gs.war_support_pending[sid], guided_faction))
+                if not err:
+                    ai_events.extend(evts)
+        if ai_events:
+            await self._broadcast_phase_result(room, ai_events)
+        if not gs.has_pending_war_support_choices():
+            await self._auto_resolve_phases(room)
+            return
+        prompts = []
+        for sid, entries in gs.war_support_pending.items():
+            prompts.append(PendingChoicePrompt(
+                spirit_id=sid,
+                phase=SubPhase.WAR_SUPPORT_CHOICE,
+                turn=gs.turn,
+                options={"choices": entries},
+            ))
+        await send_choice_prompts(room, prompts)
+        await broadcast_waiting_for(room, list(gs.war_support_pending.keys()))
 
     async def _send_respawn_options(self, room: GameRoom):
         """Auto-submit AI respawn choices and send options to human spirits."""
@@ -883,6 +1282,20 @@ class GameServer:
             await self._broadcast_phase_result(room, events)
             if gs.phase == Phase.GAME_OVER:
                 return
+            if gs.has_pending_war_support_choices():
+                for sid in list(room.ai_spirit_ids):
+                    if sid in gs.war_support_pending:
+                        choices = []
+                        for entry in gs.war_support_pending[sid]:
+                            choices.append({
+                                "target": entry["faction_a"]
+                                if entry["faction_a"] == gs.spirits[sid].guided_faction
+                                else entry["faction_b"]
+                            })
+                        await self._handle_game_message(room.room_code, sid, C2S.SUBMIT_WAR_SUPPORT_CHOICE, {"choices": choices})
+                if gs.has_pending_war_support_choices():
+                    await self._send_war_support_options(room)
+                    return
             # If winner choices are pending, auto-submit for AI then send to humans
             if gs.winner_choice_pending:
                 ai_winner_events = []

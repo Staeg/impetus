@@ -121,6 +121,30 @@ class GamePhaseController:
         if scene.phase == SubPhase.SPOILS_EXPAND_CHOICE:
             if all(s is not None for s in scene.spoils_expand_selections):
                 scene._do_submit_spoils_expand_choice()
+            return
+
+        if scene.phase == SubPhase.BATTLEGROUND_CHOICE:
+            if len(scene.battleground_selections) >= len(scene.battleground_choice_entries):
+                scene.app.network.send(
+                    C2S.SUBMIT_BATTLEGROUND_CHOICE,
+                    {"choices": [
+                        {"pair_index": scene.battleground_selections[e["war_id"]]}
+                        for e in scene.battleground_choice_entries
+                    ]},
+                )
+                scene.has_submitted = True
+            return
+
+        if scene.phase == SubPhase.WAR_SUPPORT_CHOICE:
+            if len(scene.war_support_selections) >= len(scene.war_support_entries):
+                scene.app.network.send(
+                    C2S.SUBMIT_WAR_SUPPORT_CHOICE,
+                    {"choices": [
+                        {"target": scene.war_support_selections[e["war_id"]]}
+                        for e in scene.war_support_entries
+                    ]},
+                )
+                scene.has_submitted = True
 
     def setup_phase_ui(self) -> None:
         scene = self.scene
@@ -141,6 +165,9 @@ class GamePhaseController:
                 scene.tutorial.notify_game_event("ejection_phase_started", {"turn": scene.turn})
 
         sub_phase_setup = {
+            SubPhase.RESTRAIN_CHOICE: self._setup_restrain_choice_ui,
+            SubPhase.SHAPING_CHOICE: self._setup_shaping_choice_ui,
+            SubPhase.ADAPTATION_CHOICE: self._setup_adaptation_choice_ui,
             SubPhase.CHANGE_CHOICE: self._setup_change_choice_ui,
             SubPhase.SPOILS_CHOICE: self._setup_spoils_choice_ui,
             SubPhase.SPOILS_CHANGE_CHOICE: self._setup_spoils_change_choice_ui,
@@ -149,6 +176,8 @@ class GamePhaseController:
             SubPhase.EJECTION_CHOICE: self._setup_ejection_choice_ui,
             SubPhase.EXPAND_CHOICE: self._setup_expand_choice_ui,
             SubPhase.RESPAWN_CHOICE: self._setup_respawn_choice_ui,
+            SubPhase.BATTLEGROUND_CHOICE: self._setup_battleground_choice_ui,
+            SubPhase.WAR_SUPPORT_CHOICE: self._setup_war_support_choice_ui,
         }
         if scene.phase in sub_phase_setup:
             sub_phase_setup[scene.phase]()
@@ -166,6 +195,21 @@ class GamePhaseController:
                 "change_drawn",
                 {"influence": influence, "card_count": len(scene.change_cards)},
             )
+
+    def _setup_restrain_choice_ui(self) -> None:
+        scene = self.scene
+        scene.change_cards = scene.phase_options.get("cards") or []
+        scene.submit_button = None
+
+    def _setup_shaping_choice_ui(self) -> None:
+        scene = self.scene
+        scene.change_cards = scene.phase_options.get("cards") or []
+        scene.submit_button = None
+
+    def _setup_adaptation_choice_ui(self) -> None:
+        scene = self.scene
+        scene.change_cards = scene.phase_options.get("cards") or []
+        scene.submit_button = None
 
     def _setup_spoils_choice_ui(self) -> None:
         scene = self.scene
@@ -279,4 +323,19 @@ class GamePhaseController:
         scene.spoils_expand_display_index = 0
         scene.spoils_expand_selections = [None] * len(choices)
         scene._refresh_spoils_expand_hex_set()
+        scene.submit_button = Button(pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48), "Confirm", (60, 130, 60))
+
+    def _setup_battleground_choice_ui(self) -> None:
+        scene = self.scene
+        scene.battleground_choice_entries = scene.phase_options.get("choices", [])
+        scene.battleground_choice_index = 0
+        scene.battleground_choice_buttons = []
+        scene.battleground_selections = {}
+        scene.submit_button = Button(pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48), "Confirm", (60, 130, 60))
+
+    def _setup_war_support_choice_ui(self) -> None:
+        scene = self.scene
+        scene.war_support_entries = scene.phase_options.get("choices", [])
+        scene.war_support_buttons = []
+        scene.war_support_selections = {}
         scene.submit_button = Button(pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48), "Confirm", (60, 130, 60))

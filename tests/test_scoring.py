@@ -4,7 +4,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from shared.constants import IdolType
+from shared.constants import IdolType, Era
 from shared.models import Idol, HexCoord
 from server.faction import Faction
 from server.spirit import Spirit
@@ -114,3 +114,36 @@ class TestScoring:
         # 2 battle idols * 5 * 1 war = 10 VP
         assert len(events) == 1
         assert events[0]["vp_gained"] == 10
+
+    def test_era2_idol_value_is_split_between_worship_and_owner(self):
+        hm, factions, spirits = self._setup()
+        spirits["s2"] = Spirit("s2", "Player 2")
+        faction = factions["mountain"]
+        faction.worship_spirit = "s1"
+        faction.wars_won_this_turn = 2
+
+        idol = Idol(IdolType.BATTLE, HexCoord(1, -1), "s2")
+        hm.place_idol(idol)
+        spirits["s2"].idols.append(idol)
+
+        events = calculate_scoring(factions, spirits, hm, era=Era.ERA_2)
+
+        assert len(events) == 2
+        gained = {event["spirit"]: event["vp_gained"] for event in events}
+        assert gained == {"s1": 5.0, "s2": 5.0}
+
+    def test_era2_affluence_idol_is_halved(self):
+        hm, factions, spirits = self._setup()
+        spirit = spirits["s1"]
+        faction = factions["mountain"]
+        faction.worship_spirit = "s1"
+        faction.gold_gained_this_turn = 5
+
+        idol = Idol(IdolType.AFFLUENCE, HexCoord(1, -1), "s1")
+        hm.place_idol(idol)
+        spirit.idols.append(idol)
+
+        events = calculate_scoring(factions, spirits, hm, era=Era.ERA_2)
+
+        assert len(events) == 1
+        assert events[0]["vp_gained"] == 5.0

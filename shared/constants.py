@@ -68,7 +68,13 @@ VP_TO_WIN = 100
 # Scoring multipliers
 BATTLE_IDOL_VP = 5
 AFFLUENCE_IDOL_VP = 2
-SPREAD_IDOL_VP = 5
+SPRAWL_IDOL_VP = 5
+SPREAD_IDOL_VP = SPRAWL_IDOL_VP
+
+# Era 2 idol adjustments
+ERA2_AFFLUENCE_IDOL_VP_MULTIPLIER = 0.5
+ERA2_DEFAULT_CARD_DRAW = 3
+ERA2_SHORT_DEAL_VP = 5
 
 # Server
 DEFAULT_HOST = "localhost"
@@ -85,6 +91,11 @@ class Phase(str, Enum):
     SCORING = "scoring"
     CLEANUP = "cleanup"
     GAME_OVER = "game_over"
+
+
+class Era(str, Enum):
+    ERA_1 = "era_1"
+    ERA_2 = "era_2"
 
 
 class AgendaType(str, Enum):
@@ -106,7 +117,11 @@ AGENDA_RESOLUTION_ORDER = [
 class IdolType(str, Enum):
     BATTLE = "battle"
     AFFLUENCE = "affluence"
-    SPREAD = "spread"
+    SPRAWL = "sprawl"
+    SPREAD = "sprawl"
+
+
+GuidanceStep = str
 
 
 class ChangeModifierTarget(str, Enum):

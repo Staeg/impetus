@@ -177,7 +177,7 @@ class TutorialManager:
                     "Once in a Faction's territory, they grant VP based on the Idol type:\n"
                     "  Battle — 5 VP per War won\n"
                     "  Affluence — 2 VP per Gold gained\n"
-                    "  Spread — 5 VP per Territory claimed\n\n"
+                    "  Sprawl — 5 VP per Territory claimed\n\n"
                     "These VPs go to whichever Spirit the Faction Worships.\n"
                     "Factions prioritize expanding into hexes with Idols.\n"
                     "Choose an Idol type, click a neutral hex, then click Confirm."
@@ -560,15 +560,15 @@ class TutorialManager:
             if idx == 9 and self._step_pending_show:
                 self._advance_to(7)
 
-        elif event_type == "war_erupted":
+        elif event_type == "war_declared":
             if (self.first_time_triggers_enabled
-                    and "war_erupted" not in self.fired_triggers):
-                self.fired_triggers.add("war_erupted")
+                    and "war_declared" not in self.fired_triggers):
+                self.fired_triggers.add("war_declared")
                 self.popup_step = TutorialStep(
-                    title="A War Has Erupted!",
+                    title="A War Was Declared!",
                     text=(
-                        "Wars erupt when Regard between neighbors drops to -2 or below "
-                        "after a Steal agenda. Wars resolve immediately at the end of this "
+                        "Wars are declared when Regard between neighbors drops to -2 or below "
+                        "after a Steal agenda. In Era 1 they still resolve immediately at the end of this "
                         "same turn.\n\n"
                         "If exactly one Faction is Guided, the Guiding Spirit decides who "
                         "wins. If both or neither side is Guided, both sides roll a die and "
@@ -617,7 +617,7 @@ class TutorialManager:
                         f"to choose from — so you can be selective about which modifier "
                         f"you want.\n\n"
                         "Each modifier permanently boosts one Agenda type for your Guided "
-                        "Faction. Stack the same type for compounding effects, or spread "
+                        "Faction. Stack the same type for compounding effects, or branch "
                         "across types for flexibility."
                     ),
                     button_label="Ok",

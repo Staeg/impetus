@@ -23,7 +23,7 @@ These concepts persist across all Eras:
 - **Factions** — Six factions on a hex grid, each with an Agenda pool, gold, territory, and inter-faction Regard
 - **Spirits** — Players who guide Factions, place Idols, and earn VP through Worship
 - **Guidance** — A Spirit can guide one non-Worshipping Faction at a time; guiding sets Influence to 3, which decreases each turn
-- **Idols** — Three types (Battle, Affluence, Spread) placed on neutral hexes; scoring depends on the Worshipped Spirit
+- **Idols** — Three types (Battle, Affluence, Sprawl) placed on neutral hexes; scoring depends on the Worshipped Spirit
 - **Worship** — A Spirit that Worships a Faction scores VP from all Idols in that Faction's territory
 - **Wars** — Erupt from low Regard after Steal; resolved the following turn using territory-based Power
 

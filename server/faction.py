@@ -31,6 +31,10 @@ class Faction:
         self.guiding_spirit: Optional[str] = None
         self.worship_spirit: Optional[str] = None
         self.race: str = ""
+        self.guidance_step: str = ""
+        self.restrained_agenda: Optional[AgendaType] = None
+        self.queued_agendas: list[AgendaType] = []
+        self.shaping_effects: list[str] = []
         # Turn tracking for scoring
         self.gold_gained_this_turn: int = 0
         self.territories_gained_this_turn: int = 0
@@ -111,4 +115,8 @@ class Faction:
             guiding_spirit=self.guiding_spirit,
             worship_spirit=self.worship_spirit,
             race=self.race,
+            guidance_step=self.guidance_step,
+            restrained_agenda=self.restrained_agenda.value if self.restrained_agenda else None,
+            queued_agendas=[card.value for card in self.queued_agendas],
+            shaping_effects=list(self.shaping_effects),
         )

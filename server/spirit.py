@@ -19,6 +19,7 @@ class Spirit:
         self.victory_points: int = 0
         self.habitat_affinity: str = ""
         self.race_affinity: str = ""
+        self.adaptation_effects: list[str] = []
 
     def guide_faction(self, faction_id: str):
         self.is_vagrant = False
@@ -54,4 +55,5 @@ class Spirit:
             victory_points=self.victory_points,
             habitat_affinity=self.habitat_affinity,
             race_affinity=self.race_affinity,
+            adaptation_effects=list(self.adaptation_effects),
         )
