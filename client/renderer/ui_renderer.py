@@ -7,6 +7,13 @@ from shared.constants import (
     Phase, AgendaType, IdolType, FACTION_COLORS, FACTION_DISPLAY_NAMES,
     FACTION_NAMES,
 )
+from shared.era_data import (
+    GUIDANCE_STEP_RESTRAIN,
+    GUIDANCE_STEP_SHAPE,
+    GUIDANCE_STEP_ADAPT,
+    GUIDANCE_STEP_EJECT,
+    get_era_card_info,
+)
 from client.faction_names import faction_full_name
 from client.renderer.assets import agenda_ribbon_icons
 from client.renderer.hex_renderer import draw_spirit_symbol
@@ -307,6 +314,49 @@ class UIRenderer:
         self.panel_faction_id: str | None = None
         self.faction_panel_rect: pygame.Rect | None = None
         self.event_log_expand_rect: pygame.Rect | None = None
+        self.card_modifier_hotspots: list[list[pygame.Rect]] = []
+
+    def _get_card_title_lines(self, card: dict, font: "pygame.font.Font", max_width: int) -> list[str]:
+        title = card.get("title", card.get("agenda_type", "?"))
+        if isinstance(title, list):
+            return title[:2]
+        wrapped = _wrap_text(str(title), font, max_width)
+        return wrapped[:2] if wrapped else ["?"]
+
+    def _get_modifier_slot_rects(self, rect: pygame.Rect, count: int,
+                                 show_preview_plus: bool) -> list[pygame.Rect]:
+        total = min(6, max(count, 0) + (1 if show_preview_plus and count < 6 else 0))
+        slots: list[pygame.Rect] = []
+        start_x = rect.x + 4
+        start_y = rect.y + 20
+        step_x = 9
+        step_y = 10
+        size = 10
+        for idx in range(total):
+            row = idx // 3
+            col = idx % 3
+            slots.append(pygame.Rect(start_x + col * step_x, start_y + row * step_y, size, size))
+        return slots
+
+    def get_card_modifier_hotspots(self, hand: list[dict], x: int, y: int,
+                                   modifiers: dict | None = None,
+                                   show_preview_plus: bool = False,
+                                   vertical: bool = False) -> list[list[pygame.Rect]]:
+        modifiers = modifiers or {}
+        card_w, card_h = (110, 145) if vertical else (110, 170)
+        spacing = 5 if vertical else 10
+        hotspots: list[list[pygame.Rect]] = []
+        for i, card in enumerate(hand):
+            cx = x if vertical else x + i * (card_w + spacing)
+            cy = y + i * (card_h + spacing) if vertical else y
+            rect = pygame.Rect(cx, cy, card_w, card_h)
+            agenda_type = card.get("agenda_type", "")
+            mod_count = modifiers.get(agenda_type, 0)
+            if mod_count > 0 or show_preview_plus:
+                hotspots.append(self._get_modifier_slot_rects(rect, mod_count, show_preview_plus))
+            else:
+                hotspots.append([])
+        return hotspots
 
     def _get_font(self, size=16):
         return get_font(size)
@@ -368,7 +418,8 @@ class UIRenderer:
 
             # Render identity symbol (always, vagrant or guiding) — silver
 
-        right_x = surface.get_width() - 12
+        menu_reserve = 94
+        right_x = surface.get_width() - menu_reserve
         min_left = max(320, phase_text.get_width() + 34)
         for sid, name_surf, vp_surf in reversed(entries):
             sigil_r = 10
@@ -937,7 +988,8 @@ class UIRenderer:
                           my_spirit_id: str = "",
                           circle_fills: "list[float] | None" = None,
                           spirit_index_map: dict = None,
-                          max_height: int = None) -> dict:
+                          max_height: int = None,
+                          era: str = "era_1") -> dict:
         """Draw spirit info panel showing guidance, influence, worship, and idol counts.
 
         Returns a dict with keys "panel", "guidance", "influence", "worship" containing
@@ -954,6 +1006,7 @@ class UIRenderer:
         vp = spirit_data.get("victory_points", 0)
         habitat_affinity = spirit_data.get("habitat_affinity", "")
         race_affinity = spirit_data.get("race_affinity", "")
+        adaptation_effects = list(spirit_data.get("adaptation_effects", []))
 
         # Find factions worshipping this spirit
         worshipping_factions = []
@@ -962,11 +1015,16 @@ class UIRenderer:
                 worshipping_factions.append((fid, fdata))
 
         # Calculate panel height
-        panel_h = 108  # header + guidance + influence + affinity
+        is_era2 = era == "era_2"
+        panel_h = 108  # header + guidance + progress + affinity
         if worshipping_factions:
             panel_h += 22 + len(worshipping_factions) * 36  # section header + per-faction
         else:
             panel_h += 22 + 18  # section header + "None"
+        if adaptation_effects:
+            panel_h += 22 + len(adaptation_effects) * 18
+        else:
+            panel_h += 22 + 18
 
         display_h = min(panel_h, max_height) if max_height else panel_h
         panel_rect = pygame.Rect(x, y, width, display_h)
@@ -1011,30 +1069,47 @@ class UIRenderer:
         draw_dotted_underline(surface, x + 10, guidance_line_y + 14, guidance_text_w)
         dy += 18
 
-        # Influence circles
-        influence_line_y = dy
-        inf_label = self.small_font.render("Influence ", True, theme.TEXT_NORMAL)
-        surface.blit(inf_label, (x + 10, dy))
-        circle_r = 7
-        cx_start = x + 10 + inf_label.get_width()
-        for idx in range(3):
-            cx = cx_start + idx * (circle_r * 2 + 3) + circle_r
-            cy = dy + circle_r
-            if circle_fills is not None:
-                fill = circle_fills[idx]
-            else:
-                fill = 1.0 if idx < influence else 0.0
-            if fill > 0.01:
-                tmp = pygame.Surface((circle_r * 2, circle_r * 2), pygame.SRCALPHA)
-                pygame.draw.circle(tmp, (180, 180, 220, int(fill * 255)),
-                                   (circle_r, circle_r), circle_r)
-                surface.blit(tmp, (cx - circle_r, cy - circle_r))
-            pygame.draw.circle(surface, (120, 120, 160), (cx, cy), circle_r, 1)
-        circles_w = 3 * (circle_r * 2 + 3)
-        total_w = inf_label.get_width() + circles_w
-        influence_rect = pygame.Rect(x + 10, influence_line_y, total_w, circle_r * 2)
-        draw_dotted_underline(surface, x + 10, influence_line_y + circle_r * 2 + 2, total_w)
-        dy += circle_r * 2 + 6
+        progress_line_y = dy
+        if is_era2 and guided_faction:
+            faction_data = factions.get(guided_faction, {})
+            step = faction_data.get("guidance_step", "")
+            step_map = {
+                GUIDANCE_STEP_RESTRAIN: ("Cycle", "1/4 Restrain"),
+                GUIDANCE_STEP_SHAPE: ("Cycle", "2/4 Shape"),
+                GUIDANCE_STEP_ADAPT: ("Cycle", "3/4 Adapt"),
+                GUIDANCE_STEP_EJECT: ("Cycle", "4/4 Eject"),
+            }
+            label, value = step_map.get(step, ("Cycle", "Between turns"))
+            label_surf = self.small_font.render(f"{label}: ", True, theme.TEXT_NORMAL)
+            value_surf = self.small_font.render(value, True, theme.TEXT_HIGHLIGHT)
+            surface.blit(label_surf, (x + 10, dy))
+            surface.blit(value_surf, (x + 10 + label_surf.get_width(), dy))
+            progress_w = label_surf.get_width() + value_surf.get_width()
+            progress_h = value_surf.get_height()
+        else:
+            inf_label = self.small_font.render("Influence ", True, theme.TEXT_NORMAL)
+            surface.blit(inf_label, (x + 10, dy))
+            circle_r = 7
+            cx_start = x + 10 + inf_label.get_width()
+            for idx in range(3):
+                cx = cx_start + idx * (circle_r * 2 + 3) + circle_r
+                cy = dy + circle_r
+                if circle_fills is not None:
+                    fill = circle_fills[idx]
+                else:
+                    fill = 1.0 if idx < influence else 0.0
+                if fill > 0.01:
+                    tmp = pygame.Surface((circle_r * 2, circle_r * 2), pygame.SRCALPHA)
+                    pygame.draw.circle(tmp, (180, 180, 220, int(fill * 255)),
+                                       (circle_r, circle_r), circle_r)
+                    surface.blit(tmp, (cx - circle_r, cy - circle_r))
+                pygame.draw.circle(surface, (120, 120, 160), (cx, cy), circle_r, 1)
+            circles_w = 3 * (circle_r * 2 + 3)
+            progress_w = inf_label.get_width() + circles_w
+            progress_h = circle_r * 2
+        influence_rect = pygame.Rect(x + 10, progress_line_y, progress_w, progress_h)
+        draw_dotted_underline(surface, x + 10, progress_line_y + progress_h + 2, progress_w)
+        dy += progress_h + 6
 
         # Affinity row
         affinity_rect = None
@@ -1116,6 +1191,24 @@ class UIRenderer:
             surface.blit(none_surf, (x + 10, dy))
             dy += 18
 
+        dy += 4
+        adapt_section = self.small_font.render("Adaptations:", True, (150, 150, 170))
+        surface.blit(adapt_section, (x + 10, dy))
+        dy += 18
+        adaptation_rects: dict[str, pygame.Rect] = {}
+        if adaptation_effects:
+            for card_name in adaptation_effects:
+                info = get_era_card_info(card_name) or {}
+                body = info.get("body", card_name)
+                body_surf = self.small_font.render(f"  {card_name}: {body}", True, theme.TEXT_NORMAL)
+                surface.blit(body_surf, (x + 10, dy))
+                adaptation_rects[card_name] = pygame.Rect(x + 10, dy, body_surf.get_width(), 16)
+                dy += 18
+        else:
+            none_surf = self.small_font.render("  None", True, (140, 140, 160))
+            surface.blit(none_surf, (x + 10, dy))
+            dy += 18
+
         surface.set_clip(old_clip)
 
         # Draw scroll arrow if content overflows
@@ -1125,7 +1218,7 @@ class UIRenderer:
             surface.blit(arrow_down, (indicator_x, y + display_h - 18))
 
         return {"panel": panel_rect, "guidance": guidance_rect, "influence": influence_rect,
-                "worship": worship_rects, "affinity": affinity_rect}
+                "worship": worship_rects, "affinity": affinity_rect, "adaptation": adaptation_rects}
 
     def _build_card_description(self, agenda_type: str, modifiers: dict,
                                 is_spoils: bool = False,
@@ -1204,6 +1297,12 @@ class UIRenderer:
         card_images = card_images or {}
         rects = []
         effect_font = self._get_font(11)
+        title_font = self._get_font(13)
+        self.card_modifier_hotspots = self.get_card_modifier_hotspots(
+            hand, x, y, modifiers=modifiers,
+            show_preview_plus=show_preview_plus,
+            vertical=vertical,
+        )
 
         if vertical:
             card_w, card_h = 110, 145
@@ -1221,29 +1320,26 @@ class UIRenderer:
                 pygame.draw.rect(surface, border_color, rect, 2, border_radius=6)
 
                 agenda_type = card.get("agenda_type", "?")
-                name_text = self.font.render(agenda_type.title(), True, (220, 220, 240))
-                surface.blit(name_text, (cx + card_w // 2 - name_text.get_width() // 2, cy + 8))
+                title_lines = self._get_card_title_lines(card, title_font, card_w - 12)
+                for line_idx, title_line in enumerate(title_lines):
+                    name_text = title_font.render(title_line, True, (220, 220, 240))
+                    surface.blit(name_text, (cx + card_w // 2 - name_text.get_width() // 2, cy + 8 + line_idx * 13))
 
                 img = card_images.get(agenda_type)
-                desc_y = cy + 30
+                desc_y = cy + 38
                 if img:
                     img_scaled = pygame.transform.scale(img, (70, img.get_height() * 70 // max(img.get_width(), 1)))
                     img_x = cx + card_w // 2 - img_scaled.get_width() // 2
-                    img_y = cy + 26
+                    img_y = cy + 30
                     surface.blit(img_scaled, (img_x, img_y))
                     desc_y = img_y + img_scaled.get_height() + 4
                     mod_count = modifiers.get(agenda_type, 0)
-                    if mod_count > 0 or show_preview_plus:
-                        plus_size = max(9, img_scaled.get_height() // 3)
-                        plus_font = self._get_font(plus_size)
-                        plus_x = cx + 3
-                        for k in range(mod_count):
-                            plus_surf = plus_font.render("+", True, (255, 255, 255))
-                            surface.blit(plus_surf, (plus_x, img_y + 2 + k * (plus_size + 2)))
-                        if show_preview_plus:
-                            faded_surf = plus_font.render("+", True, (255, 255, 255))
-                            faded_surf.set_alpha(70)
-                            surface.blit(faded_surf, (plus_x, img_y + 2 + mod_count * (plus_size + 2)))
+                    plus_slots = self.card_modifier_hotspots[i]
+                    for slot_idx, slot in enumerate(plus_slots):
+                        plus_surf = title_font.render("+", True, (255, 255, 255))
+                        if slot_idx >= min(mod_count, 6):
+                            plus_surf.set_alpha(70)
+                        surface.blit(plus_surf, (slot.x, slot.y - 2))
 
                 desc_lines = card.get("description") or self._build_card_description(
                     agenda_type, modifiers, is_spoils=is_spoils, territories=territories)
@@ -1265,29 +1361,26 @@ class UIRenderer:
                 pygame.draw.rect(surface, border_color, rect, 2, border_radius=6)
 
                 agenda_type = card.get("agenda_type", "?")
-                name_text = self.font.render(agenda_type.title(), True, (220, 220, 240))
-                surface.blit(name_text, (cx + card_w // 2 - name_text.get_width() // 2, y + 10))
+                title_lines = self._get_card_title_lines(card, title_font, card_w - 12)
+                for line_idx, title_line in enumerate(title_lines):
+                    name_text = title_font.render(title_line, True, (220, 220, 240))
+                    surface.blit(name_text, (cx + card_w // 2 - name_text.get_width() // 2, y + 8 + line_idx * 13))
 
                 # Card image (if available)
                 img = card_images.get(agenda_type)
-                desc_y = y + 38
+                desc_y = y + 46
                 if img:
                     img_x = cx + card_w // 2 - img.get_width() // 2
-                    img_y = y + 30
+                    img_y = y + 38
                     surface.blit(img, (img_x, img_y))
                     desc_y = y + 30 + img.get_height() + 4
                     mod_count = modifiers.get(agenda_type, 0)
-                    if mod_count > 0 or show_preview_plus:
-                        plus_size = max(10, img.get_height() // 3)
-                        plus_font = self._get_font(plus_size)
-                        plus_x = cx + 3  # left margin of card, clear of the centered image
-                        for k in range(mod_count):
-                            plus_surf = plus_font.render("+", True, (255, 255, 255))
-                            surface.blit(plus_surf, (plus_x, img_y + 2 + k * (plus_size + 2)))
-                        if show_preview_plus:
-                            faded_surf = plus_font.render("+", True, (255, 255, 255))
-                            faded_surf.set_alpha(70)
-                            surface.blit(faded_surf, (plus_x, img_y + 2 + mod_count * (plus_size + 2)))
+                    plus_slots = self.card_modifier_hotspots[i]
+                    for slot_idx, slot in enumerate(plus_slots):
+                        plus_surf = title_font.render("+", True, (255, 255, 255))
+                        if slot_idx >= min(mod_count, 6):
+                            plus_surf.set_alpha(70)
+                        surface.blit(plus_surf, (slot.x, slot.y - 2))
 
                 # Detailed description (custom or auto-generated)
                 desc_lines = card.get("description") or self._build_card_description(

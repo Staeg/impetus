@@ -218,13 +218,15 @@ class GamePhaseController:
         choices = scene.phase_options.get("choices", [])
         if choices:
             scene.spoils_entries = [
-                SimpleNamespace(cards=c.get("cards", []), loser=c.get("loser", ""), selected=-1)
+                SimpleNamespace(cards=c.get("cards", []), loser=c.get("loser", ""), selected=-1, expanded=True)
                 for c in choices
             ]
         else:
             cards = scene.phase_options.get("cards", [])
             loser = scene.phase_options.get("loser", "")
-            scene.spoils_entries = [SimpleNamespace(cards=cards, loser=loser, selected=-1)] if cards else []
+            scene.spoils_entries = [SimpleNamespace(cards=cards, loser=loser, selected=-1, expanded=True)] if cards else []
+        for idx, entry in enumerate(scene.spoils_entries):
+            entry.expanded = idx == 0 or entry.selected < 0
         scene.spoils_display_index = 0
         scene.submit_button = Button(pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48), "Confirm", (60, 130, 60))
 
@@ -233,13 +235,15 @@ class GamePhaseController:
         choices = scene.phase_options.get("choices", [])
         if choices:
             scene.spoils_change_entries = [
-                SimpleNamespace(cards=c.get("cards", []), loser=c.get("loser", ""), selected=-1)
+                SimpleNamespace(cards=c.get("cards", []), loser=c.get("loser", ""), selected=-1, expanded=True)
                 for c in choices
             ]
         else:
             cards = scene.phase_options.get("cards", [])
             loser = scene.phase_options.get("loser", "")
-            scene.spoils_change_entries = [SimpleNamespace(cards=cards, loser=loser, selected=-1)] if cards else []
+            scene.spoils_change_entries = [SimpleNamespace(cards=cards, loser=loser, selected=-1, expanded=True)] if cards else []
+        for idx, entry in enumerate(scene.spoils_change_entries):
+            entry.expanded = idx == 0 or entry.selected < 0
         scene.spoils_display_index = 0
         scene.submit_button = Button(pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48), "Confirm", (60, 130, 60))
 

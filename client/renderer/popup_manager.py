@@ -133,6 +133,7 @@ class TooltipDescriptor:
     anchor_x: int
     anchor_y: int
     below: bool = False
+    avoid_rects: list[pygame.Rect] | None = None
 
 
 class TooltipRegistry:
@@ -157,6 +158,7 @@ class TooltipRegistry:
         draw_multiline_tooltip_with_regions(
             surface, font, d.text, d.hover_regions,
             anchor_x=d.anchor_x, anchor_y=d.anchor_y, below=d.below,
+            avoid_rects=d.avoid_rects,
         )
 
     def try_pin(self, popup_manager, font, surface_w):
@@ -169,6 +171,7 @@ class TooltipRegistry:
             anchor_x=d.anchor_x, anchor_y=d.anchor_y,
             font=font, max_width=350,
             surface_w=surface_w, below=d.below,
+            avoid_rects=d.avoid_rects,
         )
         return True
 
@@ -276,7 +279,8 @@ class PopupManager:
                     anchor_x: int, anchor_y: int,
                     font: pygame.font.Font, max_width: int,
                     surface_w: int, below: bool = False,
-                    surface_h: int = 800):
+                    surface_h: int = 800,
+                    avoid_rects: list[pygame.Rect] | None = None):
         """Word-wrap text, compute popup rect and keyword rects, push to stack."""
         lines = _wrap_text(text, font, max_width)
         if not lines:
@@ -289,11 +293,14 @@ class PopupManager:
 
         # Avoid covering parent popups already in the stack
         parent_rects = [p.rect for p in self._stack]
+        merged_avoid = parent_rects[:]
+        if avoid_rects:
+            merged_avoid.extend(avoid_rects)
         tip_x, tip_y = _compute_best_position(
             anchor_x, anchor_y, tip_w, tip_h,
             surface_w, surface_h,
             prefer_below=below,
-            avoid_rects=parent_rects or None,
+            avoid_rects=merged_avoid or None,
         )
 
         rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)

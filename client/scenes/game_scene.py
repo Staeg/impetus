@@ -13,6 +13,13 @@ from shared.constants import (
 )
 from shared.protocol import C2S, S2C, SubPhase
 from shared.hex_utils import axial_to_pixel
+from shared.era_data import (
+    GUIDANCE_STEP_RESTRAIN,
+    GUIDANCE_STEP_SHAPE,
+    GUIDANCE_STEP_ADAPT,
+    GUIDANCE_STEP_EJECT,
+    get_era_card_info,
+)
 from client.faction_names import faction_full_name, update_faction_races
 from client.renderer.hex_renderer import HexRenderer
 from client.renderer.ui_renderer import (
@@ -60,9 +67,10 @@ _GUIDANCE_BTN_X = _GUIDANCE_CENTER_X - _BTN_W // 2
 # Title positions (below faction overview strip which ends at Y=97)
 _TITLE_Y = 102
 _BTN_START_Y = 129
+_RIBBON_BOTTOM_Y = 97
 
 # Vertical center of the playable hex map area (between ribbon and submit button)
-_MAP_CENTER_Y = (_TITLE_Y + SCREEN_HEIGHT - 60) // 2  # = (102+740)//2 = 421
+_MAP_CENTER_Y = (_RIBBON_BOTTOM_Y + SCREEN_HEIGHT) // 2
 
 # Card picker dimensions
 _CARD_W = 110
@@ -75,6 +83,11 @@ _INFLUENCE_TOOLTIP = (
     "choosing for their Guided Faction. Set to 3 when Guidance "
     "begins, it decreases by 1 each turn. The Spirit is ejected "
     "when it reaches 0."
+)
+
+_ERA2_CYCLE_TOOLTIP = (
+    "Era 2 Guidance follows a four-turn cycle: Restrain an Agenda, Shape the Faction, "
+    "Adapt your Spirit, then face Ejection on the fourth turn."
 )
 
 _AFFINITY_TOOLTIP = (
@@ -111,6 +124,11 @@ _WAR_RESOLVES_TOOLTIP = (
     "is chosen. If two Factions target the same hex, both fail and receive the "
     "gold consolation instead.\n\n"
     "Other Spoils Agendas work normally. No gold is gained or lost from War itself."
+)
+
+_SPOILS_TOOLTIP = (
+    "Spoils are bonus Agenda rewards earned after winning a War. Pick one reward for each defeated faction shown here. "
+    "Your choice resolves immediately and may differ from spoils won against other factions in the same turn."
 )
 
 _GOLD_TOOLTIP = "Resource used to pay for Expand Agendas. Cannot go below 0."
@@ -172,6 +190,7 @@ class SpoilsEntry:
     cards: list
     loser: str
     selected: int = -1
+    expanded: bool = True
 
 
 class GameScene:
@@ -258,6 +277,10 @@ class GameScene:
         self.faction_panel_scroll_offset: int = 0
         self.spoils_nav_left_rect: pygame.Rect | None = None
         self.spoils_nav_right_rect: pygame.Rect | None = None
+        self.spoils_toggle_rects: list[pygame.Rect] = []
+        self.spoils_card_rects: list[list[pygame.Rect]] = []
+        self.spoils_panel_rects: list[pygame.Rect] = []
+        self.spoils_help_rect: pygame.Rect | None = None
 
         # Winner choice state (one-guided war: spirit picks who wins)
         self.winner_choice_wars: list[dict] = []  # [{war_id, faction_a, faction_b, guided_faction}]
@@ -349,6 +372,7 @@ class GameScene:
         self.hovered_persistent_spirit_worship: str | None = None
         self.hovered_persistent_spirit_affinity: bool = False
         self._persistent_spirit_panel_rects: dict = {}  # rects returned from draw_spirit_panel (bottom-left)
+        self._battleground_arrow_rects: list[dict] = []
         # Ejection title keyword hover state
         self.ejection_keyword_rects: dict[str, list[pygame.Rect]] = {}
         self.hovered_ejection_keyword: str | None = None
@@ -686,20 +710,16 @@ class GameScene:
 
                 # Check spoils card clicks (one-at-a-time display)
                 if self.spoils_entries:
-                    idx = max(0, min(self.spoils_display_index, len(self.spoils_entries) - 1))
-                    entry = self.spoils_entries[idx]
-                    rects = self._calc_left_choice_card_rects(len(entry.cards))
-                    for i, rect in enumerate(rects):
+                    for idx, rect in enumerate(self.spoils_toggle_rects):
                         if rect.collidepoint(event.pos):
-                            entry.selected = i
+                            self.spoils_entries[idx].expanded = not self.spoils_entries[idx].expanded
                             return
-                    # Nav arrows
-                    if self.spoils_nav_left_rect and self.spoils_nav_left_rect.collidepoint(event.pos):
-                        self.spoils_display_index = max(0, self.spoils_display_index - 1)
-                        return
-                    if self.spoils_nav_right_rect and self.spoils_nav_right_rect.collidepoint(event.pos):
-                        self.spoils_display_index = min(len(self.spoils_entries) - 1, self.spoils_display_index + 1)
-                        return
+                    for entry, rects in zip(self.spoils_entries, self.spoils_card_rects):
+                        for i, rect in enumerate(rects):
+                            if rect.collidepoint(event.pos):
+                                entry.selected = i
+                                entry.expanded = True
+                                return
 
                 # Winner choice buttons
                 if self.phase == SubPhase.WINNER_CHOICE and self.winner_choice_buttons:
@@ -740,20 +760,16 @@ class GameScene:
 
                 # Check spoils change card clicks (one-at-a-time display)
                 if self.spoils_change_entries:
-                    idx = max(0, min(self.spoils_display_index, len(self.spoils_change_entries) - 1))
-                    entry = self.spoils_change_entries[idx]
-                    rects = self._calc_left_choice_card_rects(len(entry.cards))
-                    for i, rect in enumerate(rects):
+                    for idx, rect in enumerate(self.spoils_toggle_rects):
                         if rect.collidepoint(event.pos):
-                            entry.selected = i
+                            self.spoils_change_entries[idx].expanded = not self.spoils_change_entries[idx].expanded
                             return
-                    # Nav arrows
-                    if self.spoils_nav_left_rect and self.spoils_nav_left_rect.collidepoint(event.pos):
-                        self.spoils_display_index = max(0, self.spoils_display_index - 1)
-                        return
-                    if self.spoils_nav_right_rect and self.spoils_nav_right_rect.collidepoint(event.pos):
-                        self.spoils_display_index = min(len(self.spoils_change_entries) - 1, self.spoils_display_index + 1)
-                        return
+                    for entry, rects in zip(self.spoils_change_entries, self.spoils_card_rects):
+                        for i, rect in enumerate(rects):
+                            if rect.collidepoint(event.pos):
+                                entry.selected = i
+                                entry.expanded = True
+                                return
 
             # Check change delta chip clicks (faction panel)
             for rect, log_idx in self.panel_change_rects:
@@ -792,6 +808,19 @@ class GameScene:
                         self.spirit_panel_spirit_id = sid
                     return
 
+            for rects in (self._spirit_panel_rects, self._persistent_spirit_panel_rects):
+                guidance_rect = rects.get("guidance")
+                if guidance_rect and guidance_rect.collidepoint(event.pos):
+                    spirit_id = self.spirit_panel_spirit_id if rects is self._spirit_panel_rects else self.app.my_spirit_id
+                    guided_faction = self.spirits.get(spirit_id, {}).get("guided_faction")
+                    if guided_faction:
+                        self._select_faction_from_text(guided_faction)
+                        return
+                for fid, rect in rects.get("worship", {}).items():
+                    if rect.collidepoint(event.pos):
+                        self._select_faction_from_text(fid)
+                        return
+
             # Click on spirit panel itself should not close it
             sp_rect = self._spirit_panel_rects.get("panel")
             if self.spirit_panel_spirit_id and sp_rect and sp_rect.collidepoint(event.pos):
@@ -804,18 +833,7 @@ class GameScene:
             # Ribbon faction name click — same effect as clicking that faction on the map
             for fid, rect in self.ribbon_faction_rects.items():
                 if rect.collidepoint(event.pos):
-                    self.panel_faction = fid
-                    self.spirit_panel_spirit_id = None
-                    self.faction_panel_scroll_offset = 0
-                    if self.phase == Phase.VAGRANT_PHASE.value and self.faction_buttons:
-                        available = set(self.phase_options.get("available_factions", []))
-                        blocked = set(self.phase_options.get("worship_blocked", []))
-                        if fid in available and fid not in blocked:
-                            self.selected_faction = fid
-                            if self.tutorial:
-                                self.tutorial.notify_action("guidance_selected", {"faction": fid})
-                    if self.tutorial:
-                        self.tutorial.notify_action("faction_selected", {"faction": fid})
+                    self._select_faction_from_text(fid)
                     return
 
             # Hex click
@@ -825,6 +843,27 @@ class GameScene:
             )
             if hex_coord:
                 self._handle_hex_click(hex_coord)
+                return
+
+            # Battleground selection now happens on map arrows.
+            if self.phase == SubPhase.BATTLEGROUND_CHOICE:
+                for btn in self.battleground_choice_buttons:
+                    if btn["rect"].collidepoint(event.pos):
+                        self.battleground_selections[btn["war_id"]] = btn["pair_index"]
+                        return
+
+            # Empty background / neutral space clears focused faction or spirit selections.
+            panel_rects = [
+                self.ui_renderer.faction_panel_rect,
+                self._persistent_spirit_panel_rects.get("panel"),
+                self._spirit_panel_rects.get("panel"),
+                getattr(self, "_event_log_render_rect", None),
+            ]
+            if any(rect and rect.collidepoint(event.pos) for rect in panel_rects):
+                return
+            if not self.popup_manager.has_popups():
+                self._clear_focus_selection()
+                return
 
         if action and action.kind == "secondary_click":
             if self.popup_manager.has_popups():
@@ -853,8 +892,48 @@ class GameScene:
         if self.tutorial:
             self.tutorial.notify_action("faction_selected", {"faction": faction_id})
 
+    def _select_faction_from_text(self, faction_id: str):
+        self.panel_faction = faction_id
+        self.spirit_panel_spirit_id = None
+        self.faction_panel_scroll_offset = 0
+        if self.phase == Phase.VAGRANT_PHASE.value and self.faction_buttons:
+            available = set(self.phase_options.get("available_factions", []))
+            blocked = set(self.phase_options.get("worship_blocked", []))
+            if faction_id in available and faction_id not in blocked:
+                self.selected_faction = faction_id
+                if self.tutorial:
+                    self.tutorial.notify_action("guidance_selected", {"faction": faction_id})
+        if self.tutorial:
+            self.tutorial.notify_action("faction_selected", {"faction": faction_id})
+
+    def _clear_focus_selection(self):
+        self.panel_faction = None
+        self.spirit_panel_spirit_id = None
+        self.selected_faction = None
+        self.faction_panel_scroll_offset = 0
+
+    def _clear_panel_selection(self):
+        self.panel_faction = None
+        self.spirit_panel_spirit_id = None
+        self.faction_panel_scroll_offset = 0
+
     def _handle_idol_select(self, idol_type: str):
         self.selected_idol_type = idol_type
+
+    def _get_highlighted_war_pairs(self) -> dict[str, tuple[tuple[int, int], tuple[int, int]]]:
+        highlighted = {}
+        if self.phase != SubPhase.BATTLEGROUND_CHOICE:
+            return highlighted
+        for entry in self.battleground_choice_entries:
+            pair_index = self.battleground_selections.get(entry["war_id"])
+            if pair_index is None:
+                continue
+            pair = entry.get("pairs", [])[pair_index]
+            highlighted[entry["war_id"]] = (
+                (pair["a"]["q"], pair["a"]["r"]),
+                (pair["b"]["q"], pair["b"]["r"]),
+            )
+        return highlighted
 
     def _handle_hex_click(self, hex_coord: tuple[int, int]):
         if self.phase == SubPhase.SPOILS_EXPAND_CHOICE:
@@ -872,6 +951,7 @@ class GameScene:
                 self.selected_hex = hex_coord
             return
         if self.phase == Phase.VAGRANT_PHASE.value and self.hex_ownership.get(hex_coord) is None:
+            self._clear_panel_selection()
             # Neutral hex during vagrant phase: select for idol placement
             my_id = self.app.my_spirit_id
             q, r = hex_coord
@@ -889,19 +969,9 @@ class GameScene:
         else:
             owner = self.hex_ownership.get(hex_coord)
             if owner:
-                self.panel_faction = owner
-                self.spirit_panel_spirit_id = None
-                self.faction_panel_scroll_offset = 0
-                # If guidance is available, also set as guide target
-                if self.phase == Phase.VAGRANT_PHASE.value and self.faction_buttons:
-                    available = set(self.phase_options.get("available_factions", []))
-                    blocked = set(self.phase_options.get("worship_blocked", []))
-                    if owner in available and owner not in blocked:
-                        self.selected_faction = owner
-                        if self.tutorial:
-                            self.tutorial.notify_action("guidance_selected", {"faction": owner})
-                if self.tutorial:
-                    self.tutorial.notify_action("faction_selected", {"faction": owner})
+                self._select_faction_from_text(owner)
+            else:
+                self._clear_focus_selection()
 
     def _submit_action(self):
         self.phase_controller.submit_current_phase()
@@ -944,6 +1014,11 @@ class GameScene:
         self.spoils_expand_choices = []
         self.spoils_expand_selections = []
         self.spoils_expand_selectable_hexes = set()
+        self.spoils_toggle_rects = []
+        self.spoils_card_rects = []
+        self.spoils_panel_rects = []
+        self.spoils_help_rect = None
+        self._battleground_arrow_rects = []
         self.expand_choice_hexes = set()
         self.expand_choice_faction = ""
         self.respawn_choice_hexes = set()
@@ -1450,38 +1525,53 @@ class GameScene:
         modifiers = self._get_current_faction_modifiers()
 
         if self.agenda_hand:
-            for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.agenda_hand))):
+            rects = self._calc_left_choice_card_rects(len(self.agenda_hand))
+            hotspots = self.ui_renderer.get_card_modifier_hotspots(
+                self.agenda_hand,
+                rects[0].x if rects else 20,
+                rects[0].y if rects else _CHOICE_CARD_Y,
+                modifiers=modifiers,
+                vertical=True,
+            )
+            for i, rect in enumerate(rects):
                 if rect.collidepoint(mx, my):
+                    for plus_rect in hotspots[i]:
+                        if plus_rect.collidepoint(mx, my):
+                            atype = self.agenda_hand[i].get("agenda_type", "")
+                            self.hovered_card_tooltip = build_modifier_tooltip(atype)
+                            self.hovered_card_rect = plus_rect
+                            return
                     atype = self.agenda_hand[i].get("agenda_type", "")
                     self.hovered_card_tooltip = build_agenda_tooltip(atype, modifiers)
                     self.hovered_card_rect = rect
                     return
 
         if self.change_cards:
-            for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.change_cards))):
+            change_hand = self._build_change_hand()
+            for i, rect in enumerate(self._calc_left_choice_card_rects(len(change_hand))):
                 if rect.collidepoint(mx, my):
-                    self.hovered_card_tooltip = build_modifier_tooltip(self.change_cards[i])
+                    self.hovered_card_tooltip = change_hand[i].get("tooltip", build_modifier_tooltip(self.change_cards[i]))
                     self.hovered_card_rect = rect
                     return
 
         if self.spoils_entries:
-            sidx = max(0, min(self.spoils_display_index, len(self.spoils_entries) - 1))
-            entry = self.spoils_entries[sidx]
-            for i, rect in enumerate(self._calc_left_choice_card_rects(len(entry.cards))):
-                if rect.collidepoint(mx, my):
-                    atype = entry.cards[i]
-                    self.hovered_card_tooltip = build_agenda_tooltip(atype, modifiers, is_spoils=True)
-                    self.hovered_card_rect = rect
-                    return
+            for panel_idx, rects in enumerate(self.spoils_card_rects):
+                entry = self.spoils_entries[panel_idx]
+                for card_idx, rect in enumerate(rects):
+                    if rect.collidepoint(mx, my):
+                        atype = entry.cards[card_idx]
+                        self.hovered_card_tooltip = build_agenda_tooltip(atype, modifiers, is_spoils=True)
+                        self.hovered_card_rect = rect
+                        return
 
         if self.spoils_change_entries:
-            sidx = max(0, min(self.spoils_display_index, len(self.spoils_change_entries) - 1))
-            entry = self.spoils_change_entries[sidx]
-            for i, rect in enumerate(self._calc_left_choice_card_rects(len(entry.cards))):
-                if rect.collidepoint(mx, my):
-                    self.hovered_card_tooltip = build_modifier_tooltip(entry.cards[i])
-                    self.hovered_card_rect = rect
-                    return
+            for panel_idx, rects in enumerate(self.spoils_card_rects):
+                entry = self.spoils_change_entries[panel_idx]
+                for card_idx, rect in enumerate(rects):
+                    if rect.collidepoint(mx, my):
+                        self.hovered_card_tooltip = build_modifier_tooltip(entry.cards[card_idx])
+                        self.hovered_card_rect = rect
+                        return
 
         # Check faction ribbon agenda labels
         for fid, agenda_type, is_spoils, rect in self.agenda_label_rects:
@@ -1715,7 +1805,8 @@ class GameScene:
             r = rects["influence"]
             anchor = r.bottom if below else r.top
             self.tooltip_registry.offer(TooltipDescriptor(
-                _INFLUENCE_TOOLTIP, _GUIDANCE_HOVER_REGIONS, r.centerx, anchor, below=below,
+                _ERA2_CYCLE_TOOLTIP if self.current_era == "era_2" else _INFLUENCE_TOOLTIP,
+                _GUIDANCE_HOVER_REGIONS, r.centerx, anchor, below=below,
             ))
         elif worship_hov:
             tooltip = self._build_spirit_worship_tooltip(worship_hov, spirit_id)
@@ -1970,15 +2061,19 @@ class GameScene:
             for cr in self._calc_left_choice_card_rects(len(self.change_cards)):
                 rects.append((cr, _WEIGHT_NON_TEXT))
         if self.spoils_entries:
-            sidx = max(0, min(self.spoils_display_index, len(self.spoils_entries) - 1))
-            entry = self.spoils_entries[sidx]
-            for cr in self._calc_left_choice_card_rects(len(entry.cards)):
-                rects.append((cr, _WEIGHT_NON_TEXT))
+            for panel_rect in self.spoils_panel_rects:
+                rects.append((panel_rect, _WEIGHT_NON_TEXT))
+            for panel_cards in self.spoils_card_rects:
+                for cr in panel_cards:
+                    rects.append((cr, _WEIGHT_NON_TEXT))
         if self.spoils_change_entries:
-            sidx = max(0, min(self.spoils_display_index, len(self.spoils_change_entries) - 1))
-            entry = self.spoils_change_entries[sidx]
-            for cr in self._calc_left_choice_card_rects(len(entry.cards)):
-                rects.append((cr, _WEIGHT_NON_TEXT))
+            for panel_rect in self.spoils_panel_rects:
+                rects.append((panel_rect, _WEIGHT_NON_TEXT))
+            for panel_cards in self.spoils_card_rects:
+                for cr in panel_cards:
+                    rects.append((cr, _WEIGHT_NON_TEXT))
+        if self.spoils_help_rect:
+            rects.append((self.spoils_help_rect, _WEIGHT_TEXT))
 
         set_ui_rects(rects)
 
@@ -2058,6 +2153,7 @@ class GameScene:
             faction_spirit_index=faction_spirit_index,
             faction_worship=faction_worship,
             highlight_spirit_id=self.spirit_panel_spirit_id,
+            highlighted_war_pairs=self._get_highlighted_war_pairs(),
         )
 
         # Tutorial war-arrow glow (drawn on top of hex grid, under UI panels)
@@ -2138,6 +2234,7 @@ class GameScene:
                 circle_fills=fills,
                 spirit_index_map=spirit_index_map,
                 max_height=_FACTION_PANEL_MAX_H,
+                era=self.current_era,
             )
             # Clear faction panel rects
             self.ui_renderer.faction_panel_rect = None
@@ -2147,9 +2244,6 @@ class GameScene:
         else:
             # Faction panel (top of right column)
             pf = self.panel_faction
-            if not pf:
-                my_spirit = self.spirits.get(self.app.my_spirit_id, {})
-                pf = my_spirit.get("guided_faction")
             real_faction_data = self.factions.get(pf) if pf else None
             if pf and real_faction_data:
                 self.ui_renderer.draw_faction_panel(
@@ -2186,6 +2280,7 @@ class GameScene:
                 circle_fills=fills,
                 spirit_index_map=spirit_index_map,
                 max_height=_SPIRIT_PANEL_MAX_H,
+                era=self.current_era,
             )
 
         # Draw event log (bottom of right column); auto-widen when enlarged
@@ -2257,6 +2352,7 @@ class GameScene:
             self.tooltip_registry.offer(TooltipDescriptor(
                 self.hovered_card_tooltip, _GUIDANCE_HOVER_REGIONS,
                 self.hovered_card_rect.centerx, self.hovered_card_rect.top,
+                avoid_rects=[self.hovered_card_rect],
             ))
         elif self.hovered_agenda_label_fid and self.hovered_agenda_label_rect:
             fmod = self._get_faction_modifiers(self.hovered_agenda_label_fid)
@@ -2268,12 +2364,14 @@ class GameScene:
                     tooltip, _GUIDANCE_HOVER_REGIONS,
                     self.hovered_agenda_label_rect.centerx,
                     self.hovered_agenda_label_rect.bottom, below=True,
+                    avoid_rects=[self.hovered_agenda_label_rect],
                 ))
         elif self.hovered_anim_tooltip and self.hovered_anim_rect:
             self.tooltip_registry.offer(TooltipDescriptor(
                 self.hovered_anim_tooltip, _GUIDANCE_HOVER_REGIONS,
                 self.hovered_anim_rect.centerx,
                 self.hovered_anim_rect.bottom, below=True,
+                avoid_rects=[self.hovered_anim_rect],
             ))
 
         # Idol hover tooltip (custom renderer for clickable spirit names;
@@ -2356,6 +2454,16 @@ class GameScene:
                         tooltip_text, [],
                         pool_rect.centerx, pool_rect.bottom, below=True,
                     ))
+
+        if self.spoils_help_rect and self.spoils_help_rect.collidepoint(pygame.mouse.get_pos()):
+            self.tooltip_registry.offer(TooltipDescriptor(
+                _SPOILS_TOOLTIP,
+                _GUIDANCE_HOVER_REGIONS,
+                self.spoils_help_rect.centerx,
+                self.spoils_help_rect.bottom,
+                below=True,
+                avoid_rects=[self.spoils_help_rect],
+            ))
 
         # Guided hex sigil hover tooltip
         if self.hovered_guided_hex_spirit:
@@ -2870,6 +2978,26 @@ class GameScene:
             self.submit_button.enabled = self.selected_agenda_index >= 0
             self._draw_submit_button(screen)
 
+    def _build_change_hand(self) -> list[dict]:
+        hand = []
+        for card_name in self.change_cards:
+            if self.phase == SubPhase.CHANGE_CHOICE:
+                desc = self.ui_renderer._build_modifier_description(card_name)
+                tooltip = build_modifier_tooltip(card_name)
+                title = card_name.title()
+            else:
+                info = get_era_card_info(card_name) or {}
+                desc = _wrap_text(info.get("body", card_name), self.small_font, 90)[:3]
+                tooltip = info.get("tooltip", card_name)
+                title = card_name
+            hand.append({
+                "agenda_type": card_name,
+                "title": title,
+                "description": desc,
+                "tooltip": tooltip,
+            })
+        return hand
+
     def _render_change_ui(self, screen):
         if not self.change_cards:
             return
@@ -2877,13 +3005,7 @@ class GameScene:
         fid = my_spirit.get("guided_faction", "")
         faction_name = faction_full_name(fid) if fid else "your Faction"
 
-        hand = []
-        for card_name in self.change_cards:
-            if self.phase == SubPhase.CHANGE_CHOICE:
-                desc = self.ui_renderer._build_modifier_description(card_name)
-            else:
-                desc = _wrap_text(card_name, self.small_font, 90)[:3]
-            hand.append({"agenda_type": card_name, "description": desc})
+        hand = self._build_change_hand()
         card_rects = self._calc_left_choice_card_rects(len(hand))
         start_x = card_rects[0].x if card_rects else 20
         start_y = card_rects[0].y if card_rects else _CHOICE_CARD_Y
@@ -2905,7 +3027,7 @@ class GameScene:
             start_x, start_y,
             modifiers=modifiers,
             card_images=agenda_card_images,
-            show_preview_plus=True,
+            show_preview_plus=self.phase == SubPhase.CHANGE_CHOICE,
             vertical=True,
         )
 
@@ -2914,28 +3036,37 @@ class GameScene:
             return
         title = self.font.render("Stage War: choose a battleground", True, theme.TEXT_HIGHLIGHT)
         screen.blit(title, (20, 102))
+        instructions = _wrap_text(
+            "Click one of the red border arrows on the map. A staged battleground is emphasized with triple arrows.",
+            self.font,
+            220,
+        )
+        for i, line in enumerate(instructions):
+            screen.blit(self.font.render(line, True, theme.TEXT_NORMAL), (20, 130 + i * self.font.get_linesize()))
         self.battleground_choice_buttons = []
-        y = 150
+        self._battleground_arrow_rects = []
         for entry in self.battleground_choice_entries:
             war_id = entry["war_id"]
-            label = f"{faction_full_name(entry['faction_a'])} vs {faction_full_name(entry['faction_b'])}"
-            surf = self.font.render(label, True, theme.TEXT_NORMAL)
-            screen.blit(surf, (20, y))
-            y += 26
             for idx, pair in enumerate(entry.get("pairs", [])):
-                rect = pygame.Rect(20, y, 220, 34)
-                selected = self.battleground_selections.get(war_id) == idx
-                pygame.draw.rect(screen, (70, 120, 150) if selected else (50, 50, 70), rect, border_radius=6)
-                pygame.draw.rect(screen, (190, 190, 210), rect, 1, border_radius=6)
-                pair_label = f"({pair['a']['q']},{pair['a']['r']}) / ({pair['b']['q']},{pair['b']['r']})"
-                pair_surf = self.small_font.render(pair_label, True, (240, 240, 240))
-                screen.blit(pair_surf, pair_surf.get_rect(center=rect.center))
+                a = (pair["a"]["q"], pair["a"]["r"])
+                b = (pair["b"]["q"], pair["b"]["r"])
+                rect = self.hex_renderer.get_arrow_hitbox(
+                    a, b, self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT)
                 self.battleground_choice_buttons.append({"war_id": war_id, "pair_index": idx, "rect": rect})
-                y += 40
-            y += 8
+        summary_y = 130 + len(instructions) * self.font.get_linesize() + 12
+        for row, entry in enumerate(self.battleground_choice_entries):
+            war_id = entry["war_id"]
+            chosen = self.battleground_selections.get(war_id)
+            label = f"{faction_full_name(entry['faction_a'])} vs {faction_full_name(entry['faction_b'])}"
+            status = "Chosen" if chosen is not None else "Pending"
+            color = (230, 185, 50) if chosen is None else (150, 210, 150)
+            surf = self.small_font.render(f"{label}: {status}", True, color)
+            screen.blit(surf, (20, summary_y + row * 18))
         if self.submit_button:
             ready = len(self.battleground_selections) >= len(self.battleground_choice_entries)
             self.submit_button.enabled = ready
+            self.submit_button.tooltip = "Choose a battleground for each staged war." if not ready else None
+            self.submit_button.tooltip_always = not ready
             self._draw_submit_button(screen)
 
     def _render_war_support_choice_ui(self, screen):
@@ -3196,130 +3327,196 @@ class GameScene:
             self._draw_submit_button(screen)
 
     def _render_spoils_ui(self, screen):
-        if not self.spoils_entries:
-            return
-        n = len(self.spoils_entries)
-        idx = max(0, min(self.spoils_display_index, n - 1))
-        entry = self.spoils_entries[idx]
-
-        modifiers = self._get_current_faction_modifiers()
-
-        hand = [{"agenda_type": card} for card in entry.cards]
-        card_rects = self._calc_left_choice_card_rects(len(hand))
-        start_x = card_rects[0].x if card_rects else 20
-        start_y = card_rects[0].y if card_rects else _CHOICE_CARD_Y
-
-        # Title and nav arrows above cards
-        opponent_name = faction_full_name(entry.loser) if entry.loser else ""
-        title_text = (f"Spoils vs {opponent_name}:"
-                      if opponent_name else "Spoils of War:")
-        title = self.font.render(title_text, True, (255, 200, 100))
-        title_x = max(4, start_x + 2)
-        screen.blit(title, (title_x, 102))
-
-        self.spoils_nav_left_rect = None
-        self.spoils_nav_right_rect = None
-        if n > 1:
-            page_text = f"[{idx + 1}/{n}]"
-            page_surf = self.small_font.render(page_text, True, (200, 200, 200))
-            screen.blit(page_surf, (title_x, 121))
-
-        self.ui_renderer.draw_card_hand(
-            screen, hand, entry.selected,
-            start_x, start_y,
-            modifiers=modifiers,
-            card_images=agenda_card_images,
-            is_spoils=True,
-            vertical=True,
-        )
-
-        if n > 1:
-            if idx > 0:
-                left_surf = self.font.render("\u25c4", True, (200, 200, 200))
-                left_x = max(4, title_x - left_surf.get_width() - 6)
-                screen.blit(left_surf, (left_x, 102))
-                self.spoils_nav_left_rect = pygame.Rect(left_x, 102, left_surf.get_width(), left_surf.get_height())
-            if idx < n - 1:
-                right_surf = self.font.render("\u25ba", True, (200, 200, 200))
-                right_x = title_x + title.get_width() + 6
-                screen.blit(right_surf, (right_x, 102))
-                self.spoils_nav_right_rect = pygame.Rect(right_x, 102, right_surf.get_width(), right_surf.get_height())
-
-        # Submit button
-        if self.submit_button:
-            all_selected = all(e.selected >= 0 for e in self.spoils_entries)
-            self.submit_button.enabled = all_selected
-            if not all_selected:
-                unselected_wars = [
-                    faction_full_name(self.spoils_entries[i].loser) or f"War {i + 1}"
-                    for i in range(n) if self.spoils_entries[i].selected < 0
-                ]
-                self.submit_button.tooltip = "Still need to choose: " + ", ".join(unselected_wars)
-                self.submit_button.tooltip_always = True
-            else:
-                self.submit_button.tooltip = None
-            self._draw_submit_button(screen)
+        self._render_spoils_dropdown_list(screen, self.spoils_entries, is_change=False)
 
     def _render_spoils_change_ui(self, screen):
-        if not self.spoils_change_entries:
+        self._render_spoils_dropdown_list(screen, self.spoils_change_entries, is_change=True)
+
+    def _render_spoils_dropdown_list(self, screen, entries, is_change: bool):
+        if not entries:
             return
-        n = len(self.spoils_change_entries)
-        idx = max(0, min(self.spoils_display_index, n - 1))
-        entry = self.spoils_change_entries[idx]
 
-        hand = []
-        for card_name in entry.cards:
-            desc = self.ui_renderer._build_modifier_description(card_name)
-            hand.append({"agenda_type": card_name, "description": desc})
-        card_rects = self._calc_left_choice_card_rects(len(hand))
-        start_x = card_rects[0].x if card_rects else 20
-        start_y = card_rects[0].y if card_rects else _CHOICE_CARD_Y
-
-        # Title and nav arrows above cards
-        opponent_name = faction_full_name(entry.loser) if entry.loser else ""
-        title_text = (f"Spoils vs {opponent_name} - modifier:"
-                      if opponent_name else "Spoils - Choose modifier:")
-        title = self.font.render(title_text, True, (255, 200, 100))
-        title_x = max(4, start_x + 2)
-        screen.blit(title, (title_x, 102))
+        title_text = "Spoils of War" if not is_change else "Spoils of War - Modifiers"
+        info_box_w = max(220, _HEX_MAP_LEFT_X - 36)
+        info_box_x = max(18, (_HEX_MAP_LEFT_X - info_box_w) // 2)
+        info_pad_x = 12
+        info_pad_y = 8
+        info_inner_w = info_box_w - info_pad_x * 2
+        title_lines = _wrap_text(title_text, self.font, info_inner_w)
+        body_lines = _wrap_text(
+            "Choose your Spoils by clicking one reward under each defeated faction.",
+            self.small_font,
+            info_inner_w,
+        )
+        info_box_h = (
+            info_pad_y * 2
+            + len(title_lines) * self.font.get_linesize()
+            + 6
+            + len(body_lines) * self.small_font.get_linesize()
+        )
+        info_box_y = max(_RIBBON_BOTTOM_Y + 18, _MAP_CENTER_Y - info_box_h // 2)
+        info_rect = pygame.Rect(info_box_x, info_box_y, info_box_w, info_box_h)
+        pygame.draw.rect(screen, (24, 24, 34), info_rect, border_radius=8)
+        pygame.draw.rect(screen, (120, 120, 145), info_rect, 1, border_radius=8)
+        text_y = info_box_y + info_pad_y
+        for line in title_lines:
+            title = self.font.render(line, True, (255, 200, 100))
+            screen.blit(title, (info_box_x + info_pad_x, text_y))
+            text_y += self.font.get_linesize()
+        text_y += 6
+        help_rects = render_rich_lines(
+            screen, self.small_font, body_lines, info_box_x + info_pad_x, text_y,
+            keywords=["Spoils"],
+            hovered_keyword=None,
+            normal_color=(190, 190, 200),
+            keyword_color=theme.TEXT_KEYWORD,
+            hovered_keyword_color=theme.TEXT_KEYWORD_HOV,
+        )
+        spoils_keyword_rects = help_rects.get("Spoils", [])
+        if spoils_keyword_rects:
+            self.spoils_help_rect = spoils_keyword_rects[0].copy()
+            for rect in spoils_keyword_rects[1:]:
+                self.spoils_help_rect.union_ip(rect)
+        else:
+            self.spoils_help_rect = None
 
         self.spoils_nav_left_rect = None
         self.spoils_nav_right_rect = None
-        if n > 1:
-            page_text = f"[{idx + 1}/{n}]"
-            page_surf = self.small_font.render(page_text, True, (200, 200, 200))
-            screen.blit(page_surf, (title_x, 121))
+        self.spoils_toggle_rects = []
+        self.spoils_card_rects = [[] for _ in entries]
 
-        self.ui_renderer.draw_card_hand(
-            screen, hand, entry.selected,
-            start_x, start_y,
-            card_images=agenda_card_images,
-            vertical=True,
-        )
+        modifiers = self._get_current_faction_modifiers()
+        top_y = _RIBBON_BOTTOM_Y
+        self.spoils_panel_rects = []
 
-        if n > 1:
-            if idx > 0:
-                left_surf = self.font.render("\u25c4", True, (200, 200, 200))
-                left_x = max(4, title_x - left_surf.get_width() - 6)
-                screen.blit(left_surf, (left_x, 102))
-                self.spoils_nav_left_rect = pygame.Rect(left_x, 102, left_surf.get_width(), left_surf.get_height())
-            if idx < n - 1:
-                right_surf = self.font.render("\u25ba", True, (200, 200, 200))
-                right_x = title_x + title.get_width() + 6
-                screen.blit(right_surf, (right_x, 102))
-                self.spoils_nav_right_rect = pygame.Rect(right_x, 102, right_surf.get_width(), right_surf.get_height())
+        for idx, entry in enumerate(entries):
+            faction_id = getattr(entry, "loser", "")
+            faction_color = tuple(FACTION_COLORS.get(faction_id, (120, 120, 120)))
+            bg_color = tuple(max(c // 5, 8) for c in faction_color)
+            pending = entry.selected < 0
 
-        # Submit button
+            ribbon_rect = self.ribbon_faction_rects.get(faction_id)
+            if ribbon_rect:
+                panel_x = ribbon_rect.x
+                panel_w = ribbon_rect.width
+            else:
+                cell_w = SCREEN_WIDTH // max(1, len(self.faction_order or self.factions))
+                panel_x = idx * cell_w
+                panel_w = cell_w
+
+            card_count = len(entry.cards)
+            inner_pad = 4
+            card_gap = 4
+            columns = min(3, max(1, card_count))
+            available_w = max(90, panel_w - inner_pad * 2 - card_gap * (columns - 1))
+            card_w = max(56, available_w // columns)
+            card_h = card_w
+            row_count = (card_count + columns - 1) // columns if entry.expanded else 0
+            body_h = 0 if not entry.expanded else (8 + row_count * card_h + max(0, row_count - 1) * 6 + 8)
+            toggle_h = 14
+            panel_h = body_h + toggle_h
+            panel_rect = pygame.Rect(panel_x, top_y, panel_w, panel_h)
+            self.spoils_panel_rects.append(panel_rect)
+            pygame.draw.rect(screen, bg_color, panel_rect)
+            pygame.draw.line(screen, tuple(max(40, c) for c in faction_color),
+                             (panel_x, top_y), (panel_x + panel_w, top_y), 1)
+
+            pygame.draw.rect(screen, bg_color, pygame.Rect(panel_x, top_y, panel_w, max(10, panel_h - toggle_h)))
+            pygame.draw.line(screen, tuple(max(40, c) for c in faction_color),
+                             (panel_x, top_y), (panel_x + panel_w, top_y), 1)
+            bar_color = faction_color if pending else bg_color
+            toggle_rect = pygame.Rect(panel_x, panel_rect.bottom - toggle_h, panel_w, toggle_h)
+            pygame.draw.rect(screen, bar_color, toggle_rect)
+            pygame.draw.line(screen, (18, 18, 18), (toggle_rect.left, toggle_rect.top), (toggle_rect.right, toggle_rect.top), 1)
+            tri_cx = toggle_rect.centerx
+            tri_cy = toggle_rect.centery + (1 if entry.expanded else -1)
+            tri_half_w = 6
+            tri_half_h = 4
+            if entry.expanded:
+                triangle = [
+                    (tri_cx - tri_half_w, tri_cy + tri_half_h),
+                    (tri_cx + tri_half_w, tri_cy + tri_half_h),
+                    (tri_cx, tri_cy - tri_half_h),
+                ]
+            else:
+                triangle = [
+                    (tri_cx - tri_half_w, tri_cy - tri_half_h),
+                    (tri_cx + tri_half_w, tri_cy - tri_half_h),
+                    (tri_cx, tri_cy + tri_half_h),
+                ]
+            pygame.draw.polygon(screen, (0, 0, 0), triangle)
+            self.spoils_toggle_rects.append(toggle_rect)
+            if entry.expanded:
+                hand = []
+                for card_name in entry.cards:
+                    if is_change:
+                        hand.append({
+                            "agenda_type": card_name,
+                            "title": card_name.title(),
+                            "description": self.ui_renderer._build_modifier_description(card_name),
+                            "tooltip": build_modifier_tooltip(card_name),
+                        })
+                    else:
+                        hand.append({"agenda_type": card_name})
+
+                start_x = panel_x + max(4, (panel_w - (columns * card_w + (columns - 1) * card_gap)) // 2)
+                start_y = top_y + 8
+                card_rects = []
+                for card_idx, card in enumerate(hand):
+                    col = card_idx % columns
+                    row = card_idx // columns
+                    cx = start_x + col * (card_w + card_gap)
+                    cy = start_y + row * (card_h + 6)
+                    rect = pygame.Rect(cx, cy, card_w, card_h)
+                    card_rects.append(rect)
+                    self._draw_compact_spoils_card(
+                        screen, rect, card,
+                        selected=(entry.selected == card_idx),
+                        modifiers=modifiers if not is_change else None,
+                        is_spoils=not is_change,
+                        is_change=is_change,
+                    )
+                    if entry.selected >= 0 and entry.selected != card_idx:
+                        shade = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+                        shade.fill((25, 25, 35, 120))
+                        screen.blit(shade, rect.topleft)
+                self.spoils_card_rects[idx] = card_rects
+
         if self.submit_button:
-            all_selected = all(e.selected >= 0 for e in self.spoils_change_entries)
+            all_selected = all(entry.selected >= 0 for entry in entries)
             self.submit_button.enabled = all_selected
             if not all_selected:
-                unselected_wars = [
-                    faction_full_name(self.spoils_change_entries[i].loser) or f"War {i + 1}"
-                    for i in range(n) if self.spoils_change_entries[i].selected < 0
-                ]
-                self.submit_button.tooltip = "Still need to choose: " + ", ".join(unselected_wars)
+                missing = [faction_full_name(entry.loser) or f"War {i + 1}"
+                           for i, entry in enumerate(entries) if entry.selected < 0]
+                self.submit_button.tooltip = "Still need to choose: " + ", ".join(missing)
                 self.submit_button.tooltip_always = True
             else:
                 self.submit_button.tooltip = None
+                self.submit_button.tooltip_always = False
             self._draw_submit_button(screen)
+
+    def _draw_compact_spoils_card(self, screen, rect, card, selected, modifiers, is_spoils, is_change):
+        bg = (60, 80, 120) if selected else (40, 40, 55)
+        border = (200, 200, 255) if selected else (80, 80, 100)
+        pygame.draw.rect(screen, bg, rect, border_radius=6)
+        pygame.draw.rect(screen, border, rect, 2, border_radius=6)
+
+        title_font = self.ui_renderer._get_font(11)
+        agenda_type = card.get("agenda_type", "?")
+        title_lines = _wrap_text(card.get("title", agenda_type), title_font, rect.width - 8)[:2]
+        for i, line in enumerate(title_lines):
+            surf = title_font.render(line, True, (220, 220, 240))
+            screen.blit(surf, (rect.centerx - surf.get_width() // 2, rect.y + 5 + i * 11))
+
+        img = agenda_card_images.get(agenda_type)
+        content_top = rect.y + 7 + len(title_lines) * 11
+        if img:
+            icon_w = max(24, rect.width - 14)
+            icon_h = max(24, rect.bottom - 6 - content_top)
+            scale = min(icon_w / max(1, img.get_width()), icon_h / max(1, img.get_height()))
+            img_w = max(1, int(img.get_width() * scale))
+            img_h = max(1, int(img.get_height() * scale))
+            scaled = pygame.transform.smoothscale(img, (img_w, img_h))
+            ix = rect.centerx - scaled.get_width() // 2
+            iy = content_top + max(1, (icon_h - scaled.get_height()) // 2)
+            screen.blit(scaled, (ix, iy))

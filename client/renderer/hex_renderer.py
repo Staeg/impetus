@@ -104,7 +104,8 @@ class HexRenderer:
                       preview_idol: tuple = None,
                       faction_spirit_index: dict = None,
                       faction_worship: dict = None,
-                      highlight_spirit_id: str = None):
+                      highlight_spirit_id: str = None,
+                      highlighted_war_pairs: dict | None = None):
         """Draw the complete hex map.
 
         Args:
@@ -179,7 +180,8 @@ class HexRenderer:
         # Draw war arrows
         if wars:
             self._draw_war_arrows(surface, wars, hex_ownership, camera,
-                                  screen_w, screen_h)
+                                  screen_w, screen_h,
+                                  highlighted_war_pairs=highlighted_war_pairs or {})
 
         # Draw idols
         if idols:
@@ -281,20 +283,30 @@ class HexRenderer:
         surface.blit(text, (sx - text.get_width() // 2, sy - text.get_height() // 2))
 
     def _draw_war_arrows(self, surface, wars, hex_ownership, camera,
-                         screen_w, screen_h):
+                         screen_w, screen_h, highlighted_war_pairs=None):
         """Draw bidirectional arrows for all active wars."""
+        highlighted_war_pairs = highlighted_war_pairs or {}
         for war in wars:
             if getattr(war, "battleground_a", None) and getattr(war, "battleground_b", None):
                 pairs = [(
                     (war.battleground_a["q"], war.battleground_a["r"]) if isinstance(war.battleground_a, dict) else (war.battleground_a.q, war.battleground_a.r),
                     (war.battleground_b["q"], war.battleground_b["r"]) if isinstance(war.battleground_b, dict) else (war.battleground_b.q, war.battleground_b.r),
                 )]
+                repeats = 3
             else:
                 pairs = self._get_border_pairs(hex_ownership, war.faction_a, war.faction_b)
+                chosen = highlighted_war_pairs.get(getattr(war, "war_id", None))
+                if chosen:
+                    pairs = [chosen]
+                    repeats = 3
+                else:
+                    repeats = 1
             for h1, h2 in pairs:
-                self._draw_hex_arrow(surface, h1, h2, (220, 60, 60),
-                                     camera, screen_w, screen_h,
-                                     width=2, head_size=6)
+                for offset in range(repeats):
+                    self._draw_hex_arrow(surface, h1, h2, (220, 60, 60),
+                                         camera, screen_w, screen_h,
+                                         width=2, head_size=6,
+                                         lateral_offset=(offset - (repeats - 1) / 2) * 5)
 
     def _get_border_pairs(self, hex_ownership, faction_a, faction_b):
         """Find all adjacent hex pairs where one is faction_a and other is faction_b."""
@@ -311,7 +323,8 @@ class HexRenderer:
         return pairs
 
     def _draw_hex_arrow(self, surface, h1, h2, color, camera, screen_w, screen_h,
-                        width=2, head_size=6, unidirectional=False):
+                        width=2, head_size=6, unidirectional=False,
+                        lateral_offset: float = 0.0):
         """Draw an arrow between two hex centers. Bidirectional unless unidirectional=True."""
         w1x, w1y = axial_to_pixel(h1[0], h1[1], self.hex_size)
         w2x, w2y = axial_to_pixel(h2[0], h2[1], self.hex_size)
@@ -325,10 +338,13 @@ class HexRenderer:
             return
         ux = dx / length
         uy = dy / length
+        px, py = -uy, ux
 
         # Shorten line to middle portion (30% inward from each end)
-        p1 = (s1[0] + dx * 0.3, s1[1] + dy * 0.3)
-        p2 = (s2[0] - dx * 0.3, s2[1] - dy * 0.3)
+        p1 = (s1[0] + dx * 0.3 + px * lateral_offset,
+              s1[1] + dy * 0.3 + py * lateral_offset)
+        p2 = (s2[0] - dx * 0.3 + px * lateral_offset,
+              s2[1] - dy * 0.3 + py * lateral_offset)
 
         scaled_head = head_size
         scaled_width = width
@@ -336,9 +352,6 @@ class HexRenderer:
         pygame.draw.line(surface, color,
                          (int(p1[0]), int(p1[1])),
                          (int(p2[0]), int(p2[1])), scaled_width)
-
-        # Perpendicular vector
-        px, py = -uy, ux
 
         # Arrowhead at p2 (pointing towards h2)
         tip = p2
@@ -356,6 +369,15 @@ class HexRenderer:
             right = (tip[0] + ux * scaled_head - px * scaled_head * 0.5,
                      tip[1] + uy * scaled_head - py * scaled_head * 0.5)
             pygame.draw.polygon(surface, color, [tip, left, right])
+
+    def get_arrow_hitbox(self, h1, h2, camera, screen_w, screen_h) -> pygame.Rect:
+        w1x, w1y = axial_to_pixel(h1[0], h1[1], self.hex_size)
+        w2x, w2y = axial_to_pixel(h2[0], h2[1], self.hex_size)
+        s1 = camera.world_to_screen(w1x, w1y, screen_w, screen_h)
+        s2 = camera.world_to_screen(w2x, w2y, screen_w, screen_h)
+        mid_x = (s1[0] + s2[0]) / 2
+        mid_y = (s1[1] + s2[1]) / 2
+        return pygame.Rect(int(mid_x - 18), int(mid_y - 18), 36, 36)
 
     def draw_war_glow_arrows(self, surface, wars, hex_ownership, camera,
                              screen_w, screen_h, pulse: float = 1.0):
