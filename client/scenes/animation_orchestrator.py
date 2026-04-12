@@ -10,7 +10,8 @@ from client.faction_names import faction_full_name
 from shared.hex_utils import axial_to_pixel, hex_neighbors
 from client.renderer.animation import (
     AnimationManager, AgendaSlideAnimation, TextAnimation, ArrowAnimation,
-    IdolBeamAnimation, ease_out_cubic,
+    IdolBeamAnimation, TokenArcAnimation, TokenSplitAnimation,
+    TokenShakeFadeAnimation, ease_out_cubic,
 )
 from client.renderer.assets import agenda_images
 
@@ -427,6 +428,36 @@ class AnimationOrchestrator:
                 t_tail = max(0.0, t_head - IdolBeamAnimation.TRAIL_FRAC)
                 _draw_idol_beam(screen, (sx0, sy0), (ctrl_x, ctrl_y), (sx1, sy1),
                                 t_tail, t_head, anim.color, alpha)
+
+            elif isinstance(anim, (TokenArcAnimation, TokenSplitAnimation, TokenShakeFadeAnimation)):
+                alpha = anim.alpha
+                if alpha <= 0:
+                    continue
+                x, y = anim.position
+                token_data = anim.token_data
+                if anim.token_kind == "idol":
+                    self.hex_renderer.draw_idol_token(
+                        screen,
+                        int(round(x)),
+                        int(round(y)),
+                        token_data["idol_type"],
+                        token_data["radius"],
+                        alpha=alpha,
+                    )
+                elif anim.token_kind == "spirit":
+                    from client.renderer.hex_renderer import draw_spirit_symbol
+                    tmp_size = max(48, int(token_data["screen_radius"] * 1.8))
+                    tmp = pygame.Surface((tmp_size, tmp_size), pygame.SRCALPHA)
+                    center = tmp_size // 2
+                    draw_spirit_symbol(
+                        tmp, center, center,
+                        token_data["screen_radius"],
+                        token_data["spirit_idx"],
+                        token_data.get("color", (192, 192, 192)),
+                    )
+                    if alpha < 255:
+                        tmp.set_alpha(alpha)
+                    screen.blit(tmp, (int(round(x - center)), int(round(y - center))))
 
     # --- Hex reveal ---
 

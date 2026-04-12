@@ -101,6 +101,28 @@ class App:
         info = pygame.display.Info()
         return (info.current_w, info.current_h)
 
+    def _position_window(self, size: tuple[int, int]) -> None:
+        """Place the current SDL window predictably after a mode switch."""
+        if sys.platform == "emscripten":
+            return
+        try:
+            from pygame._sdl2.video import Window
+            window = Window.from_display_module()
+        except Exception:
+            return
+        try:
+            desktop_w, desktop_h = self._get_fullscreen_size()
+            if self.display_mode == "borderless":
+                window.size = size
+                window.position = (0, 0)
+            elif self.display_mode == "windowed":
+                window.size = size
+                pos_x = max(0, (desktop_w - size[0]) // 2)
+                pos_y = max(0, (desktop_h - size[1]) // 2)
+                window.position = (pos_x, pos_y)
+        except Exception:
+            pass
+
     def _apply_display_mode(self) -> pygame.Surface:
         if sys.platform == "emscripten":
             # SCALED conflicts with the CSS resize handler in WASM; use 0.
@@ -111,18 +133,22 @@ class App:
             size = self.windowed_size
             if self.display_mode == "windowed":
                 flags |= pygame.RESIZABLE
+                os.environ["SDL_VIDEO_CENTERED"] = "1"
                 os.environ.pop("SDL_VIDEO_WINDOW_POS", None)
             elif self.display_mode == "borderless":
                 flags |= pygame.NOFRAME
                 size = self._get_fullscreen_size()
+                os.environ["SDL_VIDEO_CENTERED"] = "0"
                 os.environ["SDL_VIDEO_WINDOW_POS"] = "0,0"
             elif self.display_mode == "fullscreen":
                 flags |= pygame.FULLSCREEN
                 size = self._get_fullscreen_size()
+                os.environ["SDL_VIDEO_CENTERED"] = "0"
                 os.environ.pop("SDL_VIDEO_WINDOW_POS", None)
         screen = pygame.display.set_mode(size, flags)
         if self.display_mode == "windowed":
             self.windowed_size = screen.get_size()
+        self._position_window(screen.get_size())
         return screen
 
     def set_display_mode(self, mode: str) -> None:
@@ -149,6 +175,7 @@ class App:
         height = max(640, int(size[1]))
         self.windowed_size = (width, height)
         self.screen = pygame.display.set_mode(self.windowed_size, pygame.RESIZABLE)
+        self._position_window(self.screen.get_size())
         self._broadcast_display_size(*self.screen.get_size())
         self._save_display_settings()
 

@@ -1,6 +1,7 @@
 """Simple animation and tween system."""
 
 from __future__ import annotations
+import math
 import time
 
 
@@ -355,3 +356,84 @@ class IdolBeamAnimation(BaseAnimation):
     def alpha(self) -> int:
         # Stay full brightness until 75% through the journey, then fade out quickly
         return fade_alpha(self.progress, hold=0.75)
+
+
+class TokenArcAnimation(BaseAnimation):
+    """Move an idol token or spirit symbol along a screen-space arc."""
+
+    def __init__(self, start_pos: tuple[float, float], end_pos: tuple[float, float],
+                 control_pos: tuple[float, float] | None,
+                 token_kind: str, token_data: dict,
+                 delay: float = 0.0, duration: float = 1.0):
+        super().__init__(delay=delay, duration=duration)
+        self.start_pos = start_pos
+        self.end_pos = end_pos
+        self.control_pos = control_pos
+        self.token_kind = token_kind
+        self.token_data = token_data
+        self.screen_space = True
+
+    @property
+    def position(self) -> tuple[float, float]:
+        t = ease_out_cubic(self.progress)
+        if self.control_pos is None:
+            x = self.start_pos[0] + (self.end_pos[0] - self.start_pos[0]) * t
+            y = self.start_pos[1] + (self.end_pos[1] - self.start_pos[1]) * t
+            return x, y
+        x = ((1 - t) ** 2) * self.start_pos[0] + 2 * (1 - t) * t * self.control_pos[0] + (t ** 2) * self.end_pos[0]
+        y = ((1 - t) ** 2) * self.start_pos[1] + 2 * (1 - t) * t * self.control_pos[1] + (t ** 2) * self.end_pos[1]
+        return x, y
+
+    @property
+    def alpha(self) -> int:
+        return 255
+
+
+class TokenSplitAnimation(BaseAnimation):
+    """Split a token from one screen-space point to another."""
+
+    def __init__(self, start_pos: tuple[float, float], end_pos: tuple[float, float],
+                 token_kind: str, token_data: dict,
+                 delay: float = 0.0, duration: float = 0.5):
+        super().__init__(delay=delay, duration=duration)
+        self.start_pos = start_pos
+        self.end_pos = end_pos
+        self.token_kind = token_kind
+        self.token_data = token_data
+        self.screen_space = True
+
+    @property
+    def position(self) -> tuple[float, float]:
+        t = ease_out_cubic(self.progress)
+        x = self.start_pos[0] + (self.end_pos[0] - self.start_pos[0]) * t
+        y = self.start_pos[1] + (self.end_pos[1] - self.start_pos[1]) * t
+        return x, y
+
+    @property
+    def alpha(self) -> int:
+        return 255
+
+
+class TokenShakeFadeAnimation(BaseAnimation):
+    """Shake a token in place and fade it out."""
+
+    def __init__(self, center_pos: tuple[float, float], token_kind: str, token_data: dict,
+                 delay: float = 0.0, duration: float = 1.0, amplitude: float = 7.0):
+        super().__init__(delay=delay, duration=duration)
+        self.center_pos = center_pos
+        self.token_kind = token_kind
+        self.token_data = token_data
+        self.amplitude = amplitude
+        self.screen_space = True
+
+    @property
+    def position(self) -> tuple[float, float]:
+        t = self.progress
+        decay = 1.0 - t
+        dx = math.sin(t * math.pi * 10.0) * self.amplitude * decay
+        dy = math.cos(t * math.pi * 12.0) * (self.amplitude * 0.35) * decay
+        return self.center_pos[0] + dx, self.center_pos[1] + dy
+
+    @property
+    def alpha(self) -> int:
+        return max(0, int(255 * (1.0 - self.progress)))

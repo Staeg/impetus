@@ -3,7 +3,11 @@
 from __future__ import annotations
 import dataclasses
 import pygame
-from client.renderer.ui_renderer import _wrap_text, _render_rich_line_with_keywords
+from client.renderer.ui_renderer import (
+    _wrap_text,
+    _render_rich_line_with_keywords,
+    find_keyword_occurrences,
+)
 import client.theme as theme
 
 # --- Tooltip placement scoring ---
@@ -311,17 +315,14 @@ class PopupManager:
             kw = region.keyword
             rects = []
             for line_idx, line in enumerate(lines):
-                start = 0
-                while True:
-                    pos = line.find(kw, start)
-                    if pos < 0:
-                        break
-                    prefix_w = font.size(line[:pos])[0]
-                    kw_w = font.size(kw)[0]
+                for seg_start, seg_end, matched_kw in find_keyword_occurrences(line, [kw]):
+                    if matched_kw != kw:
+                        continue
+                    prefix_w = font.size(line[:seg_start])[0]
+                    kw_w = font.size(line[seg_start:seg_end])[0]
                     kw_x = tip_x + 8 + prefix_w
                     kw_y = tip_y + 6 + line_idx * line_h
                     rects.append(pygame.Rect(kw_x, kw_y, kw_w, line_h))
-                    start = pos + len(kw)
             if rects:
                 keyword_rects[kw] = rects
 
@@ -451,16 +452,8 @@ class PopupManager:
             surface.blit(surf, (x, y))
             return
 
-        # Find all keyword occurrences, sort by position
-        occurrences = []
-        for kw in keyword_set:
-            start = 0
-            while True:
-                pos = line.find(kw, start)
-                if pos < 0:
-                    break
-                occurrences.append((pos, pos + len(kw), kw))
-                start = pos + len(kw)
+        # Find all keyword-family occurrences, sort by position
+        occurrences = find_keyword_occurrences(line, list(keyword_set))
 
         if not occurrences:
             surf = font.render(line, True, normal_color)

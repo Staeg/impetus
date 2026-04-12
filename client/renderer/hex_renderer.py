@@ -8,6 +8,7 @@ from shared.constants import (
     FACTION_COLORS, NEUTRAL_COLOR, HEX_SIZE, IdolType,
 )
 from client.renderer.font_cache import get_font
+from client.renderer.assets import get_idol_token_image
 
 
 # One shape per spirit index (0-4 unique, 5+ wraps).
@@ -95,11 +96,71 @@ class HexRenderer:
             self._font = get_font(size)
         return self._font
 
+    def get_idol_radius(self, screen_hex_radius: float | None = None) -> int:
+        """Return an idol radius that stays legible and fits within worship sigils."""
+        base_radius = screen_hex_radius if screen_hex_radius is not None else self.hex_size
+        min_shape_scale = min(_SHAPE_SCALE.values())
+        radius = int(round(base_radius * (min_shape_scale / 3.0) * 0.9))
+        return max(6, radius)
+
+    def get_idol_slot_world(self, q: int, r: int, player_idx: int) -> tuple[float, float]:
+        """Return the world-space idol slot for a spirit on a given hex."""
+        wx, wy = axial_to_pixel(q, r, self.hex_size)
+        angle = math.radians(-90 + player_idx * 60)
+        dist = self.hex_size / 2
+        return (
+            wx + math.cos(angle) * dist,
+            wy + math.sin(angle) * dist,
+        )
+
+    def get_idol_slot_screen(self, q: int, r: int, player_idx: int, camera,
+                             screen_w: int, screen_h: int) -> tuple[int, int]:
+        """Return the screen-space idol slot for a spirit on a given hex."""
+        wx, wy = self.get_idol_slot_world(q, r, player_idx)
+        return camera.world_to_screen(wx, wy, screen_w, screen_h)
+
+    def draw_idol_token(self, surface: pygame.Surface, cx: int, cy: int,
+                        idol_type: IdolType, radius: int,
+                        outline_color: tuple[int, int, int] | None = None,
+                        alpha: int = 255) -> None:
+        """Draw an idol token matching the board rendering at a fixed screen position."""
+        if alpha >= 255:
+            target = surface
+            draw_x, draw_y = cx, cy
+        else:
+            pad = radius * 2 + 6
+            target = pygame.Surface((pad, pad), pygame.SRCALPHA)
+            draw_x = pad // 2
+            draw_y = pad // 2
+
+        idol_image = get_idol_token_image(idol_type, radius * 2)
+        if idol_image is not None:
+            image = idol_image.copy()
+            if alpha < 255:
+                image.set_alpha(alpha)
+            target.blit(image, (int(draw_x - image.get_width() // 2), int(draw_y - image.get_height() // 2)))
+        else:
+            idol_color = IDOL_COLORS.get(idol_type, (255, 255, 255))
+            pygame.draw.circle(target, (*idol_color, alpha), (int(draw_x), int(draw_y)), radius)
+            font_size = max(12, int(radius * 1.7))
+            font = get_font(font_size, bold=True)
+            symbol = IDOL_SYMBOLS.get(idol_type, "?")
+            text = font.render(symbol, True, (0, 0, 0))
+            if alpha < 255:
+                text.set_alpha(alpha)
+            target.blit(text, (int(draw_x - text.get_width() // 2), int(draw_y - text.get_height() // 2)))
+        if outline_color is not None:
+            pygame.draw.circle(target, (*outline_color, alpha), (int(draw_x), int(draw_y)), radius + 2, 2)
+
+        if alpha < 255:
+            surface.blit(target, (cx - target.get_width() // 2, cy - target.get_height() // 2))
+
     def draw_hex_grid(self, surface: pygame.Surface, hex_ownership: dict,
                       camera, screen_w: int, screen_h: int,
                       idols: list = None, wars: list = None,
                       selected_hex=None, selected_hexes: set = None,
                       highlight_hexes=None,
+                      selected_faction_outline: str | None = None,
                       spirit_index_map: dict = None,
                       preview_idol: tuple = None,
                       faction_spirit_index: dict = None,
@@ -120,6 +181,15 @@ class HexRenderer:
             faction_worship: dict of faction_id -> spirit index for worship symbols near idols
         """
         font = self._get_font()
+        selected_outline_edges: list[tuple[tuple[int, int], tuple[int, int]]] = []
+        edge_vertex_map = {
+            0: (1, 2),
+            1: (0, 1),
+            2: (5, 0),
+            3: (4, 5),
+            4: (3, 4),
+            5: (2, 3),
+        }
 
         # Overlay surface for semi-transparent hex tints (collected, then blitted once)
         overlay = pygame.Surface((screen_w, screen_h), pygame.SRCALPHA)
@@ -173,6 +243,14 @@ class HexRenderer:
                 border_width = 3
                 pygame.draw.polygon(overlay, (0, 210, 255, 45), screen_verts)
             pygame.draw.polygon(surface, border_color, screen_verts, border_width)
+            if owner and owner == selected_faction_outline:
+                for direction, neighbor in enumerate(hex_neighbors(q, r)):
+                    if hex_ownership.get(neighbor) != selected_faction_outline:
+                        start_idx, end_idx = edge_vertex_map[direction]
+                        selected_outline_edges.append((
+                            screen_verts[start_idx],
+                            screen_verts[end_idx],
+                        ))
 
         # Apply hex tint overlays
         surface.blit(overlay, (0, 0))
@@ -182,6 +260,12 @@ class HexRenderer:
             self._draw_war_arrows(surface, wars, hex_ownership, camera,
                                   screen_w, screen_h,
                                   highlighted_war_pairs=highlighted_war_pairs or {})
+
+        # Draw selected faction outline after all hex geometry so nearby hexes
+        # cannot overwrite it, and only on exposed outer faction borders.
+        for start_pos, end_pos in selected_outline_edges:
+            pygame.draw.line(surface, (255, 255, 255), start_pos, end_pos, 2)
+            pygame.draw.aaline(surface, (255, 255, 255), start_pos, end_pos)
 
         # Draw idols
         if idols:
@@ -201,18 +285,15 @@ class HexRenderer:
                     highlight_spirit_id=None):
         """Draw idol icons on their hexes, offset radially by owner."""
         font = self._get_font(12)
-        dist = self.hex_size / 2  # halfway to hex vertex
 
         for idol in idols:
-            wx, wy = axial_to_pixel(idol.position.q, idol.position.r, self.hex_size)
-            # Radial offset based on player index
             owner_spirit = getattr(idol, 'owner_spirit', None)
             player_idx = spirit_index_map.get(owner_spirit, 0)
-            angle = math.radians(-90 + player_idx * 60)
-            offset_x = math.cos(angle) * dist
-            offset_y = math.sin(angle) * dist
-            ix, iy = camera.world_to_screen(wx + offset_x, wy + offset_y,
-                                            screen_w, screen_h)
+            wx, wy = axial_to_pixel(idol.position.q, idol.position.r, self.hex_size)
+            ix, iy = self.get_idol_slot_screen(
+                idol.position.q, idol.position.r, player_idx,
+                camera, screen_w, screen_h,
+            )
 
             # Draw worship symbol (silver) behind the idol dot
             if hex_ownership is not None and faction_worship:
@@ -220,37 +301,32 @@ class HexRenderer:
                 if owner_fid:
                     worship_sidx = faction_worship.get(owner_fid)
                     if worship_sidx is not None:
-                        # Use distance from hex centre to idol as proxy for hex screen radius
                         csx, csy = camera.world_to_screen(wx, wy, screen_w, screen_h)
                         sr = math.dist((ix, iy), (csx, csy)) * 2
                         draw_spirit_symbol(surface, ix, iy, sr, worship_sidx,
                                            (192, 192, 192))
 
-            idol_color = IDOL_COLORS.get(idol.type, (255, 255, 255))
-            pygame.draw.circle(surface, idol_color, (ix, iy), 5)
-            # Black outline ring for idols belonging to the highlighted spirit
-            if owner_spirit == highlight_spirit_id:
-                pygame.draw.circle(surface, (0, 0, 0), (ix, iy), 7, 2)
-            # Draw letter
-            symbol = IDOL_SYMBOLS.get(idol.type, "?")
-            text = font.render(symbol, True, (0, 0, 0))
-            surface.blit(text, (ix - text.get_width() // 2, iy - text.get_height() // 2))
+            csx, csy = camera.world_to_screen(wx, wy, screen_w, screen_h)
+            screen_hex_radius = math.dist((ix, iy), (csx, csy)) * 2
+            idol_radius = self.get_idol_radius(screen_hex_radius)
+            outline_color = (0, 0, 0) if owner_spirit == highlight_spirit_id else None
+            self.draw_idol_token(
+                surface, ix, iy, idol.type, idol_radius,
+                outline_color=outline_color,
+            )
 
     def get_idol_at_screen(self, mx, my, idols, camera, screen_w, screen_h,
                            spirit_index_map):
         """Return the idol object at screen position (mx, my), or None."""
-        dist = self.hex_size / 2
-        hit_radius = 8  # slightly larger than drawn radius (5) for easier targeting
+        hit_radius = max(10, self.get_idol_radius() + 3)
         best = None
         best_dist_sq = hit_radius * hit_radius
         for idol in idols:
-            wx, wy = axial_to_pixel(idol.position.q, idol.position.r, self.hex_size)
             player_idx = spirit_index_map.get(getattr(idol, 'owner_spirit', None), 0)
-            angle = math.radians(-90 + player_idx * 60)
-            offset_x = math.cos(angle) * dist
-            offset_y = math.sin(angle) * dist
-            ix, iy = camera.world_to_screen(wx + offset_x, wy + offset_y,
-                                            screen_w, screen_h)
+            ix, iy = self.get_idol_slot_screen(
+                idol.position.q, idol.position.r, player_idx,
+                camera, screen_w, screen_h,
+            )
             dx = mx - ix
             dy = my - iy
             d_sq = dx * dx + dy * dy
@@ -262,25 +338,20 @@ class HexRenderer:
     def _draw_preview_idol(self, surface, preview_idol, camera, screen_w, screen_h):
         """Draw a semi-transparent preview idol at hex center.
 
-        preview_idol: (idol_type_str, q, r) e.g. ("battle", 0, 1)
+        preview_idol: (idol_type_str, q, r[, player_idx]) e.g. ("battle", 0, 1, 0)
         """
-        idol_type_str, pq, pr = preview_idol
+        idol_type_str, pq, pr, *rest = preview_idol
         try:
             idol_type = IdolType(idol_type_str)
         except ValueError:
             return
-        wx, wy = axial_to_pixel(pq, pr, self.hex_size)
-        sx, sy = camera.world_to_screen(wx, wy, screen_w, screen_h)
-        base_color = IDOL_COLORS.get(idol_type, (255, 255, 255))
-        # Draw semi-transparent circle
-        alpha_surf = pygame.Surface((20, 20), pygame.SRCALPHA)
-        pygame.draw.circle(alpha_surf, (*base_color, 100), (10, 10), 8)
-        surface.blit(alpha_surf, (sx - 10, sy - 10))
-        # Draw letter
-        font = self._get_font(12)
-        symbol = IDOL_SYMBOLS.get(idol_type, "?")
-        text = font.render(symbol, True, (*base_color, 160))
-        surface.blit(text, (sx - text.get_width() // 2, sy - text.get_height() // 2))
+        if rest:
+            sx, sy = self.get_idol_slot_screen(pq, pr, int(rest[0]), camera, screen_w, screen_h)
+        else:
+            wx, wy = axial_to_pixel(pq, pr, self.hex_size)
+            sx, sy = camera.world_to_screen(wx, wy, screen_w, screen_h)
+        idol_radius = self.get_idol_radius(self.hex_size)
+        self.draw_idol_token(surface, sx, sy, idol_type, idol_radius, alpha=120)
 
     def _draw_war_arrows(self, surface, wars, hex_ownership, camera,
                          screen_w, screen_h, highlighted_war_pairs=None):
@@ -349,9 +420,10 @@ class HexRenderer:
         scaled_head = head_size
         scaled_width = width
 
-        pygame.draw.line(surface, color,
-                         (int(p1[0]), int(p1[1])),
-                         (int(p2[0]), int(p2[1])), scaled_width)
+        start = (int(p1[0]), int(p1[1]))
+        end = (int(p2[0]), int(p2[1]))
+        pygame.draw.line(surface, (0, 0, 0), start, end, scaled_width + 2)
+        pygame.draw.line(surface, color, start, end, scaled_width)
 
         # Arrowhead at p2 (pointing towards h2)
         tip = p2
@@ -359,7 +431,8 @@ class HexRenderer:
                 tip[1] - uy * scaled_head + py * scaled_head * 0.5)
         right = (tip[0] - ux * scaled_head - px * scaled_head * 0.5,
                  tip[1] - uy * scaled_head - py * scaled_head * 0.5)
-        pygame.draw.polygon(surface, color, [tip, left, right])
+        pygame.draw.polygon(surface, (0, 0, 0), [tip, left, right])
+        pygame.draw.polygon(surface, color, [tip, left, right], 0)
 
         # Arrowhead at p1 (pointing towards h1) — skip for unidirectional arrows
         if not unidirectional:
@@ -368,7 +441,8 @@ class HexRenderer:
                     tip[1] + uy * scaled_head + py * scaled_head * 0.5)
             right = (tip[0] + ux * scaled_head - px * scaled_head * 0.5,
                      tip[1] + uy * scaled_head - py * scaled_head * 0.5)
-            pygame.draw.polygon(surface, color, [tip, left, right])
+            pygame.draw.polygon(surface, (0, 0, 0), [tip, left, right])
+            pygame.draw.polygon(surface, color, [tip, left, right], 0)
 
     def get_arrow_hitbox(self, h1, h2, camera, screen_w, screen_h) -> pygame.Rect:
         w1x, w1y = axial_to_pixel(h1[0], h1[1], self.hex_size)

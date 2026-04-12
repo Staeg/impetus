@@ -30,9 +30,9 @@ Full on-hover text and gameplay effect: VP gained from the River faction is trip
 Short description for card text body: +VP from Plains, -VP from others
 Full on-hover text and gameplay effect: VP gained from the Plains faction is tripled. VP gained from other factions is halved.
 
-# Avatar of War
+# Avatar of Battle
 
-Short description for card text body: +VP from War Idols, -VP from others
+Short description for card text body: +VP from Battle Idols, -VP from others
 Full on-hover text and gameplay effect: VP gained from War Idols is doubled. VP gained from other Idols is halved.
 
 # Avatar of Affluence

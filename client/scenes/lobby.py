@@ -23,6 +23,10 @@ class LobbyScene:
         "Right-click closes only the newest frozen popup. Keep right-clicking "
         "to close older popups one by one."
     )
+    _ERA2_VP_TOOLTIP = (
+        "Era 1 uses the VP target shown here.\n"
+        "If Era 2 is enabled, its VP target is double this amount."
+    )
     _LOBBY_HOVER_REGIONS = [
         HoverRegion("freeze", _LOBBY_FREEZE_TOOLTIP, sub_regions=[]),
     ]
@@ -86,6 +90,7 @@ class LobbyScene:
         self._tutorial_ready_sent = False
         self._tutorial_start_sent = False
         self._tip_phrase_rect = pygame.Rect(0, 0, 0, 0)
+        self._vp_phrase_rect = pygame.Rect(0, 0, 0, 0)
         self.era1_checkbox_rect = pygame.Rect(_CX - 36, _ERA_ROW_Y + 22, 18, 18)
         self.era2_checkbox_rect = pygame.Rect(_CX + 62, _ERA_ROW_Y + 22, 18, 18)
         self.popup_manager = PopupManager()
@@ -346,7 +351,10 @@ class LobbyScene:
             # VP row: [-] centred label [+]
             self.vp_minus.draw(screen, self.font)
             vp_text = self.font.render(f"VP to Win: {self.vp_to_win}", True, (200, 200, 160))
-            screen.blit(vp_text, (_CX - vp_text.get_width() // 2, vp_y + 6))
+            vp_x = _CX - vp_text.get_width() // 2
+            screen.blit(vp_text, (vp_x, vp_y + 6))
+            self._vp_phrase_rect = pygame.Rect(vp_x, vp_y + 6, vp_text.get_width(), vp_text.get_height())
+            draw_dotted_underline(screen, self._vp_phrase_rect.x, self._vp_phrase_rect.bottom - 1, self._vp_phrase_rect.width)
             self.vp_plus.draw(screen, self.font)
             era_text = self.small_font.render("Play Eras", True, (200, 200, 160))
             screen.blit(era_text, (_CX - era_text.get_width() // 2, era_y + 2))
@@ -358,7 +366,10 @@ class LobbyScene:
         else:
             # Non-host: read-only display
             vp_disp = self.small_font.render(f"VP to Win: {self.vp_to_win}", True, (160, 160, 140))
-            screen.blit(vp_disp, (_CX - vp_disp.get_width() // 2, vp_y + 8))
+            vp_x = _CX - vp_disp.get_width() // 2
+            screen.blit(vp_disp, (vp_x, vp_y + 8))
+            self._vp_phrase_rect = pygame.Rect(vp_x, vp_y + 8, vp_disp.get_width(), vp_disp.get_height())
+            draw_dotted_underline(screen, self._vp_phrase_rect.x, self._vp_phrase_rect.bottom - 1, self._vp_phrase_rect.width)
             era_title = self.small_font.render("Play Eras", True, (160, 160, 140))
             screen.blit(era_title, (_CX - era_title.get_width() // 2, era_y + 2))
             era_disp = self.small_font.render(
@@ -414,6 +425,14 @@ class LobbyScene:
                 anchor_x=self._tip_phrase_rect.centerx,
                 anchor_y=self._tip_phrase_rect.bottom,
                 max_width=420, below=True,
+            )
+        elif not self.popup_manager.has_popups() and self._vp_phrase_rect.collidepoint(mouse_pos):
+            draw_multiline_tooltip_with_regions(
+                screen, self.small_font, self._ERA2_VP_TOOLTIP,
+                [],
+                anchor_x=self._vp_phrase_rect.centerx,
+                anchor_y=self._vp_phrase_rect.bottom,
+                max_width=360, below=True,
             )
         self.popup_manager.render(screen, self.small_font)
 

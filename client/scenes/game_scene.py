@@ -28,7 +28,10 @@ from client.renderer.ui_renderer import (
 )
 from client.renderer.font_cache import get_font
 import client.theme as theme
-from client.renderer.animation import AnimationManager, TextAnimation, IdolBeamAnimation
+from client.renderer.animation import (
+    AnimationManager, TextAnimation, IdolBeamAnimation,
+    TokenArcAnimation, TokenSplitAnimation, TokenShakeFadeAnimation,
+)
 from client.renderer.assets import load_assets, agenda_card_images
 from client.input_handler import InputHandler
 from client.input_actions import map_game_input
@@ -133,7 +136,7 @@ _WAR_TOOLTIP = (
 )
 
 _WAR_RESOLVES_TOOLTIP = (
-    "When a War resolves, the winner draws a Spoils of War Agenda card.\n\n"
+    "When a War resolves, the winner gets Spoils of War: a random Agenda card.\n\n"
     "If the winning Faction is Guided, the Spirit draws 1 + Influence cards "
     "and picks one to resolve.\n\n"
     "Spoils Expand works differently: instead of claiming a neutral hex, the "
@@ -165,10 +168,9 @@ _MODIFIER_TOOLTIP = (
 )
 
 _CONTESTED_TOOLTIP = (
-    "If several Spirits attempt to Guide the same Faction on a given turn, "
+    "If several Spirits without a relevant Affinity attempt to Guide the same Faction on a given turn, "
     "the Guidance fails. This prevents all involved Spirits from Guiding "
-    "that Faction for exactly 1 turn. This only occurs if no contesting Spirit "
-    "holds a Habitat or Race Affinity for that Faction.\n\n"
+    "that Faction for exactly 1 turn.\n\n"
     "Spirits can only place 1 Idol per successful Guidance."
 )
 
@@ -240,6 +242,9 @@ class GameScene:
         self._display_hex_ownership: dict[tuple[int, int], str | None] | None = None
         self._display_factions: dict | None = None
         self._display_wars: list | None = None
+        self._display_idols: list | None = None
+        self._display_spirits: dict | None = None
+        self._pending_idol_reveal_delay: float | None = None
         self.waiting_for: list[str] = []
         self.has_submitted: bool = False
         self.spectator_mode: bool = False
@@ -266,7 +271,7 @@ class GameScene:
         self.selected_idol_type: str | None = None
         self.panel_faction: str | None = None
         self.preview_guidance: str | None = None
-        self.preview_idol: tuple | None = None  # (idol_type, q, r)
+        self.preview_idol: tuple | None = None  # (idol_type, q, r, player_idx)
 
         # Fading error message (e.g. invalid hex click)
         self._hex_error_message: str = ""
@@ -294,6 +299,7 @@ class GameScene:
         self.spoils_change_entries: list[SpoilsEntry] = []
         self.spoils_display_index: int = 0
         self.faction_panel_scroll_offset: int = 0
+        self.persistent_spirit_panel_scroll_offset: int = 0
         self.spoils_nav_left_rect: pygame.Rect | None = None
         self.spoils_nav_right_rect: pygame.Rect | None = None
         self.spoils_toggle_rects: list[pygame.Rect] = []
@@ -337,12 +343,17 @@ class GameScene:
         self.faction_buttons: list[Button] = []
         self.faction_button_ids: list[str] = []
         self.idol_buttons: list[Button] = []
+        self.idol_drag_sources: list[dict] = []
+        self.dragging_idol: dict | None = None
 
         # Title labels (rects + tooltip text)
         self.guidance_title_rect: pygame.Rect | None = None
         self.guidance_title_hovered: bool = False
         self.idol_title_rect: pygame.Rect | None = None
         self.idol_title_hovered: bool = False
+        self.guidance_summary_rect: pygame.Rect | None = None
+        self.guidance_summary_keyword_rects: dict[str, list[pygame.Rect]] = {}
+        self.hovered_guidance_summary_keyword: str | None = None
 
         # Idol hover tooltip
         self.hovered_idol = None  # idol object or None
@@ -376,7 +387,10 @@ class GameScene:
         self.hovered_panel_guided: bool = False
         self.hovered_panel_worship: bool = False
         self.hovered_panel_war: bool = False
+        self.hovered_panel_shaping: str | None = None
         self.hovered_vp_spirit_id: str | None = None
+        self.hovered_text_faction_id: str | None = None
+        self.hovered_text_faction_rect: pygame.Rect | None = None
 
         # Spirit panel state (which spirit's panel to show, or None)
         self.spirit_panel_spirit_id: str | None = None
@@ -522,12 +536,21 @@ class GameScene:
         if self._display_wars is None:
             import copy
             self._display_wars = copy.deepcopy(self.wars)
+        if self._display_idols is None:
+            import copy
+            self._display_idols = copy.deepcopy(self.all_idols)
+        if self._display_spirits is None:
+            import copy
+            self._display_spirits = copy.deepcopy(self.spirits)
 
     def _clear_display_state(self):
         """Clear deferred display state so rendering uses real state."""
         self._display_hex_ownership = None
         self._display_factions = None
         self._display_wars = None
+        self._display_idols = None
+        self._display_spirits = None
+        self._pending_idol_reveal_delay = None
 
     def _get_influence_fills(self, spirit_id: str) -> list[float]:
         """Return a list of 3 fill values (0.0-1.0) for each influence circle slot.
@@ -555,6 +578,14 @@ class GameScene:
     def display_wars(self) -> list:
         return self._display_wars if self._display_wars is not None else self.wars
 
+    @property
+    def display_idols(self) -> list:
+        return self._display_idols if self._display_idols is not None else self.all_idols
+
+    @property
+    def display_spirits(self) -> dict:
+        return self._display_spirits if self._display_spirits is not None else self.spirits
+
     def handle_event(self, event):
         self.input_handler.handle_camera_event(event)
         action = map_game_input(event)
@@ -579,6 +610,14 @@ class GameScene:
                 max_scroll = max(0, content_h - _cur_faction_panel_h)
                 self.faction_panel_scroll_offset = max(0, min(
                     self.faction_panel_scroll_offset - action.payload["y"] * 16, max_scroll))
+            persistent_rect = self._persistent_spirit_panel_rects.get("panel")
+            if persistent_rect and persistent_rect.collidepoint(mx, my):
+                content_h = getattr(self.ui_renderer, '_spirit_panel_content_h', 0)
+                max_scroll = max(0, content_h - _SPIRIT_PANEL_MAX_H)
+                self.persistent_spirit_panel_scroll_offset = max(
+                    0,
+                    min(self.persistent_spirit_panel_scroll_offset - action.payload["y"] * 16, max_scroll),
+                )
 
         if action and action.kind == "cancel":
             if self.game_over:
@@ -592,6 +631,8 @@ class GameScene:
                 btn.update(mouse_pos)
             if self.submit_button:
                 self.submit_button.update(mouse_pos)
+            if self.dragging_idol:
+                self.dragging_idol["pos"] = mouse_pos
             # Title label hover tracking
             if self.guidance_title_rect:
                 self.guidance_title_hovered = self.guidance_title_rect.collidepoint(mouse_pos)
@@ -603,8 +644,10 @@ class GameScene:
             self._update_agenda_hover(mouse_pos)
             # Faction panel guided/worship hover detection
             self._update_panel_hover(mouse_pos)
+            self._update_guidance_summary_hover(mouse_pos)
             # Spirit panel hover detection
             self._update_spirit_panel_hover(mouse_pos)
+            self._update_clickable_faction_hover(mouse_pos)
             # Ejection title keyword hover detection
             self._update_ejection_title_hover(mouse_pos)
             # Agenda pool icon hover detection
@@ -715,7 +758,14 @@ class GameScene:
                 # Check idol type buttons
                 for btn in self.idol_buttons:
                     if btn.clicked(event.pos):
+                        if self.current_era == "era_1":
+                            self._begin_idol_drag(btn)
+                            return
                         self._handle_idol_select(btn.text.lower())
+                        return
+
+                if self._is_mouse_over_selected_preview(event.pos):
+                    if self._begin_selected_preview_drag():
                         return
 
                 # Check agenda card clicks
@@ -858,6 +908,28 @@ class GameScene:
                         self._select_faction_from_text(fid)
                         return
 
+            for fid, rect in self.ui_renderer.panel_war_opponent_rects.items():
+                if rect.collidepoint(event.pos):
+                    self._select_faction_from_text(fid)
+                    return
+            for fid, rects in self.ui_renderer.event_log_faction_rects.items():
+                if any(rect.collidepoint(event.pos) for rect in rects):
+                    for line_rect, log_idx in self.ui_renderer.event_log_line_rects:
+                        if line_rect.collidepoint(event.pos):
+                            self.highlighted_log_index = log_idx
+                            break
+                    self._select_faction_from_text(fid)
+                    return
+            for rect, log_idx in self.ui_renderer.event_log_line_rects:
+                if rect.collidepoint(event.pos):
+                    self.highlighted_log_index = None if self.highlighted_log_index == log_idx else log_idx
+                    text = self.event_log[log_idx] if 0 <= log_idx < len(self.event_log) else ""
+                    for faction_id in FACTION_NAMES:
+                        if faction_full_name(faction_id) in text:
+                            self._select_faction_from_text(faction_id)
+                            break
+                    return
+
             # Click on spirit panel itself should not close it
             sp_rect = self._spirit_panel_rects.get("panel")
             if self.spirit_panel_spirit_id and sp_rect and sp_rect.collidepoint(event.pos):
@@ -913,6 +985,9 @@ class GameScene:
                 if self.tutorial and pinned:
                     self.tutorial.notify_action("tooltip_frozen", {})
 
+        if action and action.kind == "primary_release" and self.dragging_idol:
+            self._finish_idol_drag(action.payload)
+
     def _handle_action_button(self, text: str):
         if self.ejection_pending:
             chosen_add = text.lower()
@@ -957,6 +1032,91 @@ class GameScene:
     def _handle_idol_select(self, idol_type: str):
         self.selected_idol_type = idol_type
 
+    def _begin_idol_drag(self, btn: Button) -> None:
+        idol_type = IdolType(btn.text.lower())
+        self.dragging_idol = {
+            "idol_type": idol_type,
+            "pos": pygame.mouse.get_pos(),
+            "radius": max(10, btn.rect.width // 4),
+        }
+
+    def _begin_selected_preview_drag(self) -> bool:
+        """Pick up the currently marked idol placement from the map."""
+        if not (self.selected_idol_type and self.selected_hex):
+            return False
+        try:
+            idol_type = IdolType(self.selected_idol_type)
+        except ValueError:
+            return False
+        self.dragging_idol = {
+            "idol_type": idol_type,
+            "pos": pygame.mouse.get_pos(),
+            "radius": self.hex_renderer.get_idol_radius(),
+            "origin_hex": self.selected_hex,
+            "origin_type": self.selected_idol_type,
+        }
+        self.selected_hex = None
+        return True
+
+    def _is_mouse_over_selected_preview(self, mouse_pos: tuple[int, int]) -> bool:
+        """Return True when the cursor is over the current preview idol on the board."""
+        if not (self.selected_idol_type and self.selected_hex):
+            return False
+        player_idx = 0
+        if self.app.my_spirit_id in self.spirits:
+            player_idx = sorted(self.spirits.keys()).index(self.app.my_spirit_id)
+        ix, iy = self.hex_renderer.get_idol_slot_screen(
+            self.selected_hex[0], self.selected_hex[1], player_idx,
+            self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT,
+        )
+        cx, cy = self.input_handler.world_to_screen(
+            *axial_to_pixel(self.selected_hex[0], self.selected_hex[1], HEX_SIZE),
+            SCREEN_WIDTH, SCREEN_HEIGHT,
+        )
+        screen_hex_radius = math.dist((ix, iy), (cx, cy)) * 2
+        hit_radius = self.hex_renderer.get_idol_radius(screen_hex_radius) + 5
+        return (mouse_pos[0] - ix) ** 2 + (mouse_pos[1] - iy) ** 2 <= hit_radius ** 2
+
+    def _finish_idol_drag(self, mouse_pos: tuple[int, int]) -> None:
+        drag = self.dragging_idol
+        self.dragging_idol = None
+        if not drag:
+            return
+        def _restore_origin() -> None:
+            if drag.get("origin_hex") and drag.get("origin_type"):
+                self.selected_hex = drag["origin_hex"]
+                self.selected_idol_type = drag["origin_type"]
+        hex_coord = self.hex_renderer.get_hex_at_screen(
+            mouse_pos[0], mouse_pos[1], self.input_handler,
+            SCREEN_WIDTH, SCREEN_HEIGHT, set(self.hex_ownership.keys())
+        )
+        if not hex_coord:
+            _restore_origin()
+            return
+        if self.phase != Phase.VAGRANT_PHASE.value or self.current_era != "era_1":
+            _restore_origin()
+            return
+        if self.hex_ownership.get(hex_coord) is not None:
+            self._hex_error_message = "Idols can only be dropped on neutral hexes."
+            self._hex_error_timer = 2.0
+            _restore_origin()
+            return
+        my_id = self.app.my_spirit_id
+        q, r = hex_coord
+        if any(
+            isinstance(idol, dict)
+            and idol.get("owner_spirit") == my_id
+            and idol.get("position", {}).get("q") == q
+            and idol.get("position", {}).get("r") == r
+            for idol in self.all_idols
+        ):
+            self._hex_error_message = "Hex already contains one of your Idols!"
+            self._hex_error_timer = 2.0
+            _restore_origin()
+            return
+        self.selected_idol_type = drag["idol_type"].value
+        self.selected_hex = hex_coord
+
     def _get_highlighted_war_pairs(self) -> dict[str, tuple[tuple[int, int], tuple[int, int]]]:
         highlighted = {}
         if self.phase != SubPhase.BATTLEGROUND_CHOICE:
@@ -988,6 +1148,9 @@ class GameScene:
                 self.selected_hex = hex_coord
             return
         if self.phase == Phase.VAGRANT_PHASE.value and self.hex_ownership.get(hex_coord) is None:
+            if self.current_era == "era_1":
+                self._clear_panel_selection()
+                return
             self._clear_panel_selection()
             # Neutral hex during vagrant phase: select for idol placement
             my_id = self.app.my_spirit_id
@@ -1032,11 +1195,16 @@ class GameScene:
         self.remove_buttons = []
         self.faction_buttons = []
         self.idol_buttons = []
+        self.idol_drag_sources = []
+        self.dragging_idol = None
         self.submit_button = None
         self.guidance_title_rect = None
         self.guidance_title_hovered = False
         self.idol_title_rect = None
         self.idol_title_hovered = False
+        self.guidance_summary_rect = None
+        self.guidance_summary_keyword_rects = {}
+        self.hovered_guidance_summary_keyword = None
         self.ejection_keyword_rects = {}
         self.hovered_ejection_keyword = None
         self.winner_choice_wars = []
@@ -1071,6 +1239,8 @@ class GameScene:
         self._pending_game_over = None
         self.game_over = False
         self.game_over_data = None
+        self._ingame_menu_open = False
+        self._ingame_menu_confirm_exit = False
         self._update_state_from_snapshot(payload)
         self.change_tracker.snapshot_and_reset(self.factions, self.spirits)
         self.event_log.append("Game started.")
@@ -1135,10 +1305,17 @@ class GameScene:
         }
         agenda_events = [e for e in events if e.get("type", "") in _ANIM_ORDER
                        and not e.get("is_guided_modifier")]
+        vagrant_anim_events = {
+            "idol_placed", "guided", "guide_contested", "worship_gained", "worship_replaced",
+        }
+        has_vagrant_resolution = any(e.get("type") in vagrant_anim_events for e in events)
         if (not suppress_animations) and agenda_events and "state" in payload:
             # Clear any stale display state before re-snapshotting so that
             # fast AI-only games (queue never fully drains) always get a fresh
             # baseline for hex-reveal and war-reveal animations each turn.
+            self._clear_display_state()
+            self._snapshot_display_state()
+        elif (not suppress_animations) and has_vagrant_resolution and "state" in payload:
             self._clear_display_state()
             self._snapshot_display_state()
         if "state" in payload:
@@ -1160,6 +1337,8 @@ class GameScene:
             self.phase = active_sub_phase
         elif active_sub_phase == SubPhase.RESPAWN_CHOICE and self.respawn_choice_hexes:
             self.phase = active_sub_phase
+        if has_vagrant_resolution and not suppress_animations:
+            self._queue_vagrant_resolution_animations(events)
         # Log events (consolidate agenda play + resolution into one line)
         self._log_events_batch(events)
         # VP gain animations
@@ -1389,6 +1568,66 @@ class GameScene:
                         count += 1
         return count
 
+    def _get_faction_race(self, faction_id: str) -> str:
+        fdata = self.factions.get(faction_id, {})
+        if isinstance(fdata, dict):
+            return fdata.get("race", "")
+        return ""
+
+    def _get_affinity_priority(self, spirit_id: str, faction_id: str) -> tuple[int, str | None]:
+        spirit = self.spirits.get(spirit_id, {})
+        faction_race = self._get_faction_race(faction_id)
+        if spirit.get("habitat_affinity") == faction_id:
+            return 2, "Habitat"
+        if faction_race and spirit.get("race_affinity") == faction_race:
+            return 1, "Race"
+        return 0, None
+
+    def _get_stronger_affinity_spirits(self, faction_id: str) -> list[str]:
+        my_id = self.app.my_spirit_id
+        my_priority, _ = self._get_affinity_priority(my_id, faction_id)
+        stronger: list[tuple[int, str]] = []
+        for spirit_id, spirit in self.spirits.items():
+            if spirit_id == my_id:
+                continue
+            other_priority, _ = self._get_affinity_priority(spirit_id, faction_id)
+            if other_priority > my_priority:
+                stronger.append((other_priority, spirit.get("name", spirit_id[:6])))
+        stronger.sort(key=lambda item: (-item[0], item[1]))
+        return [name for _, name in stronger]
+
+    def _build_guidance_summary_lines(self, faction_id: str) -> list[str]:
+        fdata = self.factions.get(faction_id, {})
+        worship_id = fdata.get("worship_spirit") if isinstance(fdata, dict) else None
+        my_id = self.app.my_spirit_id
+        lines: list[str] = []
+        for name in self._get_stronger_affinity_spirits(faction_id)[:2]:
+            lines.append(f"{name} has more Affinity")
+        if worship_id == my_id:
+            lines.append("Will still Worship you")
+        elif worship_id:
+            worship_name = self.spirits.get(worship_id, {}).get("name", worship_id[:6])
+            my_idols = self._count_spirit_idols_in_faction(my_id, faction_id)
+            their_idols = self._count_spirit_idols_in_faction(worship_id, faction_id)
+            if my_idols >= their_idols:
+                lines.append(f"Will usurp Worship from {worship_name}")
+            else:
+                lines.append(f"Will still Worship {worship_name}")
+        else:
+            lines.append("Will begin Worshipping you")
+        return lines
+
+    def _wrap_guidance_summary_lines(self, lines: list[str], max_width: int) -> list[str]:
+        """Wrap semantic guidance summary lines to the available box width."""
+        wrapped: list[str] = []
+        for line in lines:
+            split = _wrap_text(line, self.small_font, max_width)
+            if split:
+                wrapped.extend(split)
+            else:
+                wrapped.append("")
+        return wrapped
+
     def _build_guidance_tooltip(self, faction_id: str, is_blocked: bool,
                                 is_contested_blocked: bool = False) -> str:
         """Build tooltip for a Guidance faction button."""
@@ -1399,7 +1638,7 @@ class GameScene:
             lines.append("Contested last turn;")
             lines.append("cannot target this turn.")
         elif is_blocked:
-            lines.append("This Faction Worships you;")
+            lines.append("This faction already worships you;")
             lines.append("you cannot Guide them.")
         elif worship_id:
             name = self.spirits.get(worship_id, {}).get("name", worship_id[:6])
@@ -1415,6 +1654,14 @@ class GameScene:
         else:
             lines.append("Not Worshipped by any Spirit")
             lines.append("Guiding will make you Worshipped")
+        lines.append("")
+        stronger = self._get_stronger_affinity_spirits(faction_id)
+        if stronger:
+            lines.append("Affinity priority over you:")
+            for name in stronger:
+                lines.append(name)
+        else:
+            lines.append("No other Spirit has Affinity priority over you.")
         return "\n".join(lines)
 
     def _build_faction_buttons(self):
@@ -1447,37 +1694,227 @@ class GameScene:
         self.guidance_title_rect = pygame.Rect(
             _GUIDANCE_CENTER_X - title_w // 2, _TITLE_Y, title_w, 22
         )
+        summary_top = _BTN_START_Y + max(0, len(all_factions)) * _BTN_STEP_Y + 4
+        self.guidance_summary_rect = pygame.Rect(
+            max(12, _GUIDANCE_BTN_X - 6),
+            summary_top,
+            _BTN_W + 12,
+            84,
+        )
 
     def _build_idol_buttons(self):
         idol_tooltips = {
             IdolType.BATTLE: f"{BATTLE_IDOL_VP} VP for each war won\nby the Worshipping Faction",
-            IdolType.AFFLUENCE: f"{AFFLUENCE_IDOL_VP} VP for each gold gained\nby the Worshipping Faction",
+            IdolType.AFFLUENCE: f"{AFFLUENCE_IDOL_VP} VP for each gold gained\nby the Worshipping Faction\n(halved in Era 2)",
             IdolType.SPREAD: f"{SPREAD_IDOL_VP} VP for each territory gained\nby the Worshipping Faction",
         }
-        # Place idol buttons below guidance buttons on the left side
-        n_factions = len(self.faction_buttons)
-        last_guidance_bottom = _BTN_START_Y + (n_factions - 1) * _BTN_STEP_Y + _BTN_H
-        idol_title_y = last_guidance_bottom + 10
-        idol_start_y = idol_title_y + 28  # title height (22) + 6px gap
+        summary_bottom = self.guidance_summary_rect.bottom if self.guidance_summary_rect else (_BTN_START_Y + 180)
+        idol_title_y = summary_bottom + 10
+        idol_start_y = idol_title_y + 30
         self.idol_buttons = []
+        self.idol_drag_sources = []
+        icon_size = 52
+        gap = 10
+        total_w = len(list(IdolType)) * icon_size + (len(list(IdolType)) - 1) * gap
+        start_x = _GUIDANCE_CENTER_X - total_w // 2
         for i, it in enumerate(IdolType):
             colors = {
                 IdolType.BATTLE: (130, 50, 50),
                 IdolType.AFFLUENCE: (130, 120, 30),
                 IdolType.SPREAD: (50, 120, 50),
             }
+            rect = pygame.Rect(start_x + i * (icon_size + gap), idol_start_y, icon_size, icon_size)
             btn = Button(
-                pygame.Rect(_GUIDANCE_BTN_X, idol_start_y + i * _BTN_STEP_Y, _BTN_W, _BTN_H),
+                rect,
                 it.value.title(), colors.get(it, (80, 80, 80)),
                 tooltip=idol_tooltips.get(it),
                 tooltip_always=True,
             )
             self.idol_buttons.append(btn)
+            self.idol_drag_sources.append({"idol_type": it, "rect": rect})
         # Set up idol title rect (same center x as guidance)
         title_w = 130
         self.idol_title_rect = pygame.Rect(
             _GUIDANCE_CENTER_X - title_w // 2, idol_title_y, title_w, 22
         )
+
+    @staticmethod
+    def _build_arc_control(start_pos: tuple[float, float], end_pos: tuple[float, float],
+                           height_scale: float = 0.22) -> tuple[float, float]:
+        dx = end_pos[0] - start_pos[0]
+        dy = end_pos[1] - start_pos[1]
+        distance = max(1.0, math.hypot(dx, dy))
+        mid_x = (start_pos[0] + end_pos[0]) / 2
+        mid_y = (start_pos[1] + end_pos[1]) / 2
+        nx = -dy / distance
+        ny = dx / distance
+        lift = distance * height_scale
+        return mid_x + nx * lift, mid_y + ny * lift - lift * 0.45
+
+    def _get_spirit_hud_anchor(self, spirit_id: str) -> tuple[float, float]:
+        vp_pos = self.ui_renderer.vp_positions.get(spirit_id)
+        if vp_pos:
+            return float(vp_pos[0]), float(vp_pos[1]) + 10.0
+        sorted_spirits = list(sorted(self.spirits.keys()))
+        idx = sorted_spirits.index(spirit_id) if spirit_id in sorted_spirits else 0
+        return 120.0 + idx * 90.0, 24.0
+
+    def _get_faction_territory_coords(self, faction_id: str) -> list[tuple[int, int]]:
+        fdata = self.factions.get(faction_id, {})
+        territories = fdata.get("territories", []) if isinstance(fdata, dict) else []
+        coords: list[tuple[int, int]] = []
+        for entry in territories:
+            if isinstance(entry, dict) and "q" in entry and "r" in entry:
+                coords.append((entry["q"], entry["r"]))
+        return coords
+
+    def _get_faction_central_hex(self, faction_id: str) -> tuple[int, int] | None:
+        coords = self._get_faction_territory_coords(faction_id)
+        if not coords:
+            return None
+        avg_q = sum(q for q, _ in coords) / len(coords)
+        avg_r = sum(r for _, r in coords) / len(coords)
+        return min(coords, key=lambda item: (item[0] - avg_q) ** 2 + (item[1] - avg_r) ** 2)
+
+    def _queue_vagrant_resolution_animations(self, events: list[dict]) -> None:
+        idol_events = [e for e in events if e.get("type") == "idol_placed"]
+        guided_by_faction = {
+            e.get("faction"): e.get("spirit")
+            for e in events
+            if e.get("type") == "guided" and e.get("faction") and e.get("spirit")
+        }
+        contested_by_faction = {
+            e.get("faction"): e
+            for e in events
+            if e.get("type") == "guide_contested" and e.get("faction")
+        }
+        spirit_index_map = {sid: i for i, sid in enumerate(sorted(self.spirits.keys()))}
+
+        for event in idol_events:
+            spirit_id = event.get("spirit")
+            hex_data = event.get("hex", {})
+            idol_type_str = event.get("idol_type")
+            if not spirit_id or "q" not in hex_data or "r" not in hex_data or not idol_type_str:
+                continue
+            try:
+                idol_type = IdolType(idol_type_str)
+            except ValueError:
+                continue
+            start_pos = self._get_spirit_hud_anchor(spirit_id)
+            player_idx = spirit_index_map.get(spirit_id, 0)
+            end_pos = self.hex_renderer.get_idol_slot_screen(
+                hex_data["q"], hex_data["r"], player_idx,
+                self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT,
+            )
+            self.animation.add_effect_animation(TokenArcAnimation(
+                start_pos=start_pos,
+                end_pos=end_pos,
+                control_pos=self._build_arc_control(start_pos, end_pos),
+                token_kind="idol",
+                token_data={
+                    "idol_type": idol_type,
+                    "radius": self.hex_renderer.get_idol_radius(),
+                },
+                delay=0.0,
+                duration=1.0,
+            ))
+
+        if idol_events and self._display_idols is not None:
+            self._pending_idol_reveal_delay = 1.0
+
+        guidance_travel_delay = 1.0 if idol_events else 0.0
+        travel_duration = 1.0
+        contest_duration = 1.0
+        split_duration = 0.5
+        target_factions = sorted(set(guided_by_faction.keys()) | set(contested_by_faction.keys()))
+        for faction_id in target_factions:
+            central_hex = self._get_faction_central_hex(faction_id)
+            if not central_hex:
+                continue
+            central_slot_positions: dict[str, tuple[int, int]] = {}
+            winner_id = guided_by_faction.get(faction_id)
+            contest_event = contested_by_faction.get(faction_id)
+            contenders: list[str] = []
+            if contest_event:
+                contenders.extend(contest_event.get("spirits", []))
+            if winner_id and winner_id not in contenders:
+                contenders.append(winner_id)
+            if not contenders and winner_id:
+                contenders = [winner_id]
+            for spirit_id in contenders:
+                player_idx = spirit_index_map.get(spirit_id, 0)
+                end_pos = self.hex_renderer.get_idol_slot_screen(
+                    central_hex[0], central_hex[1], player_idx,
+                    self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT,
+                )
+                central_slot_positions[spirit_id] = end_pos
+                start_pos = self._get_spirit_hud_anchor(spirit_id)
+                self.animation.add_effect_animation(TokenArcAnimation(
+                    start_pos=start_pos,
+                    end_pos=end_pos,
+                    control_pos=self._build_arc_control(start_pos, end_pos, height_scale=0.16),
+                    token_kind="spirit",
+                    token_data={
+                        "spirit_idx": player_idx,
+                        "screen_radius": self.hex_renderer.hex_size,
+                        "color": (0, 0, 0),
+                    },
+                    delay=guidance_travel_delay,
+                    duration=travel_duration,
+                ))
+
+            if contest_event:
+                fading_ids = list(contest_event.get("spirits", []))
+                for spirit_id in fading_ids:
+                    self.animation.add_effect_animation(TokenShakeFadeAnimation(
+                        center_pos=central_slot_positions[spirit_id],
+                        token_kind="spirit",
+                        token_data={
+                            "spirit_idx": spirit_index_map.get(spirit_id, 0),
+                            "screen_radius": self.hex_renderer.hex_size,
+                            "color": (0, 0, 0),
+                        },
+                        delay=guidance_travel_delay + travel_duration,
+                        duration=contest_duration,
+                    ))
+                if winner_id and winner_id in central_slot_positions:
+                    self.animation.add_effect_animation(TokenSplitAnimation(
+                        start_pos=central_slot_positions[winner_id],
+                        end_pos=central_slot_positions[winner_id],
+                        token_kind="spirit",
+                        token_data={
+                            "spirit_idx": spirit_index_map.get(winner_id, 0),
+                            "screen_radius": self.hex_renderer.hex_size,
+                            "color": (0, 0, 0),
+                        },
+                        delay=guidance_travel_delay + travel_duration,
+                        duration=contest_duration,
+                    ))
+
+            if winner_id:
+                split_start_delay = guidance_travel_delay + travel_duration
+                if contest_event:
+                    split_start_delay += contest_duration
+                start_pos = central_slot_positions.get(winner_id)
+                if start_pos is None:
+                    continue
+                for q, r in self._get_faction_territory_coords(faction_id):
+                    end_pos = self.input_handler.world_to_screen(
+                        *axial_to_pixel(q, r, HEX_SIZE),
+                        SCREEN_WIDTH, SCREEN_HEIGHT,
+                    )
+                    self.animation.add_effect_animation(TokenSplitAnimation(
+                        start_pos=start_pos,
+                        end_pos=end_pos,
+                        token_kind="spirit",
+                        token_data={
+                            "spirit_idx": spirit_index_map.get(winner_id, 0),
+                            "screen_radius": self.hex_renderer.hex_size,
+                            "color": (0, 0, 0),
+                        },
+                        delay=split_start_delay,
+                        duration=split_duration,
+                    ))
 
     def _calc_card_rects(self, count: int, start_x: int = 20, y: int = 125,
                          centered: bool = False) -> list[pygame.Rect]:
@@ -1643,6 +2080,21 @@ class GameScene:
         self.hovered_panel_worship = r is not None and r.collidepoint(mx, my)
         r = self.ui_renderer.panel_war_rect
         self.hovered_panel_war = r is not None and r.collidepoint(mx, my)
+        self.hovered_panel_shaping = None
+        for card_name, rect in self.ui_renderer.panel_shaping_rects.items():
+            if rect.collidepoint(mx, my):
+                self.hovered_panel_shaping = card_name
+                break
+
+    def _update_guidance_summary_hover(self, mouse_pos):
+        """Check whether the guidance summary keywords are hovered."""
+        self.hovered_guidance_summary_keyword = None
+        mx, my = mouse_pos
+        for keyword, rects in self.guidance_summary_keyword_rects.items():
+            for rect in rects:
+                if rect.collidepoint(mx, my):
+                    self.hovered_guidance_summary_keyword = keyword
+                    return
 
     def _update_vp_hover(self, mouse_pos):
         """Check if mouse is hovering over a player name in the VP HUD."""
@@ -1686,6 +2138,31 @@ class GameScene:
          self.hovered_persistent_spirit_worship,
          self.hovered_persistent_spirit_affinity) = self._check_spirit_panel_hover(self._persistent_spirit_panel_rects, mx, my)
 
+    def _update_clickable_faction_hover(self, mouse_pos):
+        self.hovered_text_faction_id = None
+        self.hovered_text_faction_rect = None
+        for fid, rect in self.ribbon_faction_rects.items():
+            if rect.collidepoint(mouse_pos):
+                self.hovered_text_faction_id = fid
+                self.hovered_text_faction_rect = rect
+                return
+        for rect_map in (
+            self.ui_renderer.panel_war_opponent_rects,
+            self._spirit_panel_rects.get("worship", {}),
+            self._persistent_spirit_panel_rects.get("worship", {}),
+        ):
+            for fid, rect in rect_map.items():
+                if rect.collidepoint(mouse_pos):
+                    self.hovered_text_faction_id = fid
+                    self.hovered_text_faction_rect = rect
+                    return
+        for fid, rects in self.ui_renderer.event_log_faction_rects.items():
+            for rect in rects:
+                if rect.collidepoint(mouse_pos):
+                    self.hovered_text_faction_id = fid
+                    self.hovered_text_faction_rect = rect
+                    return
+
     def _update_ejection_title_hover(self, mouse_pos):
         """Check if mouse is hovering over keyword spans in ejection title text."""
         self.hovered_ejection_keyword = None
@@ -1728,7 +2205,7 @@ class GameScene:
         return (
             battle_count * BATTLE_IDOL_VP,
             spread_count * SPREAD_IDOL_VP,
-            affluence_count * AFFLUENCE_IDOL_VP,
+            affluence_count * AFFLUENCE_IDOL_VP * (0.5 if self.current_era == "era_2" else 1.0),
         )
 
     _GUIDANCE_GENERIC_TOOLTIP = (
@@ -1775,9 +2252,8 @@ class GameScene:
             return "At War with: (none)"
         return f"At War with: {', '.join(war_names)}"
 
-    def _build_worship_panel_tooltip(self, faction_id: str) -> str:
-        """Build tooltip text for Worshipping hover."""
-        worship_id = self.ui_renderer.panel_worship_spirit_id
+    def _build_worship_tooltip(self, faction_id: str, worship_id: str | None) -> str:
+        """Build tooltip text for a faction's Worship status."""
         battle_vp, spread_vp, affluence_vp = self._count_idol_vp_for_faction(faction_id)
 
         def _fmt(v):
@@ -1800,6 +2276,10 @@ class GameScene:
                 f"to whoever it Worships. The first Spirit to Guide it will become Worshipped."
             )
 
+    def _build_worship_panel_tooltip(self, faction_id: str) -> str:
+        """Build tooltip text for Worshipping hover."""
+        return self._build_worship_tooltip(faction_id, self.ui_renderer.panel_worship_spirit_id)
+
     def _build_spirit_worship_tooltip(self, faction_id: str, spirit_id: str) -> str:
         """Build tooltip for a faction worshipping a spirit in the spirit panel."""
         battle_vp, spread_vp, affluence_vp = self._count_idol_vp_for_faction(faction_id)
@@ -1810,7 +2290,7 @@ class GameScene:
 
         if spirit_id == self.app.my_spirit_id:
             return (
-                f"{faction_name} Worships you. Each turn it gives you "
+                f"The {faction_name} faction worships you. Each turn it gives you "
                 f"{_fmt(battle_vp)} VP per battle won, "
                 f"{_fmt(spread_vp)} VP per territory gained, and "
                 f"{_fmt(affluence_vp)} VP per gold earned."
@@ -1818,7 +2298,7 @@ class GameScene:
         else:
             spirit_name = self.spirits.get(spirit_id, {}).get("name", spirit_id[:6])
             return (
-                f"{faction_name} Worships {spirit_name}. Each turn it gives them "
+                f"The {faction_name} faction worships {spirit_name}. Each turn it gives them "
                 f"{_fmt(battle_vp)} VP per battle won, "
                 f"{_fmt(spread_vp)} VP per territory gained, and "
                 f"{_fmt(affluence_vp)} VP per gold earned."
@@ -1898,7 +2378,8 @@ class GameScene:
         faction_id = play_info["faction"]
         fname = faction_full_name(faction_id)
         agenda = play_info["agenda"].title()
-        verb = "randomly play" if play_info["source"] == "random" else "play"
+        verb = "randomly plays" if play_info["source"] == "random" else "plays"
+        subject = f"The {fname} faction"
         guided_part = ""
         spirit_id = play_info.get("spirit")
         if spirit_id:
@@ -1912,8 +2393,8 @@ class GameScene:
             if co_traders:
                 regard = resolution_event.get("regard_gain", 0)
                 others = self._format_faction_list(co_traders)
-                return f"{fname} {verb} {agenda}{guided_part} for {gold} gold and +{regard} regard with {others}."
-            return f"{fname} {verb} {agenda}{guided_part} for {gold} gold."
+                return f"{subject} {verb} {agenda}{guided_part} for {gold} gold and +{regard} regard with {others}."
+            return f"{subject} {verb} {agenda}{guided_part} for {gold} gold."
 
         if etype == "steal":
             gold = resolution_event.get("gold_gained", 0)
@@ -1921,22 +2402,22 @@ class GameScene:
             neighbors = resolution_event.get("neighbors", [])
             if neighbors:
                 others = self._format_faction_list(neighbors)
-                return f"{fname} {verb} {agenda}{guided_part} for {gold} gold and -{penalty} regard with {others}."
-            return f"{fname} {verb} {agenda}{guided_part} for {gold} gold."
+                return f"{subject} {verb} {agenda}{guided_part} for {gold} gold and -{penalty} regard with {others}."
+            return f"{subject} {verb} {agenda}{guided_part} for {gold} gold."
 
         if etype == "expand":
             cost = resolution_event.get("cost", 0)
-            return f"{fname} {verb} {agenda}{guided_part} and expand territory for {cost} gold."
+            return f"{subject} {verb} {agenda}{guided_part} and expands territory for {cost} gold."
 
         if etype == "expand_failed":
             gained = resolution_event.get("gold_gained", 0)
-            return f"{fname} {verb} {agenda}{guided_part} but couldn't expand and gained {gained} gold."
+            return f"{subject} {verb} {agenda}{guided_part} but couldn't expand and gained {gained} gold."
 
         if etype == "change":
             mod = resolution_event.get("modifier", "?")
-            return f"{fname} {verb} {agenda}{guided_part} and upgrade {mod}."
+            return f"{subject} {verb} {agenda}{guided_part} and upgrades {mod}."
 
-        return f"{fname} {verb} {agenda}{guided_part}."
+        return f"{subject} {verb} {agenda}{guided_part}."
 
     def _log_events_batch(self, events: list[dict]):
         resolution_to_agenda = {
@@ -2002,6 +2483,12 @@ class GameScene:
         self.animation.update(dt)
         if self._hex_error_timer > 0:
             self._hex_error_timer = max(0.0, self._hex_error_timer - dt)
+        if self._pending_idol_reveal_delay is not None:
+            self._pending_idol_reveal_delay -= dt
+            if self._pending_idol_reveal_delay <= 0:
+                import copy
+                self._display_idols = copy.deepcopy(self.all_idols)
+                self._pending_idol_reveal_delay = None
         # Incrementally reveal hexes, gold, and wars as animations become active
         if self._display_hex_ownership is not None:
             self.orchestrator.apply_hex_reveals(self._display_hex_ownership)
@@ -2119,7 +2606,7 @@ class GameScene:
 
         # Parse idol data for rendering
         render_idols = []
-        for idol_data in self.all_idols:
+        for idol_data in self.display_idols:
             if isinstance(idol_data, dict):
                 render_idols.append(type('Idol', (), {
                     'type': IdolType(idol_data['type']),
@@ -2163,21 +2650,26 @@ class GameScene:
         elif self.phase == SubPhase.RESPAWN_CHOICE and self.respawn_choice_hexes:
             highlight = self.respawn_choice_hexes
 
-        # Compute preview idol (post-confirm or pre-confirm)
-        render_preview_idol = self.preview_idol
-        if not render_preview_idol and self.selected_idol_type and self.selected_hex:
-            render_preview_idol = (self.selected_idol_type,
-                                   self.selected_hex[0], self.selected_hex[1])
-
         # Build spirit_id -> player_index mapping (sorted for stability)
         spirit_index_map = {
             sid: i for i, sid in enumerate(sorted(self.spirits.keys()))
         }
 
+        # Compute preview idol (post-confirm or pre-confirm)
+        render_preview_idol = self.preview_idol
+        if not render_preview_idol and self.selected_idol_type and self.selected_hex:
+            render_preview_idol = (
+                self.selected_idol_type,
+                self.selected_hex[0],
+                self.selected_hex[1],
+                spirit_index_map.get(self.app.my_spirit_id, 0),
+            )
+
         # Build faction_id -> spirit_index for guidance and worship indicators
         faction_spirit_index = {}
         faction_worship = {}
-        for faction_id, fdata in self.factions.items():
+        disp_factions = self.display_factions
+        for faction_id, fdata in disp_factions.items():
             fdict = fdata if isinstance(fdata, dict) else {}
             guiding = fdict.get("guiding_spirit")
             if guiding and guiding in spirit_index_map:
@@ -2190,9 +2682,10 @@ class GameScene:
             screen, hex_own,
             self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT,
             idols=render_idols, wars=render_wars,
-            selected_hex=self.selected_hex,
+            selected_hex=None if self.phase == Phase.VAGRANT_PHASE.value and self.current_era == "era_1" else self.selected_hex,
             selected_hexes=None,
             highlight_hexes=highlight,
+            selected_faction_outline=self.selected_faction,
             spirit_index_map=spirit_index_map,
             preview_idol=render_preview_idol,
             faction_spirit_index=faction_spirit_index,
@@ -2226,7 +2719,7 @@ class GameScene:
         # Draw faction overview strip — always use live factions so worship/pool
         # stay current even when _display_factions is stale during AI-only games.
         # Gold is overridden with tweened values to animate smoothly.
-        disp_factions = self.factions
+        disp_factions = self.display_factions
         gold_overrides: dict[str, int] = {}
         for fid in (self.faction_order or self.factions):
             key = f"gold_display_{fid}"
@@ -2270,11 +2763,11 @@ class GameScene:
         self.panel_change_rects = []
         if self.spirit_panel_spirit_id:
             # Spirit panel (top of right column)
-            spirit = self.spirits.get(self.spirit_panel_spirit_id, {})
+            spirit = self.display_spirits.get(self.spirit_panel_spirit_id, {})
             fills = self._get_influence_fills(self.spirit_panel_spirit_id)
             self._spirit_panel_rects = self.ui_renderer.draw_spirit_panel(
-                screen, spirit, self.factions, self.all_idols,
-                self.hex_ownership, _FACTION_PANEL_X, 102, _PANEL_W,
+                screen, spirit, self.display_factions, self.display_idols,
+                self.display_hex_ownership, _FACTION_PANEL_X, 102, _PANEL_W,
                 my_spirit_id=self.spirit_panel_spirit_id,
                 circle_fills=fills,
                 spirit_index_map=spirit_index_map,
@@ -2289,7 +2782,7 @@ class GameScene:
         else:
             # Faction panel (top of right column)
             pf = self.panel_faction
-            real_faction_data = self.factions.get(pf) if pf else None
+            real_faction_data = self.display_factions.get(pf) if pf else None
             if pf and real_faction_data:
                 self.ui_renderer.draw_faction_panel(
                     screen, real_faction_data,
@@ -2301,7 +2794,7 @@ class GameScene:
                     highlight_log_idx=self.highlighted_log_index,
                     change_rects=self.panel_change_rects,
                     wars=render_wars,
-                    all_factions=self.factions,
+                    all_factions=self.display_factions,
                     faction_order=self.faction_order,
                     scroll_offset=self.faction_panel_scroll_offset,
                     max_height=_cur_faction_panel_h,
@@ -2311,20 +2804,22 @@ class GameScene:
                 self.ui_renderer.panel_guided_rect = None
                 self.ui_renderer.panel_worship_rect = None
                 self.ui_renderer.panel_war_rect = None
+                self.ui_renderer.panel_shaping_rects = {}
             # Clear spirit panel rects
             self._spirit_panel_rects = {}
 
         # Draw persistent spirit stats panel (middle of right column)
-        my_spirit = self.spirits.get(self.app.my_spirit_id, {})
+        my_spirit = self.display_spirits.get(self.app.my_spirit_id, {})
         if my_spirit:
             fills = self._get_influence_fills(self.app.my_spirit_id)
             self._persistent_spirit_panel_rects = self.ui_renderer.draw_spirit_panel(
-                screen, my_spirit, self.factions, self.all_idols,
-                self.hex_ownership, _FACTION_PANEL_X, _spirit_panel_y, _PANEL_W,
+                screen, my_spirit, self.display_factions, self.display_idols,
+                self.display_hex_ownership, _FACTION_PANEL_X, _spirit_panel_y, _PANEL_W,
                 my_spirit_id=self.app.my_spirit_id,
                 circle_fills=fills,
                 spirit_index_map=spirit_index_map,
                 max_height=_SPIRIT_PANEL_MAX_H,
+                scroll_offset=self.persistent_spirit_panel_scroll_offset,
                 era=self.current_era,
             )
 
@@ -2453,6 +2948,15 @@ class GameScene:
                 _WAR_TOOLTIP, _WAR_HOVER_REGIONS,
                 r.centerx, r.bottom, below=True,
             ))
+        elif self.hovered_panel_shaping:
+            info = get_era_card_info(self.hovered_panel_shaping) or {}
+            rect = self.ui_renderer.panel_shaping_rects.get(self.hovered_panel_shaping)
+            if rect:
+                self.tooltip_registry.offer(TooltipDescriptor(
+                    info.get("tooltip", info.get("body", self.hovered_panel_shaping)),
+                    _GUIDANCE_HOVER_REGIONS,
+                    rect.centerx, rect.bottom, below=True,
+                ))
 
         # Spirit panel hover tooltips (right pop-out)
         if self.spirit_panel_spirit_id:
@@ -2469,6 +2973,17 @@ class GameScene:
             self.hovered_persistent_spirit_worship, below=False,
             affinity_hov=self.hovered_persistent_spirit_affinity,
         )
+        mx, my = pygame.mouse.get_pos()
+        for rects in (self._spirit_panel_rects, self._persistent_spirit_panel_rects):
+            for card_name, rect in rects.get("adaptation", {}).items():
+                if rect.collidepoint(mx, my):
+                    info = get_era_card_info(card_name) or {}
+                    self.tooltip_registry.offer(TooltipDescriptor(
+                        info.get("tooltip", info.get("body", card_name)),
+                        _GUIDANCE_HOVER_REGIONS,
+                        rect.centerx, rect.bottom, below=True,
+                    ))
+                    break
 
         # Agenda pool icon hover tooltip
         if self.hovered_pool_faction:
@@ -2499,6 +3014,16 @@ class GameScene:
                         tooltip_text, [],
                         pool_rect.centerx, pool_rect.bottom, below=True,
                     ))
+        if self.hovered_text_faction_id and self.hovered_text_faction_rect:
+            faction_data = self.display_factions.get(self.hovered_text_faction_id, {})
+            worship_id = faction_data.get("worship_spirit") if isinstance(faction_data, dict) else None
+            self.tooltip_registry.offer(TooltipDescriptor(
+                self._build_worship_tooltip(self.hovered_text_faction_id, worship_id),
+                _GUIDANCE_HOVER_REGIONS,
+                self.hovered_text_faction_rect.centerx,
+                self.hovered_text_faction_rect.bottom,
+                below=True,
+            ))
 
         if self.spoils_help_rect and self.spoils_help_rect.collidepoint(pygame.mouse.get_pos()):
             self.tooltip_registry.offer(TooltipDescriptor(
@@ -2748,10 +3273,11 @@ class GameScene:
                 if worship_name:
                     vp_line = (f"When {faction_name} gain gold, the Spirit they "
                                f"Worship - {worship_name} - gains {AFFLUENCE_IDOL_VP} VP "
-                               f"at the end of the turn.")
+                               f"at the end of the turn (halved in Era 2).")
                 else:
                     vp_line = (f"When {faction_name} gain gold and Worship a Spirit, "
-                               f"that Spirit gains {AFFLUENCE_IDOL_VP} VP at the end of the turn.")
+                               f"that Spirit gains {AFFLUENCE_IDOL_VP} VP at the end of the turn "
+                               f"(halved in Era 2).")
             else:  # SPREAD
                 if worship_name:
                     vp_line = (f"When {faction_name} gain a Territory, the Spirit they "
@@ -2771,7 +3297,7 @@ class GameScene:
             elif idol_type == IdolType.AFFLUENCE:
                 vp_line = (f"After a Faction claims the Territory this Idol is on, "
                            f"it will grant the Spirit they Worship {AFFLUENCE_IDOL_VP} VP "
-                           f"for each gold the Faction gains.")
+                           f"for each gold the Faction gains (halved in Era 2).")
             else:  # SPREAD
                 vp_line = (f"After a Faction claims the Territory this Idol is on, "
                            f"it will grant the Spirit they Worship {SPREAD_IDOL_VP} VP "
@@ -2892,11 +3418,53 @@ class GameScene:
                 pygame.draw.rect(screen, (255, 255, 255), btn.rect.inflate(4, 4), 2, border_radius=8)
             btn.draw(screen, self.font)
 
-        # Draw idol buttons (right) with selection highlight
-        for btn in self.idol_buttons:
-            if self.selected_idol_type and btn.text.lower() == self.selected_idol_type:
-                pygame.draw.rect(screen, (255, 255, 255), btn.rect.inflate(4, 4), 2, border_radius=8)
-            btn.draw(screen, self.font)
+        # Guidance summary
+        if self.guidance_summary_rect:
+            if self.selected_faction:
+                summary_lines = self._wrap_guidance_summary_lines(
+                    self._build_guidance_summary_lines(self.selected_faction),
+                    self.guidance_summary_rect.width - 16,
+                )
+            else:
+                summary_lines = self._wrap_guidance_summary_lines(
+                    ["Select a faction to preview Guidance."],
+                    self.guidance_summary_rect.width - 16,
+                )
+            line_h = self.small_font.get_linesize()
+            summary_h = 12 + len(summary_lines) * line_h
+            self.guidance_summary_rect.height = max(36, summary_h)
+            pygame.draw.rect(screen, (22, 22, 34), self.guidance_summary_rect, border_radius=8)
+            pygame.draw.rect(screen, (78, 78, 104), self.guidance_summary_rect, 1, border_radius=8)
+            self.guidance_summary_keyword_rects = render_rich_lines(
+                screen,
+                self.small_font,
+                summary_lines,
+                self.guidance_summary_rect.x + 8,
+                self.guidance_summary_rect.y + 6,
+                keywords=["Affinity", "Worship"],
+                hovered_keyword=self.hovered_guidance_summary_keyword,
+                normal_color=theme.TEXT_NORMAL,
+                keyword_color=(140, 220, 255),
+                hovered_keyword_color=(190, 240, 255),
+            )
+
+        # Draw idol sources
+        if self.current_era == "era_1":
+            for source in self.idol_drag_sources:
+                rect = source["rect"]
+                self.hex_renderer.draw_idol_token(
+                    screen,
+                    rect.centerx,
+                    rect.centery,
+                    source["idol_type"],
+                    max(11, min(rect.width, rect.height) // 3),
+                    outline_color=(255, 255, 255) if self.selected_idol_type == source["idol_type"].value else None,
+                )
+        else:
+            for btn in self.idol_buttons:
+                if self.selected_idol_type and btn.text.lower() == self.selected_idol_type:
+                    pygame.draw.rect(screen, (255, 255, 255), btn.rect.inflate(4, 4), 2, border_radius=8)
+                btn.draw(screen, self.font)
 
         # Register button tooltips with the tooltip registry
         for btn in self.faction_buttons:
@@ -2925,6 +3493,31 @@ class GameScene:
                 self.idol_title_rect.centerx,
                 self.idol_title_rect.bottom, below=True,
             ))
+        if self.selected_faction and self.guidance_summary_rect:
+            if self.hovered_guidance_summary_keyword == "Affinity":
+                affinity_rects = self.guidance_summary_keyword_rects.get("Affinity", [])
+                if affinity_rects:
+                    rect = affinity_rects[0]
+                    self.tooltip_registry.offer(TooltipDescriptor(
+                        _AFFINITY_TOOLTIP,
+                        _GUIDANCE_HOVER_REGIONS,
+                        rect.centerx,
+                        rect.bottom,
+                        below=True,
+                    ))
+            elif self.hovered_guidance_summary_keyword == "Worship":
+                worship_rects = self.guidance_summary_keyword_rects.get("Worship", [])
+                if worship_rects:
+                    rect = worship_rects[0]
+                    faction_data = self.factions.get(self.selected_faction, {})
+                    worship_id = faction_data.get("worship_spirit") if isinstance(faction_data, dict) else None
+                    self.tooltip_registry.offer(TooltipDescriptor(
+                        self._build_worship_tooltip(self.selected_faction, worship_id),
+                        _GUIDANCE_HOVER_REGIONS,
+                        rect.centerx,
+                        rect.bottom,
+                        below=True,
+                    ))
 
         # Submit button
         if self.submit_button:
@@ -2983,6 +3576,16 @@ class GameScene:
                 self.submit_button.tooltip = None
 
             self._draw_submit_button(screen)
+
+        if self.dragging_idol:
+            drag = self.dragging_idol
+            self.hex_renderer.draw_idol_token(
+                screen,
+                int(drag["pos"][0]),
+                int(drag["pos"][1]),
+                drag["idol_type"],
+                drag["radius"],
+            )
 
     def _get_current_faction_modifiers(self) -> dict:
         """Get the change_modifiers for the current player's guided faction."""
@@ -3126,9 +3729,11 @@ class GameScene:
             for faction_id, x in ((entry["faction_a"], 20), (entry["faction_b"], 250)):
                 rect = pygame.Rect(x, y, 180, 42)
                 selected = self.war_support_selections.get(war_id) == faction_id
-                pygame.draw.rect(screen, (70, 130, 70) if selected else (60, 60, 80), rect, border_radius=6)
-                pygame.draw.rect(screen, (190, 190, 210), rect, 1, border_radius=6)
-                _draw_text_in_rect(screen, faction_full_name(faction_id), rect, self.font, (255, 255, 255))
+                faction_color = tuple(FACTION_COLORS.get(faction_id, (150, 150, 150)))
+                bg_color = tuple(max(c // 5, 8) for c in faction_color)
+                pygame.draw.rect(screen, bg_color, rect, border_radius=6)
+                pygame.draw.rect(screen, (255, 255, 255) if selected else (190, 190, 210), rect, 2 if selected else 1, border_radius=6)
+                _draw_text_in_rect(screen, faction_full_name(faction_id), rect, self.font, faction_color)
                 self.war_support_buttons.append({"war_id": war_id, "faction": faction_id, "rect": rect})
             y += 60
         if self.submit_button:
@@ -3254,11 +3859,12 @@ class GameScene:
             faction_id = btn["faction"]
             rect = btn["rect"]
             selected = self.winner_selections.get(war_id) == faction_id
-            bg_color = (60, 130, 60) if selected else (60, 60, 80)
+            faction_color = tuple(FACTION_COLORS.get(faction_id, (150, 150, 150)))
+            bg_color = tuple(max(c // 5, 8) for c in faction_color)
             pygame.draw.rect(screen, bg_color, rect, border_radius=6)
-            pygame.draw.rect(screen, (180, 180, 180), rect, 1, border_radius=6)
+            pygame.draw.rect(screen, (255, 255, 255) if selected else (180, 180, 180), rect, 2 if selected else 1, border_radius=6)
             label = faction_full_name(faction_id)
-            _draw_text_in_rect(screen, label, rect, self.font, (255, 255, 255))
+            _draw_text_in_rect(screen, label, rect, self.font, faction_color)
 
         if self.submit_button:
             all_chosen = len(self.winner_selections) >= len(self.winner_choice_wars)

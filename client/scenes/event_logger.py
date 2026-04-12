@@ -40,12 +40,12 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
 
     elif etype == "agenda_chosen":
         fname = faction_full_name(event["faction"])
-        event_log.append(f"{fname} play {event['agenda']}")
+        event_log.append(f"The {fname} faction plays {event['agenda']}")
         faction_agendas[event["faction"]] = event["agenda"]
 
     elif etype == "agenda_random":
         fname = faction_full_name(event["faction"])
-        event_log.append(f"{fname} randomly play {event['agenda']}")
+        event_log.append(f"The {fname} faction randomly plays {event['agenda']}")
         faction_agendas[event["faction"]] = event["agenda"]
 
     elif etype == "steal":
@@ -88,7 +88,7 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
     elif etype == "change_draw":
         fname = faction_full_name(event["faction"])
         cards = event.get("cards", [])
-        event_log.append(f"{fname} draw Change: {', '.join(cards)}")
+        event_log.append(f"The {fname} faction draws Change: {', '.join(cards)}")
 
     elif etype == "war_declared":
         fa = faction_full_name(event["faction_a"])
@@ -138,21 +138,34 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
         name = spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
         faction_name = faction_full_name(event.get("faction", "?"))
         event_log.append(f"{name} scored {event.get('vp_gained', 0)} VP from {faction_name} (total: {event.get('total_vp', 0)})")
+        adaptation_multipliers = event.get("adaptation_multipliers", [])
+        era_multipliers = event.get("era_multipliers", [])
+
+        def _multiplier_suffix(scope: str) -> str:
+            parts = []
+            for item in adaptation_multipliers:
+                if item.get("scope") == scope:
+                    parts.append(f"{item.get('label', 'Adaptation')} {item.get('multiplier', 1.0):g}x")
+            for item in era_multipliers:
+                if item.get("scope") == scope:
+                    parts.append(f"{item.get('label', 'Era')} {item.get('multiplier', 1.0):g}x")
+            return f" ({', '.join(parts)})" if parts else ""
+
         b_idols = event.get("battle_idols", 0)
         b_wars = event.get("wars_won", 0)
         if b_idols and b_wars:
             b_vp = b_idols * BATTLE_IDOL_VP * b_wars
-            event_log.append(f"  Battle: {b_idols} idol x {b_wars} wars = {b_vp:.1f}")
+            event_log.append(f"  Battle: {b_idols} idol x {b_wars} wars = {b_vp:.1f}{_multiplier_suffix('battle')}")
         a_idols = event.get("affluence_idols", 0)
         a_gold = event.get("gold_gained", 0)
         if a_idols and a_gold:
             a_vp = a_idols * AFFLUENCE_IDOL_VP * a_gold
-            event_log.append(f"  Affluence: {a_idols} idol x {a_gold} gold = {a_vp:.1f}")
+            event_log.append(f"  Affluence: {a_idols} idol x {a_gold} gold = {a_vp:.1f}{_multiplier_suffix('affluence')}")
         s_idols = event.get("sprawl_idols", event.get("spread_idols", 0))
         s_terr = event.get("territories_gained", 0)
         if s_idols and s_terr:
             s_vp = s_idols * SPRAWL_IDOL_VP * s_terr
-            event_log.append(f"  Sprawl: {s_idols} idol x {s_terr} terr = {s_vp:.1f}")
+            event_log.append(f"  Sprawl: {s_idols} idol x {s_terr} terr = {s_vp:.1f}{_multiplier_suffix('sprawl')}")
 
     elif etype == "era_transition":
         if event.get("vp_reset"):
@@ -200,13 +213,13 @@ def log_event(event: dict, event_log: list[str], spirits: dict,
     elif etype == "worship_gained":
         name = spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
         fname = faction_full_name(event["faction"])
-        event_log.append(f"{fname} now Worships {name}")
+        event_log.append(f"The {fname} faction now worships {name}")
 
     elif etype == "worship_replaced":
         name = spirits.get(event["spirit"], {}).get("name", event["spirit"][:6])
         old_name = spirits.get(event.get("old_spirit", ""), {}).get("name", event.get("old_spirit", "?")[:6])
         fname = faction_full_name(event["faction"])
-        event_log.append(f"{fname} now Worships {name} (was {old_name})")
+        event_log.append(f"The {fname} faction now worships {name} (was {old_name})")
 
     elif etype == "faction_respawning":
         fname = faction_full_name(event["faction"])

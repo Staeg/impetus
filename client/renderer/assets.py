@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import pygame
+from shared.constants import IdolType
 from client.renderer.asset_manifest import (
     AGENDA_GRAPHIC_KEYS,
     resolve_graphic_path,
@@ -12,8 +13,15 @@ from client.renderer.asset_manifest import (
 agenda_images: dict[str, pygame.Surface] = {}        # 48x48 for map animations
 agenda_card_images: dict[str, pygame.Surface] = {}    # 70x70 for card faces
 agenda_ribbon_icons: dict[str, pygame.Surface] = {}   # 15x15 for ribbon pool grid
+idol_source_images: dict[str, pygame.Surface] = {}
+idol_scaled_images: dict[tuple[str, int], pygame.Surface] = {}
 
-AGENDA_NAMES = list(AGENDA_GRAPHIC_KEYS)
+AGENDA_NAMES = ["steal", "trade", "expand", "change"]
+IDOL_IMAGE_KEYS = {
+    IdolType.BATTLE: "battle_idol",
+    IdolType.AFFLUENCE: "affluence_idol",
+    IdolType.SPREAD: "sprawl_idol",
+}
 
 _loaded = False
 
@@ -44,6 +52,15 @@ def load_assets():
         agenda_card_images[name] = pygame.transform.smoothscale(alpha_img, (70, 70))
         agenda_ribbon_icons[name] = pygame.transform.smoothscale(alpha_img, (15, 15))
 
+    for asset_key in IDOL_IMAGE_KEYS.values():
+        path = resolve_graphic_path(asset_key)
+        try:
+            raw = pygame.image.load(path)
+        except FileNotFoundError:
+            print(f"[assets] WARNING: Missing idol image: {path}")
+            continue
+        idol_source_images[asset_key] = raw.convert_alpha()
+
     # Create expand_failed composite: expand image with red X overlay
     if "expand" in agenda_images:
         expand_fail = agenda_images["expand"].copy()
@@ -71,3 +88,21 @@ def load_assets():
         print(f"[assets] WARNING: Only loaded {len(agenda_images)}/{len(AGENDA_NAMES)} agenda images")
     else:
         print(f"[assets] Loaded {len(agenda_images)} agenda images (+ composites)")
+
+
+def get_idol_token_image(idol_type: IdolType, diameter: int) -> pygame.Surface | None:
+    """Return a cached idol image scaled to fit inside a square of `diameter`."""
+    asset_key = IDOL_IMAGE_KEYS.get(idol_type)
+    if asset_key is None:
+        return None
+    base = idol_source_images.get(asset_key)
+    if base is None:
+        return None
+    diameter = max(8, int(diameter))
+    cache_key = (asset_key, diameter)
+    cached = idol_scaled_images.get(cache_key)
+    if cached is not None:
+        return cached
+    scaled = pygame.transform.smoothscale(base, (diameter, diameter))
+    idol_scaled_images[cache_key] = scaled
+    return scaled

@@ -395,7 +395,7 @@ class TestEraTransitions:
         events = gs._resolve_scoring()
 
         assert gs.current_era == Era.ERA_2
-        assert gs.vp_to_win == gs.base_vp_target
+        assert gs.vp_to_win == gs.base_vp_target * 2
         assert gs.spirits["s0"].victory_points == 0
         assert any(e["type"] == "era_vp_reset" for e in events)
 

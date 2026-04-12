@@ -38,7 +38,7 @@ ADAPTATION_CARDS = [
     "Jungle Devotion",
     "River Devotion",
     "Plains Devotion",
-    "Avatar of War",
+    "Avatar of Battle",
     "Avatar of Affluence",
     "Avatar of Sprawl",
     "Changer of Ways",
@@ -126,13 +126,13 @@ ADAPTATION_CARD_INFO = {
         "body": "+VP from Plains, -VP from others",
         "tooltip": "VP gained from the Plains faction is tripled. VP gained from other factions is halved.",
     },
-    "Avatar of War": {
-        "body": "+VP from War Idols, -VP from others",
-        "tooltip": "VP gained from War Idols is doubled. VP gained from other Idols is halved.",
+    "Avatar of Battle": {
+        "body": "+VP from Battle Idols, -VP from others",
+        "tooltip": "VP gained from Battle Idols is doubled. VP gained from other Idols is halved.",
     },
     "Avatar of Affluence": {
         "body": "+VP from Affluence Idols, -VP from others",
-        "tooltip": "VP gained from Affluence Idols is doubled. VP gained from other Idols is halved.",
+        "tooltip": "VP gained from Affluence Idols is doubled. In Era 2, Affluence Idol VP is halved before other multipliers. VP gained from other Idols is halved.",
     },
     "Avatar of Sprawl": {
         "body": "+VP from Sprawl Idols, -VP from others",

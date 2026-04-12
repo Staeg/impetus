@@ -27,7 +27,7 @@ def _spirit_faction_multiplier(spirit, faction_id: str) -> float:
 
 def _spirit_idol_multiplier(spirit, idol_type) -> float:
     avatar_map = {
-        "Avatar of War": IdolType.BATTLE,
+        "Avatar of Battle": IdolType.BATTLE,
         "Avatar of Affluence": IdolType.AFFLUENCE,
         "Avatar of Sprawl": IdolType.SPRAWL,
     }
@@ -100,6 +100,43 @@ def calculate_scoring(factions: dict, spirits: dict, hex_map, era: Era = Era.ERA
 
             vp_gained = battle_share + affluence_share + sprawl_share
             if vp_gained > 0:
+                era_multipliers = []
+                if era == Era.ERA_2:
+                    era_multipliers.append({
+                        "label": "Era 2",
+                        "scope": IdolType.AFFLUENCE.value,
+                        "multiplier": ERA2_AFFLUENCE_IDOL_VP_MULTIPLIER,
+                    })
+                faction_multiplier = _spirit_faction_multiplier(spirit, faction_id)
+                adaptation_multipliers = []
+                if faction_multiplier != 1.0:
+                    for card_name in spirit.adaptation_effects:
+                        if "Devotion" in card_name:
+                            adaptation_multipliers.append({
+                                "label": card_name,
+                                "scope": faction_id,
+                                "multiplier": faction_multiplier,
+                            })
+                            break
+                for idol_type in (IdolType.BATTLE, IdolType.AFFLUENCE, IdolType.SPRAWL):
+                    idol_multiplier = _spirit_idol_multiplier(spirit, idol_type)
+                    if idol_multiplier != 1.0:
+                        for card_name in spirit.adaptation_effects:
+                            if ((idol_type == IdolType.BATTLE and card_name == "Avatar of Battle")
+                                    or (idol_type == IdolType.AFFLUENCE and card_name == "Avatar of Affluence")
+                                    or (idol_type == IdolType.SPRAWL and card_name == "Avatar of Sprawl")):
+                                adaptation_multipliers.append({
+                                    "label": card_name,
+                                    "scope": idol_type.value,
+                                    "multiplier": idol_multiplier,
+                                })
+                                break
+                if "Usurper" in spirit.adaptation_effects and era == Era.ERA_2 and spirit_id == faction.worship_spirit:
+                    adaptation_multipliers.append({
+                        "label": "Usurper",
+                        "scope": "ownership_share",
+                        "multiplier": 1.5,
+                    })
                 spirit.victory_points += vp_gained
                 events.append({
                     "type": "vp_scored",
@@ -111,6 +148,8 @@ def calculate_scoring(factions: dict, spirits: dict, hex_map, era: Era = Era.ERA
                     "wars_won": faction.wars_won_this_turn,
                     "gold_gained": faction.gold_gained_this_turn,
                     "territories_gained": faction.territories_gained_this_turn,
+                    "era_multipliers": era_multipliers,
+                    "adaptation_multipliers": adaptation_multipliers,
                     "vp_gained": vp_gained,
                     "total_vp": spirit.victory_points,
                 })

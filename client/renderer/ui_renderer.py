@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import math
+import re
 import pygame
 from shared.constants import (
     Phase, AgendaType, IdolType, FACTION_COLORS, FACTION_DISPLAY_NAMES,
@@ -19,6 +20,9 @@ from client.renderer.assets import agenda_ribbon_icons
 from client.renderer.hex_renderer import draw_spirit_symbol
 from client.renderer.font_cache import get_font
 import client.theme as theme
+
+_KEYWORD_TOKEN_RE = re.compile(r"[A-Za-z]+")
+_KEYWORD_FAMILY_SUFFIXES = {"", "s", "es", "ed", "ing", "er", "ers", "ped", "ping", "pped"}
 
 
 def _wrap_text(text: str, font: "pygame.font.Font", max_width: int) -> list[str]:
@@ -117,6 +121,49 @@ def draw_dotted_underline(surface: "pygame.Surface", x: int, y: int, width: int,
         cx += dot_len + gap_len
 
 
+def _token_matches_keyword_family(token: str, keyword: str) -> bool:
+    """Return True when token belongs to the same visible keyword family."""
+    token_l = token.lower()
+    keyword_l = keyword.lower()
+    if token_l == keyword_l:
+        return True
+    if token_l.startswith(keyword_l):
+        return token_l[len(keyword_l):] in _KEYWORD_FAMILY_SUFFIXES
+    if keyword_l.endswith("y"):
+        plural = keyword_l[:-1] + "ies"
+        if token_l.startswith(plural):
+            return token_l[len(plural):] in _KEYWORD_FAMILY_SUFFIXES
+    return False
+
+
+def find_keyword_occurrences(line: str, keywords: list[str]) -> list[tuple[int, int, str]]:
+    """Return non-overlapping occurrences covering full word-family tokens."""
+    occurrences: list[tuple[int, int, str]] = []
+    token_keywords = [keyword for keyword in keywords if " " not in keyword and keyword.isalpha()]
+    phrase_keywords = [keyword for keyword in keywords if keyword not in token_keywords]
+
+    for keyword in phrase_keywords:
+        start = 0
+        while True:
+            pos = line.find(keyword, start)
+            if pos < 0:
+                break
+            occurrences.append((pos, pos + len(keyword), keyword))
+            start = pos + len(keyword)
+
+    for match in _KEYWORD_TOKEN_RE.finditer(line):
+        token = match.group(0)
+        best_keyword = None
+        best_len = -1
+        for keyword in token_keywords:
+            if _token_matches_keyword_family(token, keyword) and len(keyword) > best_len:
+                best_keyword = keyword
+                best_len = len(keyword)
+        if best_keyword:
+            occurrences.append((match.start(), match.end(), best_keyword))
+    return occurrences
+
+
 def _render_rich_line_with_keywords(surface, font, line, x, y,
                                     keywords: list[str],
                                     normal_color, keyword_color):
@@ -126,16 +173,8 @@ def _render_rich_line_with_keywords(surface, font, line, x, y,
         surface.blit(surf, (x, y))
         return
 
-    # Find all keyword occurrences, then keep non-overlapping occurrences.
-    occurrences = []
-    for kw in keywords:
-        start = 0
-        while True:
-            pos = line.find(kw, start)
-            if pos < 0:
-                break
-            occurrences.append((pos, pos + len(kw), kw))
-            start = pos + len(kw)
+    # Find all keyword-family occurrences, then keep non-overlapping occurrences.
+    occurrences = find_keyword_occurrences(line, keywords)
 
     if not occurrences:
         surf = font.render(line, True, normal_color)
@@ -196,15 +235,7 @@ def render_rich_lines(surface: "pygame.Surface", font: "pygame.font.Font",
             surface.blit(font.render(line, True, normal_color), (x, cy))
             continue
 
-        occurrences = []
-        for kw in keywords:
-            start = 0
-            while True:
-                pos = line.find(kw, start)
-                if pos < 0:
-                    break
-                occurrences.append((pos, pos + len(kw), kw))
-                start = pos + len(kw)
+        occurrences = find_keyword_occurrences(line, keywords)
 
         if not occurrences:
             surface.blit(font.render(line, True, normal_color), (x, cy))
@@ -251,6 +282,70 @@ def render_rich_lines(surface: "pygame.Surface", font: "pygame.font.Font",
             surface.blit(surf, (cursor_x, cy))
 
     return keyword_rects
+
+
+def render_clickable_faction_lines(surface: "pygame.Surface", font: "pygame.font.Font",
+                                   lines: list[str], x: int, y: int,
+                                   normal_color: tuple,
+                                   hovered_faction: str | None = None,
+                                   underline: bool = True) -> "dict[str, list[pygame.Rect]]":
+    """Render lines with faction-name spans color-coded and return their rects."""
+    faction_names = {fid: faction_full_name(fid) for fid in FACTION_NAMES}
+    name_to_fid = {name: fid for fid, name in faction_names.items()}
+    faction_rects: dict[str, list[pygame.Rect]] = {fid: [] for fid in FACTION_NAMES}
+    line_h = font.get_linesize()
+
+    for line_idx, line in enumerate(lines):
+        cy = y + line_idx * line_h
+        occurrences = []
+        for fid, name in faction_names.items():
+            start = 0
+            while True:
+                pos = line.find(name, start)
+                if pos < 0:
+                    break
+                occurrences.append((pos, pos + len(name), fid))
+                start = pos + len(name)
+        if not occurrences:
+            surface.blit(font.render(line, True, normal_color), (x, cy))
+            continue
+
+        occurrences.sort(key=lambda item: item[0])
+        filtered = []
+        last_end = 0
+        for seg_start, seg_end, fid in occurrences:
+            if seg_start >= last_end:
+                filtered.append((seg_start, seg_end, fid))
+                last_end = seg_end
+
+        cursor_x = x
+        pos = 0
+        for seg_start, seg_end, fid in filtered:
+            if seg_start > pos:
+                normal_text = line[pos:seg_start]
+                surf = font.render(normal_text, True, normal_color)
+                surface.blit(surf, (cursor_x, cy))
+                cursor_x += surf.get_width()
+
+            faction_name = line[seg_start:seg_end]
+            faction_color = tuple(FACTION_COLORS.get(name_to_fid[faction_name], normal_color))
+            if hovered_faction == fid:
+                faction_color = tuple(min(255, c + 35) for c in faction_color)
+            surf = font.render(faction_name, True, faction_color)
+            surface.blit(surf, (cursor_x, cy))
+            rect = pygame.Rect(cursor_x, cy, surf.get_width(), line_h)
+            faction_rects[fid].append(rect)
+            if underline:
+                draw_dotted_underline(surface, cursor_x, cy + line_h - 2, surf.get_width(), faction_color)
+            cursor_x += surf.get_width()
+            pos = seg_end
+
+        if pos < len(line):
+            tail = line[pos:]
+            surf = font.render(tail, True, normal_color)
+            surface.blit(surf, (cursor_x, cy))
+
+    return {fid: rects for fid, rects in faction_rects.items() if rects}
 
 
 def draw_multiline_tooltip(surface: "pygame.Surface", font: "pygame.font.Font",
@@ -377,10 +472,14 @@ class UIRenderer:
         self.panel_worship_rect: pygame.Rect | None = None
         self.panel_worship_spirit_id: str | None = None
         self.panel_war_rect: pygame.Rect | None = None
+        self.panel_war_opponent_rects: dict[str, pygame.Rect] = {}
+        self.event_log_faction_rects: dict[str, list[pygame.Rect]] = {}
+        self.event_log_line_rects: list[tuple[pygame.Rect, int]] = []
         self.panel_faction_id: str | None = None
         self.faction_panel_rect: pygame.Rect | None = None
         self.event_log_expand_rect: pygame.Rect | None = None
         self.card_modifier_hotspots: list[list[pygame.Rect]] = []
+        self.panel_shaping_rects: dict[str, pygame.Rect] = {}
 
     def _get_card_title_lines(self, card: dict, font: "pygame.font.Font", max_width: int) -> list[str]:
         title = card.get("title", card.get("agenda_type", "?"))
@@ -765,6 +864,7 @@ class UIRenderer:
         modifiers = faction_data.get("change_modifiers", {})
         guiding = faction_data.get("guiding_spirit")
         worship = faction_data.get("worship_spirit")
+        shaping_effects = list(faction_data.get("shaping_effects", []))
 
         spirits = spirits or {}
         preview_guidance = preview_guidance or {}
@@ -790,14 +890,7 @@ class UIRenderer:
         active_modifiers = sum(1 for v in modifiers.values() if v > 0)
         if active_modifiers:
             panel_h += 4 + 18 + active_modifiers * 18
-        pool_types = faction_data.get("agenda_pool", [])
-        pool_counts = {}
-        for pt in pool_types:
-            pool_counts[pt] = pool_counts.get(pt, 0) + 1
-        pool_differs = set(pool_counts.keys()) != {"steal", "trade", "expand", "change"} or any(v != 1 for v in pool_counts.values())
-        if pool_differs:
-            pool_entries = len(pool_counts)
-            panel_h += 4 + 18 + pool_entries * 18
+        panel_h += 4 + 18 + (len(shaping_effects) * 18 if shaping_effects else 18)
         if war_opponents:
             panel_h += 4 + 18 + len(war_opponents) * 18
         panel_h += 8  # bottom padding
@@ -808,6 +901,7 @@ class UIRenderer:
             display_h = min(panel_h, surface.get_height() - y - 4)
         panel_rect = pygame.Rect(x, y, width, display_h)
         self.faction_panel_rect = panel_rect
+        self.panel_shaping_rects = {}
         pygame.draw.rect(surface, theme.BG_PANEL, panel_rect, border_radius=4)
         pygame.draw.rect(surface, color, panel_rect, 2, border_radius=4)
 
@@ -818,6 +912,35 @@ class UIRenderer:
         name = faction_full_name(fid)
         name_text = self.font.render(name, True, color)
         surface.blit(name_text, (x + 10, dy))
+        pool_types = faction_data.get("agenda_pool", [])
+        if len(pool_types) == 4:
+            icon_size = 15
+            icon_gap = 3
+            grid_total_w = 2 * icon_size + icon_gap
+            grid_start_x = x + width - 10 - grid_total_w
+            grid_start_y = dy + 1
+            positions = [
+                (grid_start_x, grid_start_y),
+                (grid_start_x + icon_size + icon_gap, grid_start_y),
+                (grid_start_x, grid_start_y + icon_size + icon_gap),
+                (grid_start_x + icon_size + icon_gap, grid_start_y + icon_size + icon_gap),
+            ]
+            change_mods = faction_data.get("change_modifiers", {})
+            plus_font = self._get_font(8)
+            for (px, py), at_str in zip(positions, pool_types):
+                img = agenda_ribbon_icons.get(at_str)
+                if img:
+                    surface.blit(img, (px, py))
+                mod_count = change_mods.get(at_str, 0)
+                if mod_count > 0:
+                    display = min(mod_count, 6)
+                    line1 = "+" * min(display, 3)
+                    line2 = "+" * max(0, display - 3)
+                    surf1 = plus_font.render(line1, True, (255, 255, 255))
+                    surface.blit(surf1, (px + 1, py + 1))
+                    if line2:
+                        surf2 = plus_font.render(line2, True, (255, 255, 255))
+                        surface.blit(surf2, (px + 1, py + 1 + surf1.get_height()))
         dy += 24
 
         # Check for preview guidance name
@@ -989,38 +1112,21 @@ class UIRenderer:
                         surface.blit(text, (x + 10, dy))
                     dy += 18
 
-        # Agenda pool (show when it differs from the standard 1-of-each baseline)
-        pool_types = faction_data.get("agenda_pool", [])
-        pool_counts: dict[str, int] = {}
-        for pt in pool_types:
-            pool_counts[pt] = pool_counts.get(pt, 0) + 1
-        pool_differs = set(pool_counts.keys()) != {"steal", "trade", "expand", "change"} or any(v != 1 for v in pool_counts.values())
-        if pool_differs:
-            dy += 4
-            text = self.small_font.render("Agenda Pool:", True, (150, 150, 170))
-            surface.blit(text, (x + 10, dy))
+        dy += 4
+        self.panel_shaping_rects = {}
+        text = self.small_font.render("Shaping:", True, (150, 150, 170))
+        surface.blit(text, (x + 10, dy))
+        dy += 18
+        if shaping_effects:
+            for card_name in shaping_effects:
+                title_surf = self.small_font.render(f"  {card_name}", True, theme.TEXT_NORMAL)
+                surface.blit(title_surf, (x + 10, dy))
+                self.panel_shaping_rects[card_name] = pygame.Rect(x + 10, dy, title_surf.get_width(), 16)
+                dy += 18
+        else:
+            none_surf = self.small_font.render("  None", True, (140, 140, 160))
+            surface.blit(none_surf, (x + 10, dy))
             dy += 18
-            agenda_colors_map = {
-                "steal": (255, 100, 100),
-                "trade": (255, 220, 100),
-                "expand": (100, 220, 100),
-                "change": (200, 150, 255),
-            }
-            for atype in ["steal", "trade", "expand", "change"]:
-                count = pool_counts.get(atype, 0)
-                if count == 0:
-                    color = (120, 60, 60)
-                    label = f"  {atype}: none"
-                elif count == 1:
-                    color = agenda_colors_map.get(atype, (200, 180, 100))
-                    label = f"  {atype}"
-                else:
-                    color = agenda_colors_map.get(atype, (200, 180, 100))
-                    label = f"  {atype} \u00d7{count}"
-                if count != 1:
-                    text = self.small_font.render(label, True, color)
-                    surface.blit(text, (x + 10, dy))
-                    dy += 18
 
         # Wars
         if war_opponents:
@@ -1028,15 +1134,21 @@ class UIRenderer:
             text = self.small_font.render("At War with:", True, (150, 150, 170))
             surface.blit(text, (x + 10, dy))
             self.panel_war_rect = pygame.Rect(x + 10, dy, text.get_width(), 16)
+            self.panel_war_opponent_rects = {}
             draw_dotted_underline(surface, x + 10, dy + 14, text.get_width())
             dy += 18
             for opp_name, opp_fid in war_opponents:
                 war_color = tuple(FACTION_COLORS.get(opp_fid, (150, 150, 150)))
                 text = self.small_font.render(f"  {opp_name}", True, war_color)
                 surface.blit(text, (x + 10, dy))
+                self.panel_war_opponent_rects[opp_fid] = pygame.Rect(
+                    x + 12, dy, text.get_width(), text.get_height()
+                )
+                draw_dotted_underline(surface, x + 12, dy + text.get_height(), max(1, text.get_width() - 2))
                 dy += 18
         else:
             self.panel_war_rect = None
+            self.panel_war_opponent_rects = {}
 
         surface.set_clip(old_clip)
 
@@ -1057,6 +1169,7 @@ class UIRenderer:
                           circle_fills: "list[float] | None" = None,
                           spirit_index_map: dict = None,
                           max_height: int = None,
+                          scroll_offset: int = 0,
                           era: str = "era_1") -> dict:
         """Draw spirit info panel showing guidance, influence, worship, and idol counts.
 
@@ -1093,6 +1206,7 @@ class UIRenderer:
             panel_h += 22 + len(adaptation_effects) * 18
         else:
             panel_h += 22 + 18
+        self._spirit_panel_content_h = panel_h
 
         display_h = min(panel_h, max_height) if max_height else panel_h
         panel_rect = pygame.Rect(x, y, width, display_h)
@@ -1102,7 +1216,7 @@ class UIRenderer:
         old_clip = surface.get_clip()
         surface.set_clip(panel_rect)
 
-        dy = y + 8
+        dy = y + 8 - scroll_offset
 
         # Header: Spirit name
         name_surf = self.font.render(name, True, (255, 255, 100))
@@ -1266,11 +1380,9 @@ class UIRenderer:
         adaptation_rects: dict[str, pygame.Rect] = {}
         if adaptation_effects:
             for card_name in adaptation_effects:
-                info = get_era_card_info(card_name) or {}
-                body = info.get("body", card_name)
-                body_surf = self.small_font.render(f"  {card_name}: {body}", True, theme.TEXT_NORMAL)
-                surface.blit(body_surf, (x + 10, dy))
-                adaptation_rects[card_name] = pygame.Rect(x + 10, dy, body_surf.get_width(), 16)
+                title_surf = self.small_font.render(f"  {card_name}", True, theme.TEXT_NORMAL)
+                surface.blit(title_surf, (x + 10, dy))
+                adaptation_rects[card_name] = pygame.Rect(x + 10, dy, title_surf.get_width(), 16)
                 dy += 18
         else:
             none_surf = self.small_font.render("  None", True, (140, 140, 160))
@@ -1483,6 +1595,8 @@ class UIRenderer:
                        h_scroll_offset: int = 0,
                        enlarged: bool = False):
         """Draw scrollable event log."""
+        self.event_log_faction_rects = {}
+        self.event_log_line_rects = []
         panel_rect = pygame.Rect(x, y, width, height)
         pygame.draw.rect(surface, (20, 20, 30), panel_rect, border_radius=4)
         pygame.draw.rect(surface, (60, 60, 80), panel_rect, 1, border_radius=4)
@@ -1525,14 +1639,24 @@ class UIRenderer:
         dy = y + 22
         for i, event_text in enumerate(visible_events):
             abs_index = start + i
+            line_rect = pygame.Rect(x + 4, dy, width - 8, 16)
+            self.event_log_line_rects.append((line_rect, abs_index))
             # Highlight background if this entry matches the highlighted log index
             if highlight_log_idx is not None and abs_index == highlight_log_idx:
-                hl_rect = pygame.Rect(x + 4, dy, width - 8, 16)
-                pygame.draw.rect(surface, (80, 75, 20), hl_rect)
-                text = self.small_font.render(event_text, True, (255, 240, 150))
+                pygame.draw.rect(surface, (80, 75, 20), line_rect)
+                event_color = (255, 240, 150)
             else:
-                text = self.small_font.render(event_text, True, (160, 160, 180))
-            surface.blit(text, (x + 8 - h_scroll_offset, dy))
+                event_color = (160, 160, 180)
+            faction_rects = render_clickable_faction_lines(
+                surface,
+                self.small_font,
+                [event_text],
+                x + 8 - h_scroll_offset,
+                dy,
+                normal_color=event_color,
+            )
+            for fid, rects in faction_rects.items():
+                self.event_log_faction_rects.setdefault(fid, []).extend(rects)
             dy += 16
 
         surface.set_clip(None)

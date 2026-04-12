@@ -33,10 +33,12 @@ class GamePhaseController:
                 if scene.selected_faction:
                     scene.preview_guidance = scene.selected_faction
                 if scene.selected_idol_type and scene.selected_hex:
+                    spirit_index_map = {sid: i for i, sid in enumerate(sorted(scene.spirits.keys()))}
                     scene.preview_idol = (
                         scene.selected_idol_type,
                         scene.selected_hex[0],
                         scene.selected_hex[1],
+                        spirit_index_map.get(scene.app.my_spirit_id, 0),
                     )
                 scene.app.network.send(C2S.SUBMIT_VAGRANT_ACTION, payload)
                 scene._clear_selection()

@@ -28,6 +28,8 @@ def map_game_input(event: pygame.event.Event) -> GameInputAction | None:
         return GameInputAction("hover", event, event.pos)
     if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
         return GameInputAction("primary_click", event, event.pos)
+    if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        return GameInputAction("primary_release", event, event.pos)
     if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
         return GameInputAction("secondary_click", event, event.pos)
     return None

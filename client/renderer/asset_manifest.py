@@ -11,6 +11,9 @@ AGENDA_GRAPHIC_KEYS = {
     "trade": "Trade.png",
     "expand": "Expand.png",
     "change": "Change.png",
+    "battle_idol": "Battle.png",
+    "affluence_idol": "Affluence.png",
+    "sprawl_idol": "Sprawl.png",
 }
 
 

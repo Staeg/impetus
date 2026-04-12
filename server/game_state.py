@@ -275,7 +275,7 @@ class GameState:
     def reset_victory_points_for_era_start(self, events: list[dict]) -> None:
         for spirit in self.spirits.values():
             spirit.victory_points = 0
-        self.vp_to_win = self.base_vp_target
+        self.vp_to_win = self.base_vp_target * 2 if self.current_era == Era.ERA_2 else self.base_vp_target
         events.append({
             "type": "era_vp_reset",
             "era": self.current_era.value,
@@ -980,12 +980,25 @@ class GameState:
             guided_b = self.factions[war.faction_b].guiding_spirit
             if (guided_a and not guided_b) or (guided_b and not guided_a):
                 spirit_id = guided_a or guided_b
-                self.battleground_pending.setdefault(spirit_id, []).append({
-                    "war_id": war.war_id,
-                    "faction_a": war.faction_a,
-                    "faction_b": war.faction_b,
-                    "pairs": pairs,
-                })
+                if len(pairs) == 1:
+                    pair = pairs[0]
+                    war.stage(pair[0], pair[1], self.turn + 1)
+                    events.append({
+                        "type": "war_staged",
+                        "war_id": war.war_id,
+                        "faction_a": war.faction_a,
+                        "faction_b": war.faction_b,
+                        "battleground_a": {"q": pair[0][0], "r": pair[0][1]},
+                        "battleground_b": {"q": pair[1][0], "r": pair[1][1]},
+                        "resolve_turn": self.turn + 1,
+                    })
+                else:
+                    self.battleground_pending.setdefault(spirit_id, []).append({
+                        "war_id": war.war_id,
+                        "faction_a": war.faction_a,
+                        "faction_b": war.faction_b,
+                        "pairs": pairs,
+                    })
             else:
                 pair = random.choice(pairs)
                 war.stage(pair[0], pair[1], self.turn + 1)
@@ -1589,7 +1602,7 @@ class GameState:
                     if self.started_from_simulated_era1:
                         self.reset_victory_points_for_era_start(events)
                     else:
-                        self.vp_to_win = max_vp + self.base_vp_target
+                        self.vp_to_win = max_vp + self.base_vp_target * 2
                     events.append({
                         "type": "era_transition",
                         "era": self.current_era.value,
