@@ -1198,10 +1198,19 @@ class GameServer:
         await broadcast_waiting_for(room, list(gs.ejection_pending.keys()))
 
     async def _send_spoils_options(self, room: GameRoom):
-        """Send spoils_choice phase_start to all human spirits with pending spoils."""
+        """Auto-resolve AI spoils, then send spoils_choice prompts to humans."""
         gs = room.game_state
+        ai_events = await self._auto_resolve_ai_spoils(room)
+        if ai_events:
+            await self._broadcast_phase_result(room, ai_events)
+        if not gs.spoils_pending:
+            await self._auto_resolve_phases(room)
+            return
+
         prompts = []
         for sid, pending_list in gs.spoils_pending.items():
+            if sid in room.ai_spirit_ids:
+                continue
             choices = [{"cards": [c.value for c in p.cards], "loser": p.loser}
                        for p in pending_list]
             prompts.append(PendingChoicePrompt(
@@ -1210,8 +1219,11 @@ class GameServer:
                 turn=gs.turn,
                 options={"choices": choices},
             ))
+        if not prompts:
+            return
         await send_choice_prompts(room, prompts)
-        await broadcast_waiting_for(room, list(gs.spoils_pending.keys()))
+        human_pending = [sid for sid in gs.spoils_pending.keys() if sid not in room.ai_spirit_ids]
+        await broadcast_waiting_for(room, human_pending)
 
     async def _auto_resolve_ai_spoils(self, room: GameRoom) -> list:
         """Auto-resolve any AI spirits still in spoils_pending. Returns combined events."""

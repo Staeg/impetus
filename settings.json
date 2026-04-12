@@ -1,3 +1,8 @@
 {
-  "fullscreen": false
+  "fullscreen": false,
+  "windowed_size": [
+    1280,
+    800
+  ],
+  "display_mode": "borderless"
 }

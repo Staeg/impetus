@@ -28,9 +28,27 @@ class MenuScene:
         self.font = get_font(16)
         self.title_font = get_font(36)
         self.small_font = get_font(14)
+        self.single_player_button = None
+        self.tutorial_button = None
+        self.host_button = None
+        self.join_button = None
+        self.settings_button = None
+        self.on_resize(SCREEN_WIDTH, SCREEN_HEIGHT)
 
-        cx = SCREEN_WIDTH // 2
-        cy = SCREEN_HEIGHT // 2
+        self.entering_name = True
+        self.entering_code = False
+        self.entering_host_code = False
+        self.entering_server = False
+        self.player_name = ""
+        self.room_code = ""
+        self.host_code = ""
+        self.server_address = "localhost:8765"
+        self.error_message = ""
+        self.name_confirmed = False
+
+    def on_resize(self, width: int, height: int) -> None:
+        cx = width // 2
+        cy = height // 2
 
         self.single_player_button = Button(
             pygame.Rect(cx - 120, cy - 100, 240, 50),
@@ -53,16 +71,11 @@ class MenuScene:
             "Settings", (60, 60, 80)
         )
 
-        self.entering_name = True
-        self.entering_code = False
-        self.entering_host_code = False
-        self.entering_server = False
-        self.player_name = ""
-        self.room_code = ""
-        self.host_code = ""
-        self.server_address = "localhost:8765"
-        self.error_message = ""
-        self.name_confirmed = False
+    def _server_click_rect(self) -> pygame.Rect:
+        return pygame.Rect(SCREEN_WIDTH // 2 - 140, 198, 280, 28)
+
+    def _server_input_rect(self) -> pygame.Rect:
+        return pygame.Rect(SCREEN_WIDTH // 2 - 80, 198, 220, 28)
 
     def handle_event(self, event):
         if event.type == pygame.MOUSEMOTION:
@@ -133,7 +146,7 @@ class MenuScene:
             if not self.name_confirmed:
                 return
             # Check if server address area was clicked
-            server_rect = pygame.Rect(SCREEN_WIDTH // 2 - 140, 198, 280, 28)
+            server_rect = self._server_click_rect()
             if server_rect.collidepoint(event.pos):
                 self.entering_server = True
                 return
@@ -280,7 +293,7 @@ class MenuScene:
         server_label = self.small_font.render("Server:", True, (130, 130, 150))
         screen.blit(server_label, (SCREEN_WIDTH // 2 - 140, 203))
 
-        server_rect = pygame.Rect(SCREEN_WIDTH // 2 - 80, 198, 220, 28)
+        server_rect = self._server_input_rect()
         border_color = theme.BORDER_INPUT_ACTIVE if self.entering_server else (70, 70, 90)
         pygame.draw.rect(screen, theme.BG_INPUT_DARK, server_rect, border_radius=4)
         pygame.draw.rect(screen, border_color, server_rect, 1, border_radius=4)

@@ -18,14 +18,16 @@ class InputHandler:
 
     def screen_to_world(self, sx: int, sy: int, screen_w: int, screen_h: int) -> tuple[float, float]:
         """Convert screen pixel to world coordinates."""
-        wx = (sx - screen_w / 2) + self.camera_x
-        wy = (sy - screen_h / 2) + self.camera_y
+        zoom = self.zoom if self.zoom else 1.0
+        wx = (sx - screen_w / 2) / zoom + self.camera_x
+        wy = (sy - screen_h / 2) / zoom + self.camera_y
         return wx, wy
 
     def world_to_screen(self, wx: float, wy: float, screen_w: int, screen_h: int) -> tuple[int, int]:
         """Convert world coordinates to screen pixel."""
-        sx = int((wx - self.camera_x) + screen_w / 2)
-        sy = int((wy - self.camera_y) + screen_h / 2)
+        zoom = self.zoom if self.zoom else 1.0
+        sx = int((wx - self.camera_x) * zoom + screen_w / 2)
+        sy = int((wy - self.camera_y) * zoom + screen_h / 2)
         return sx, sy
 
     def screen_to_hex(self, sx: int, sy: int, screen_w: int, screen_h: int,
@@ -48,5 +50,6 @@ class InputHandler:
             if self._dragging:
                 dx = event.pos[0] - self._drag_start[0]
                 dy = event.pos[1] - self._drag_start[1]
-                self.camera_x = self._drag_cam_start[0] - dx
-                self.camera_y = self._drag_cam_start[1] - dy
+                zoom = self.zoom if self.zoom else 1.0
+                self.camera_x = self._drag_cam_start[0] - dx / zoom
+                self.camera_y = self._drag_cam_start[1] - dy / zoom

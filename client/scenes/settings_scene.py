@@ -1,4 +1,4 @@
-"""Settings scene: fullscreen toggle and other preferences."""
+"""Settings scene: display mode and other preferences."""
 
 from __future__ import annotations
 import pygame
@@ -9,46 +9,58 @@ import client.theme as theme
 
 
 class SettingsScene:
+    _MODE_OPTIONS = [
+        ("borderless", "Borderless"),
+        ("windowed", "Windowed"),
+        ("fullscreen", "Fullscreen"),
+    ]
+
     def __init__(self, app):
         self.app = app
         self.font = get_font(16)
         self.title_font = get_font(36)
         self.small_font = get_font(14)
-        self.return_scene: str = "menu"  # where Back/Escape navigates to
+        self.return_scene: str = "menu"
+        self.back_button: Button | None = None
+        self.mode_buttons: list[tuple[str, Button]] = []
+        self.on_resize(SCREEN_WIDTH, SCREEN_HEIGHT)
 
-        cx = SCREEN_WIDTH // 2
+    def on_resize(self, width: int, height: int) -> None:
+        cx = width // 2
         self.back_button = Button(
-            pygame.Rect(cx - 80, SCREEN_HEIGHT - 100, 160, 44),
+            pygame.Rect(cx - 80, height - 100, 160, 44),
             "Back", (70, 70, 90)
         )
 
-        # Checkbox rect for fullscreen toggle
-        self.checkbox_rect = pygame.Rect(cx - 110, SCREEN_HEIGHT // 2 - 16, 22, 22)
-        self.label_rect = pygame.Rect(cx - 80, SCREEN_HEIGHT // 2 - 16, 200, 22)
+        button_w = 220
+        button_h = 46
+        block_h = 92
+        start_y = max(220, height // 2 - (len(self._MODE_OPTIONS) * block_h) // 2)
+        self.mode_buttons = []
+        for idx, (mode, label) in enumerate(self._MODE_OPTIONS):
+            rect = pygame.Rect(cx - button_w // 2, start_y + idx * block_h, button_w, button_h)
+            self.mode_buttons.append((mode, Button(rect, label, (60, 60, 80))))
 
     def handle_event(self, event):
         if event.type == pygame.MOUSEMOTION:
             self.back_button.update(event.pos)
+            for _, button in self.mode_buttons:
+                button.update(event.pos)
 
-        if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_ESCAPE:
-                self._go_back()
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            self._go_back()
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            # Clicking checkbox or its label toggles fullscreen
-            toggle_rect = pygame.Rect(
-                self.checkbox_rect.x, self.checkbox_rect.y,
-                self.label_rect.right - self.checkbox_rect.x,
-                self.checkbox_rect.height
-            )
-            if toggle_rect.collidepoint(event.pos):
-                self.app.toggle_fullscreen()
-            elif self.back_button.clicked(event.pos):
+            for mode, button in self.mode_buttons:
+                if button.clicked(event.pos):
+                    self.app.set_display_mode(mode)
+                    return
+            if self.back_button.clicked(event.pos):
                 self._go_back()
 
     def _go_back(self):
         dest = self.return_scene
-        self.return_scene = "menu"  # reset for next time
+        self.return_scene = "menu"
         self.app.set_scene(dest)
 
     def update(self, dt):
@@ -60,27 +72,26 @@ class SettingsScene:
         title = self.title_font.render("Settings", True, theme.TITLE_TEXT)
         screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 80))
 
-        cx = SCREEN_WIDTH // 2
-        cy = SCREEN_HEIGHT // 2
+        subtitle = self.font.render("Display Mode", True, theme.TEXT_HIGHLIGHT)
+        screen.blit(subtitle, (SCREEN_WIDTH // 2 - subtitle.get_width() // 2, 180))
 
-        # Fullscreen checkbox
-        cb = self.checkbox_rect
-        pygame.draw.rect(screen, theme.BG_INPUT, cb, border_radius=3)
-        pygame.draw.rect(screen, theme.BORDER_INPUT, cb, 1, border_radius=3)
-        if self.app.fullscreen:
-            # Draw X inside checkbox
-            margin = 4
-            pygame.draw.line(screen, theme.CHECKBOX_FILL,
-                             (cb.x + margin, cb.y + margin),
-                             (cb.right - margin, cb.bottom - margin), 2)
-            pygame.draw.line(screen, theme.CHECKBOX_FILL,
-                             (cb.right - margin, cb.y + margin),
-                             (cb.x + margin, cb.bottom - margin), 2)
+        description_map = {
+            "borderless": "Native monitor size in a borderless window. Default launch mode.",
+            "windowed": "Resizable window that renders at the current window size.",
+            "fullscreen": "Exclusive fullscreen mode.",
+        }
 
-        label = self.font.render("Fullscreen", True, theme.TEXT_HIGHLIGHT)
-        screen.blit(label, (cb.right + 10, cb.y + (cb.height - label.get_height()) // 2))
+        for mode, button in self.mode_buttons:
+            active = self.app.display_mode == mode
+            button.color = (90, 120, 80) if active else (60, 60, 80)
+            button.hover_color = (110, 145, 95) if active else (90, 90, 120)
+            button.draw(screen, self.font)
+            desc = self.small_font.render(description_map[mode], True, theme.TEXT_DIM)
+            screen.blit(desc, (SCREEN_WIDTH // 2 - desc.get_width() // 2, button.rect.bottom + 10))
 
-        hint = self.small_font.render("F11 to toggle fullscreen from any screen", True, (90, 90, 110))
-        screen.blit(hint, (cx - hint.get_width() // 2, cy + 40))
+        hint = self.small_font.render("F11 toggles exclusive fullscreen on and off", True, (90, 90, 110))
+        last_button = self.mode_buttons[-1][1]
+        hint_y = min(SCREEN_HEIGHT - 150, last_button.rect.bottom + 70)
+        screen.blit(hint, (SCREEN_WIDTH // 2 - hint.get_width() // 2, hint_y))
 
         self.back_button.draw(screen, self.font)

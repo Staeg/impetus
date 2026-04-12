@@ -92,6 +92,29 @@ class LobbyScene:
         # Hold-to-repeat state for VP ± buttons
         self._vp_held = None        # 'minus' | 'plus' | None
         self._vp_hold_timer = 0.0   # seconds until next repeat fire
+        self.on_resize(SCREEN_WIDTH, SCREEN_HEIGHT)
+
+    def on_resize(self, width: int, height: int) -> None:
+        global _CX
+        _CX = width // 2
+        btn_row_y = height - 150
+        start_y = height - 98
+        self._tip_y = height - 172
+        self._vp_row_y = height - 212
+        self._era_row_y = height - 256
+        self._ai_row_y = height - 300
+        spin_minus_x = _CX - 115
+        spin_plus_x = _CX + 87
+
+        self.ready_button.rect.topleft = (_CX + 5, btn_row_y)
+        self.spectator_button.rect.topleft = (_CX - _BTN_W - 5, btn_row_y)
+        self.start_button.rect.topleft = (_CX - 100, start_y)
+        self.vp_minus.rect.topleft = (spin_minus_x, self._vp_row_y)
+        self.vp_plus.rect.topleft = (spin_plus_x, self._vp_row_y)
+        self.ai_minus.rect.topleft = (spin_minus_x, self._ai_row_y)
+        self.ai_plus.rect.topleft = (spin_plus_x, self._ai_row_y)
+        self.era1_checkbox_rect = pygame.Rect(_CX - 36, self._era_row_y + 22, 18, 18)
+        self.era2_checkbox_rect = pygame.Rect(_CX + 62, self._era_row_y + 22, 18, 18)
 
     # ------------------------------------------------------------------ #
     # Helpers

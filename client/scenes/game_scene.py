@@ -24,7 +24,7 @@ from client.faction_names import faction_full_name, update_faction_races
 from client.renderer.hex_renderer import HexRenderer
 from client.renderer.ui_renderer import (
     UIRenderer, Button, build_agenda_tooltip, build_modifier_tooltip,
-    draw_dotted_underline, _wrap_text, render_rich_lines,
+    draw_dotted_underline, _draw_text_in_rect, _wrap_text, render_rich_lines,
 )
 from client.renderer.font_cache import get_font
 import client.theme as theme
@@ -41,42 +41,61 @@ from client.renderer.popup_manager import (
     set_ui_rects, _WEIGHT_TEXT, _WEIGHT_NON_TEXT,
 )
 
-# Approximate hex map screen bounds (default camera) for centering UI
-# Pointy-top: rightmost vertex = sqrt(3)*HEX_SIZE*(MAP_SIDE_LENGTH-1+0.5)
-_HEX_MAP_HALF_W = int(math.sqrt(3) * HEX_SIZE * (MAP_SIDE_LENGTH - 0.5))
-_HEX_MAP_LEFT_X = SCREEN_WIDTH // 2 - _HEX_MAP_HALF_W
-_HEX_MAP_RIGHT_X = SCREEN_WIDTH // 2 + _HEX_MAP_HALF_W
 
-# Right column layout: starts just past map right edge
-_FACTION_PANEL_X = _HEX_MAP_RIGHT_X + 14
-_PANEL_W = SCREEN_WIDTH - _FACTION_PANEL_X - 2
+def _recompute_layout_globals() -> None:
+    global _HEX_MAP_HALF_W, _HEX_MAP_LEFT_X, _HEX_MAP_RIGHT_X
+    global _FACTION_PANEL_X, _PANEL_W
+    global _FACTION_PANEL_MAX_H, _SPIRIT_PANEL_MAX_H, _EVENT_LOG_H, _EVENT_LOG_H_ENLARGED
+    global _GUIDANCE_CENTER_X, _BTN_W, _BTN_H, _BTN_STEP_Y, _GUIDANCE_BTN_X, _BOARD_ZOOM
+    global _TITLE_Y, _BTN_START_Y, _RIBBON_BOTTOM_Y, _MAP_CENTER_Y
+    global _CARD_W, _CARD_H, _CARD_SPACING, _CARD_H_TALL
+    base_screen_w = 1280
+    base_screen_h = 800
+    base_faction_panel_h = 300
+    base_spirit_panel_h = 195
+    base_event_log_h = 191
 
-# Panel heights for the stacked right column (y=102 to y=796 = 694px usable)
-_FACTION_PANEL_MAX_H = 300    # scrollable faction/spirit panel (top)
-_SPIRIT_PANEL_MAX_H = 195     # persistent self-spirit panel (middle)
-_EVENT_LOG_H = 191            # event log (bottom); 694-300-4-195-4=191
-_EVENT_LOG_H_ENLARGED = 400   # event log when expanded
+    _BOARD_ZOOM = min(1.5, SCREEN_WIDTH / base_screen_w, SCREEN_HEIGHT / base_screen_h)
 
-# Centering positions for button column (left side only)
-_GUIDANCE_CENTER_X = _HEX_MAP_LEFT_X // 2
-_BTN_W = 157
-_BTN_H = 37
-_BTN_STEP_Y = 43
-_GUIDANCE_BTN_X = _GUIDANCE_CENTER_X - _BTN_W // 2
+    # Approximate hex map screen bounds (default camera) for centering UI
+    base_hex_map_half_w = math.sqrt(3) * HEX_SIZE * (MAP_SIDE_LENGTH - 0.5)
+    _HEX_MAP_HALF_W = int(base_hex_map_half_w * _BOARD_ZOOM)
+    _HEX_MAP_LEFT_X = SCREEN_WIDTH // 2 - _HEX_MAP_HALF_W
+    _HEX_MAP_RIGHT_X = SCREEN_WIDTH // 2 + _HEX_MAP_HALF_W
 
-# Title positions (below faction overview strip which ends at Y=97)
-_TITLE_Y = 102
-_BTN_START_Y = 129
-_RIBBON_BOTTOM_Y = 97
+    # Right column layout: starts just past map right edge
+    _FACTION_PANEL_X = _HEX_MAP_RIGHT_X + 14
+    _PANEL_W = SCREEN_WIDTH - _FACTION_PANEL_X - 2
 
-# Vertical center of the playable hex map area (between ribbon and submit button)
-_MAP_CENTER_Y = (_RIBBON_BOTTOM_Y + SCREEN_HEIGHT) // 2
+    available_sidebar_h = max(280, SCREEN_HEIGHT - 102 - 4)
+    _SPIRIT_PANEL_MAX_H = base_spirit_panel_h
+    remaining_sidebar_h = max(120, available_sidebar_h - _SPIRIT_PANEL_MAX_H - 8)
+    sidebar_ratio = base_faction_panel_h / (base_faction_panel_h + base_event_log_h)
+    _FACTION_PANEL_MAX_H = max(220, int(round(remaining_sidebar_h * sidebar_ratio)))
+    _EVENT_LOG_H = max(140, remaining_sidebar_h - _FACTION_PANEL_MAX_H)
+    _EVENT_LOG_H_ENLARGED = max(400, int(_EVENT_LOG_H * 1.45))
 
-# Card picker dimensions
-_CARD_W = 110
-_CARD_H = 145         # vertical (left-panel) card pickers
-_CARD_SPACING = 5
-_CARD_H_TALL = 170    # taller layout used by _calc_card_rects
+    # Centering positions for button column (left side only)
+    _GUIDANCE_CENTER_X = _HEX_MAP_LEFT_X // 2
+    _BTN_W = 157
+    _BTN_H = 37
+    _BTN_STEP_Y = 43
+    _GUIDANCE_BTN_X = _GUIDANCE_CENTER_X - _BTN_W // 2
+
+    # Title positions (below faction overview strip which ends at Y=97)
+    _TITLE_Y = 102
+    _BTN_START_Y = 129
+    _RIBBON_BOTTOM_Y = 97
+    _MAP_CENTER_Y = (_RIBBON_BOTTOM_Y + SCREEN_HEIGHT) // 2
+
+    # Card picker dimensions
+    _CARD_W = 110
+    _CARD_H = 145
+    _CARD_SPACING = 5
+    _CARD_H_TALL = 170
+
+
+_recompute_layout_globals()
 
 _INFLUENCE_TOOLTIP = (
     "The number of additional Agenda cards a Spirit draws when "
@@ -412,6 +431,24 @@ class GameScene:
             S2C.GAME_OVER:    self._handle_game_over,
             S2C.ERROR:        self._handle_error,
         }
+        self._apply_viewport_layout()
+
+    def _apply_viewport_layout(self) -> None:
+        self.input_handler.zoom = _BOARD_ZOOM
+        self.input_handler.camera_y = (SCREEN_HEIGHT / 2 - _MAP_CENTER_Y) / max(_BOARD_ZOOM, 0.01)
+
+    def on_resize(self, width: int, height: int) -> None:
+        _recompute_layout_globals()
+        self._apply_viewport_layout()
+        if self.phase == Phase.VAGRANT_PHASE.value and self.phase_options.get("action") == "choose":
+            self._build_faction_buttons()
+            if self.phase_options.get("can_place_idol", True):
+                self._build_idol_buttons()
+            else:
+                self.idol_buttons = []
+                self.idol_title_rect = None
+        if self.submit_button:
+            self.submit_button.rect.y = SCREEN_HEIGHT - 60
 
     @property
     def font(self):
@@ -2099,10 +2136,18 @@ class GameScene:
         for w in self.display_wars:
             if isinstance(w, dict):
                 war_obj = type('War', (), {
+                    'war_id': w.get('war_id'),
                     'faction_a': w.get('faction_a', ''),
                     'faction_b': w.get('faction_b', ''),
+                    'battleground_a': w.get('battleground_a'),
+                    'battleground_b': w.get('battleground_b'),
+                    'resolve_turn': w.get('resolve_turn', 0),
+                    'declared_turn': w.get('declared_turn', 0),
+                    'is_staged': w.get('is_staged', False),
                 })()
                 render_wars.append(war_obj)
+            else:
+                render_wars.append(w)
 
         # Draw hex grid (use display state if available)
         hex_own = self.display_hex_ownership
@@ -2987,7 +3032,7 @@ class GameScene:
                 title = card_name.title()
             else:
                 info = get_era_card_info(card_name) or {}
-                desc = _wrap_text(info.get("body", card_name), self.small_font, 90)[:3]
+                desc = _wrap_text(info.get("body", card_name), self.small_font, 96)
                 tooltip = info.get("tooltip", card_name)
                 title = card_name
             hand.append({
@@ -3083,8 +3128,7 @@ class GameScene:
                 selected = self.war_support_selections.get(war_id) == faction_id
                 pygame.draw.rect(screen, (70, 130, 70) if selected else (60, 60, 80), rect, border_radius=6)
                 pygame.draw.rect(screen, (190, 190, 210), rect, 1, border_radius=6)
-                label = self.font.render(faction_full_name(faction_id), True, (255, 255, 255))
-                screen.blit(label, label.get_rect(center=rect.center))
+                _draw_text_in_rect(screen, faction_full_name(faction_id), rect, self.font, (255, 255, 255))
                 self.war_support_buttons.append({"war_id": war_id, "faction": faction_id, "rect": rect})
             y += 60
         if self.submit_button:
@@ -3214,8 +3258,7 @@ class GameScene:
             pygame.draw.rect(screen, bg_color, rect, border_radius=6)
             pygame.draw.rect(screen, (180, 180, 180), rect, 1, border_radius=6)
             label = faction_full_name(faction_id)
-            surf = self.font.render(label, True, (255, 255, 255))
-            screen.blit(surf, surf.get_rect(center=rect.center))
+            _draw_text_in_rect(screen, label, rect, self.font, (255, 255, 255))
 
         if self.submit_button:
             all_chosen = len(self.winner_selections) >= len(self.winner_choice_wars)
@@ -3233,8 +3276,8 @@ class GameScene:
         entry = self.spoils_expand_choices[idx]
         loser = faction_full_name(entry.get("loser", ""))
 
-        title = self.font.render(f"Expand Spoils: Conquer {loser}", True, theme.TEXT_HIGHLIGHT)
-        screen.blit(title, (20, 102))
+        title_rect = pygame.Rect(20, 102, max(220, _HEX_MAP_LEFT_X - 30), self.font.get_linesize() * 2 + 4)
+        _draw_text_in_rect(screen, f"Expand Spoils: Conquer {loser}", title_rect, self.font, theme.TEXT_HIGHLIGHT)
 
         if n > 1:
             page_text = f"War {idx + 1} / {n}"
@@ -3284,8 +3327,8 @@ class GameScene:
 
     def _render_respawn_choice_ui(self, screen):
         faction_name = faction_full_name(self.respawn_choice_faction)
-        title = self.font.render(f"Respawn: {faction_name}", True, (255, 160, 60))
-        screen.blit(title, (20, 102))
+        title_rect = pygame.Rect(20, 102, max(220, _HEX_MAP_LEFT_X - 30), self.font.get_linesize() * 2 + 4)
+        _draw_text_in_rect(screen, f"Respawn: {faction_name}", title_rect, self.font, (255, 160, 60))
 
         instruction = "Your faction lost all territory and must respawn. Click any highlighted neutral hex to choose where it reappears."
         lines = _wrap_text(instruction, self.font, 220)
@@ -3306,8 +3349,8 @@ class GameScene:
 
     def _render_expand_choice_ui(self, screen):
         faction_name = faction_full_name(self.expand_choice_faction)
-        title = self.font.render(f"Expand: {faction_name}", True, theme.TEXT_HIGHLIGHT)
-        screen.blit(title, (20, 102))
+        title_rect = pygame.Rect(20, 102, max(220, _HEX_MAP_LEFT_X - 30), self.font.get_linesize() * 2 + 4)
+        _draw_text_in_rect(screen, f"Expand: {faction_name}", title_rect, self.font, theme.TEXT_HIGHLIGHT)
 
         instruction = "Click a highlighted hex to choose where to expand."
         lines = _wrap_text(instruction, self.font, 220)
@@ -3343,11 +3386,13 @@ class GameScene:
         info_pad_y = 8
         info_inner_w = info_box_w - info_pad_x * 2
         title_lines = _wrap_text(title_text, self.font, info_inner_w)
-        body_lines = _wrap_text(
-            "Choose your Spoils by clicking one reward under each defeated faction.",
-            self.small_font,
-            info_inner_w,
+        body_text = (
+            "Choose one reward under each defeated faction. If you picked Change as Spoils, "
+            "choose one modifier reward for each of those Change Agendas."
+            if is_change else
+            "Choose your Spoils by clicking one reward under each defeated faction."
         )
+        body_lines = _wrap_text(body_text, self.small_font, info_inner_w)
         info_box_h = (
             info_pad_y * 2
             + len(title_lines) * self.font.get_linesize()
@@ -3366,7 +3411,7 @@ class GameScene:
         text_y += 6
         help_rects = render_rich_lines(
             screen, self.small_font, body_lines, info_box_x + info_pad_x, text_y,
-            keywords=["Spoils"],
+            keywords=["Spoils", "Change Agendas"] if is_change else ["Spoils"],
             hovered_keyword=None,
             normal_color=(190, 190, 200),
             keyword_color=theme.TEXT_KEYWORD,
@@ -3418,16 +3463,16 @@ class GameScene:
             panel_rect = pygame.Rect(panel_x, top_y, panel_w, panel_h)
             self.spoils_panel_rects.append(panel_rect)
             pygame.draw.rect(screen, bg_color, panel_rect)
-            pygame.draw.line(screen, tuple(max(40, c) for c in faction_color),
-                             (panel_x, top_y), (panel_x + panel_w, top_y), 1)
-
-            pygame.draw.rect(screen, bg_color, pygame.Rect(panel_x, top_y, panel_w, max(10, panel_h - toggle_h)))
-            pygame.draw.line(screen, tuple(max(40, c) for c in faction_color),
-                             (panel_x, top_y), (panel_x + panel_w, top_y), 1)
+            pygame.draw.rect(screen, faction_color, pygame.Rect(panel_x, top_y, 3, panel_h))
+            pygame.draw.rect(
+                screen,
+                bg_color,
+                pygame.Rect(panel_x + 3, top_y, max(7, panel_w - 3), max(10, panel_h - toggle_h)),
+            )
             bar_color = faction_color if pending else bg_color
             toggle_rect = pygame.Rect(panel_x, panel_rect.bottom - toggle_h, panel_w, toggle_h)
             pygame.draw.rect(screen, bar_color, toggle_rect)
-            pygame.draw.line(screen, (18, 18, 18), (toggle_rect.left, toggle_rect.top), (toggle_rect.right, toggle_rect.top), 1)
+            pygame.draw.rect(screen, faction_color, pygame.Rect(panel_x, toggle_rect.top, 3, toggle_h))
             tri_cx = toggle_rect.centerx
             tri_cy = toggle_rect.centery + (1 if entry.expanded else -1)
             tri_half_w = 6

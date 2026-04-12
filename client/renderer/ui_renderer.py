@@ -44,6 +44,68 @@ def _wrap_text(text: str, font: "pygame.font.Font", max_width: int) -> list[str]
     return lines
 
 
+def _ellipsize_text(text: str, font: "pygame.font.Font", max_width: int) -> str:
+    """Trim text to fit on one line within max_width, adding an ellipsis if needed."""
+    if font.size(text)[0] <= max_width:
+        return text
+    ellipsis = "..."
+    if font.size(ellipsis)[0] > max_width:
+        return ""
+    trimmed = text.rstrip()
+    while trimmed and font.size(trimmed + ellipsis)[0] > max_width:
+        trimmed = trimmed[:-1].rstrip()
+    return trimmed + ellipsis if trimmed else ellipsis
+
+
+def _fit_text_to_rect(text: str, font: "pygame.font.Font", rect: "pygame.Rect",
+                      max_lines: int = 2, padding: int = 6) -> tuple["pygame.font.Font", list[str]]:
+    """Return a font and wrapped lines that fit inside a fixed rect."""
+    max_width = max(1, rect.width - padding * 2)
+    max_height = max(1, rect.height - padding * 2)
+    candidate_fonts = [font]
+    base_height = max(10, font.get_height())
+    for size in (base_height - 2, base_height - 4):
+        if size >= 10:
+            candidate = get_font(size, bold=font.get_bold())
+            if candidate not in candidate_fonts:
+                candidate_fonts.append(candidate)
+
+    fallback_font = candidate_fonts[-1]
+    for candidate_font in candidate_fonts:
+        line_height = candidate_font.get_linesize()
+        wrapped = _wrap_text(text, candidate_font, max_width)
+        if wrapped and len(wrapped) <= max_lines and len(wrapped) * line_height <= max_height:
+            return candidate_font, wrapped
+
+        clipped = wrapped[:max_lines] if wrapped else [text]
+        if len(wrapped) > max_lines:
+            clipped[-1] = _ellipsize_text(" ".join(wrapped[max_lines - 1:]), candidate_font, max_width)
+        elif clipped:
+            clipped[-1] = _ellipsize_text(clipped[-1], candidate_font, max_width)
+
+        if clipped and len(clipped) * line_height <= max_height:
+            return candidate_font, clipped
+        fallback_font = candidate_font
+
+    return fallback_font, [_ellipsize_text(text, fallback_font, max_width)]
+
+
+def _draw_text_in_rect(surface: "pygame.Surface", text: str, rect: "pygame.Rect",
+                       font: "pygame.font.Font", color, max_lines: int = 2,
+                       padding: int = 6) -> None:
+    """Draw centered text that stays inside rect bounds."""
+    render_font, lines = _fit_text_to_rect(text, font, rect, max_lines=max_lines, padding=padding)
+    line_height = render_font.get_linesize()
+    total_height = len(lines) * line_height
+    y = rect.y + max(padding, (rect.height - total_height) // 2)
+    for line in lines:
+        surf = render_font.render(line, True, color)
+        text_rect = surf.get_rect(centerx=rect.centerx)
+        text_rect.y = y
+        surface.blit(surf, text_rect)
+        y += line_height
+
+
 def draw_dotted_underline(surface: "pygame.Surface", x: int, y: int, width: int,
                           color: tuple = (120, 120, 140), dot_len: int = 2, gap_len: int = 3):
     """Draw a faint dotted underline."""
@@ -274,9 +336,13 @@ class Button:
             color = (60, 60, 60)
         pygame.draw.rect(surface, color, self.rect, border_radius=6)
         pygame.draw.rect(surface, (200, 200, 200), self.rect, 1, border_radius=6)
-        text_surf = font.render(self.text, True, self.text_color if self.enabled else (120, 120, 120))
-        text_rect = text_surf.get_rect(center=self.rect.center)
-        surface.blit(text_surf, text_rect)
+        _draw_text_in_rect(
+            surface,
+            self.text,
+            self.rect,
+            font,
+            self.text_color if self.enabled else (120, 120, 120),
+        )
 
     def draw_tooltip(self, surface: pygame.Surface, font: pygame.font.Font):
         """Draw tooltip near the button when hovered."""
@@ -500,16 +566,18 @@ class UIRenderer:
             bg = tuple(max(c // 5, 8) for c in fc)
             pygame.draw.rect(surface, bg, pygame.Rect(cx + 3, strip_y, cell_w - 3, strip_h))
 
-            # Faction name
-            abbr = faction_full_name(fid)
-            abbr_surf = self.small_font.render(abbr, True, fc)
-            surface.blit(abbr_surf, (cx + 6, strip_y + 4))
-
             # Gold amount (use override for smooth tween during animations)
             gold = fd.get("gold", 0) if isinstance(fd, dict) else getattr(fd, "gold", 0)
             if gold_overrides and fid in gold_overrides:
                 gold = gold_overrides[fid]
             gold_text = self.small_font.render(f"{gold}g", True, (255, 220, 60))
+
+            # Faction name
+            abbr = faction_full_name(fid)
+            available_name_w = max(28, cell_w - 18 - gold_text.get_width())
+            abbr_text = _ellipsize_text(abbr, self.small_font, available_name_w)
+            abbr_surf = self.small_font.render(abbr_text, True, fc)
+            surface.blit(abbr_surf, (cx + 6, strip_y + 4))
             surface.blit(gold_text, (cx + 6 + abbr_surf.get_width() + 6, strip_y + 4))
 
             worship_id = fd.get("worship_spirit") if isinstance(fd, dict) else getattr(fd, "worship_spirit", None)
@@ -533,7 +601,7 @@ class UIRenderer:
                         agenda_entries.append((spoils_agenda, True))
 
                 for row_idx, (agenda_type, is_spoils) in enumerate(agenda_entries):
-                    a_label = agenda_type.title()
+                    a_label = _ellipsize_text(agenda_type.title(), self.small_font, max(22, cell_w - 12))
                     a_color = agenda_colors.get(agenda_type, (160, 160, 180))
                     a_surf = self.small_font.render(a_label, True, a_color)
                     a_pos = (cx + cell_w - a_surf.get_width() - 6, strip_y + 4 + row_idx * 16)
@@ -1321,16 +1389,30 @@ class UIRenderer:
 
                 agenda_type = card.get("agenda_type", "?")
                 title_lines = self._get_card_title_lines(card, title_font, card_w - 12)
+                title_y = cy + 8
+                title_line_h = title_font.get_linesize()
                 for line_idx, title_line in enumerate(title_lines):
                     name_text = title_font.render(title_line, True, (220, 220, 240))
-                    surface.blit(name_text, (cx + card_w // 2 - name_text.get_width() // 2, cy + 8 + line_idx * 13))
+                    surface.blit(name_text, (cx + card_w // 2 - name_text.get_width() // 2, title_y + line_idx * title_line_h))
 
+                desc_lines = card.get("description") or self._build_card_description(
+                    agenda_type, modifiers, is_spoils=is_spoils, territories=territories)
                 img = card_images.get(agenda_type)
-                desc_y = cy + 38
+                desc_y = title_y + len(title_lines) * title_line_h + 6
+                max_body_bottom = cy + card_h - 8
                 if img:
-                    img_scaled = pygame.transform.scale(img, (70, img.get_height() * 70 // max(img.get_width(), 1)))
+                    max_desc_lines = min(len(desc_lines), max(1, (max_body_bottom - desc_y) // effect_font.get_linesize()))
+                    reserved_desc_h = max_desc_lines * effect_font.get_linesize()
+                    max_img_h = max(18, max_body_bottom - desc_y - reserved_desc_h - 4)
+                    target_w = 70
+                    target_h = img.get_height() * target_w // max(img.get_width(), 1)
+                    if target_h > max_img_h:
+                        scale = max_img_h / max(target_h, 1)
+                        target_w = max(20, int(target_w * scale))
+                        target_h = max(18, int(target_h * scale))
+                    img_scaled = pygame.transform.scale(img, (target_w, target_h))
                     img_x = cx + card_w // 2 - img_scaled.get_width() // 2
-                    img_y = cy + 30
+                    img_y = desc_y
                     surface.blit(img_scaled, (img_x, img_y))
                     desc_y = img_y + img_scaled.get_height() + 4
                     mod_count = modifiers.get(agenda_type, 0)
@@ -1341,9 +1423,12 @@ class UIRenderer:
                             plus_surf.set_alpha(70)
                         surface.blit(plus_surf, (slot.x, slot.y - 2))
 
-                desc_lines = card.get("description") or self._build_card_description(
-                    agenda_type, modifiers, is_spoils=is_spoils, territories=territories)
-                for j, line in enumerate(desc_lines):
+                max_desc_lines = max(1, (max_body_bottom - desc_y) // effect_font.get_linesize())
+                visible_lines = desc_lines[:max_desc_lines]
+                if len(desc_lines) > max_desc_lines and visible_lines:
+                    overflow_text = " ".join(desc_lines[max_desc_lines - 1:])
+                    visible_lines[-1] = _ellipsize_text(overflow_text, effect_font, card_w - 12)
+                for j, line in enumerate(visible_lines):
                     desc_text = effect_font.render(line, True, (160, 170, 190))
                     surface.blit(desc_text, (cx + card_w // 2 - desc_text.get_width() // 2, desc_y + j * 13))
         else:
