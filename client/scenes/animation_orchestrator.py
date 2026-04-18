@@ -202,6 +202,16 @@ class AnimationOrchestrator:
                 ))
 
         elif etype == "expand_failed":
+            target_hex = event.get("hex")
+            if target_hex:
+                tq, tr = target_hex["q"], target_hex["r"]
+                for nq, nr in hex_neighbors(tq, tr):
+                    if hex_ownership.get((nq, nr)) == faction_id:
+                        self.animation.add_effect_animation(ArrowAnimation(
+                            (nq, nr), (tq, tr), (80, 220, 80),
+                            delay=delay, duration=3.0,
+                            draw_x=True,
+                        ))
             gold = event.get("gold_gained", 0)
             if gold > 0:
                 gx, gy = self._get_gold_display_pos(faction_id, small_font)
@@ -406,6 +416,17 @@ class AnimationOrchestrator:
                     self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT,
                     width=3, head_size=8, unidirectional=True,
                 )
+                if anim.draw_x:
+                    w1x, w1y = axial_to_pixel(anim.from_hex[0], anim.from_hex[1], self.hex_renderer.hex_size)
+                    w2x, w2y = axial_to_pixel(anim.to_hex[0], anim.to_hex[1], self.hex_renderer.hex_size)
+                    s1 = self.input_handler.world_to_screen(w1x, w1y, SCREEN_WIDTH, SCREEN_HEIGHT)
+                    s2 = self.input_handler.world_to_screen(w2x, w2y, SCREEN_WIDTH, SCREEN_HEIGHT)
+                    mx = int((s1[0] + s2[0]) / 2)
+                    my = int((s1[1] + s2[1]) / 2)
+                    x_color = tuple(int(c * alpha / 255) for c in anim.x_color)
+                    size = 9
+                    pygame.draw.line(screen, x_color, (mx - size, my - size), (mx + size, my + size), 4)
+                    pygame.draw.line(screen, x_color, (mx + size, my - size), (mx - size, my + size), 4)
 
             elif isinstance(anim, IdolBeamAnimation):
                 alpha = anim.alpha
@@ -519,6 +540,26 @@ class AnimationOrchestrator:
                     if not already:
                         display_wars.append(wd)
                 anim._wars_revealed = True
+
+    def should_hold_display_wars(self, phase: str) -> bool:
+        """Keep deferred war arrows visible only while war-related agenda animations remain."""
+        war_related_phases = {
+            "winner_choice",
+            "spoils_choice",
+            "spoils_change_choice",
+            "spoils_expand_choice",
+            "expand_choice",
+            "war_support_choice",
+            "battleground_choice",
+        }
+        if phase in war_related_phases:
+            return True
+        for anim in self.animation.get_persistent_agenda_animations():
+            if anim.done:
+                continue
+            if getattr(anim, "agenda_type", "") in {"steal", "expand", "expand_failed", "expand_spoils"}:
+                return True
+        return False
 
     def apply_change_modifier_deltas(self, display_factions: dict):
         """Incrementally update change_modifiers display as change animations become active."""

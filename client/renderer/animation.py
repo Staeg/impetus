@@ -327,11 +327,14 @@ class ArrowAnimation(BaseAnimation):
     """Arrow between two hexes that fades in and out."""
 
     def __init__(self, from_hex: tuple, to_hex: tuple, color: tuple,
-                 delay: float = 0.0, duration: float = 1.5):
+                 delay: float = 0.0, duration: float = 1.5,
+                 draw_x: bool = False, x_color: tuple = (220, 40, 40)):
         super().__init__(delay=delay, duration=duration)
         self.from_hex = from_hex
         self.to_hex = to_hex
         self.color = color
+        self.draw_x = draw_x
+        self.x_color = x_color
         self.screen_space = False  # always world-space
 
 

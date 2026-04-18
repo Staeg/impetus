@@ -4,7 +4,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from shared.constants import AgendaType, AGENDA_RESOLUTION_ORDER
+from shared.constants import AgendaType, AGENDA_RESOLUTION_ORDER, Era
 from shared.models import AgendaCard
 from server.faction import Faction
 from server.hex_map import HexMap
@@ -416,6 +416,59 @@ class TestContestedSpoilsExpand:
         failed = [e for e in events if e["type"] == "expand_failed"]
         assert len(failed) == 2
         assert all(e.get("contested") for e in failed)
+
+    def test_era2_spoils_expand_uses_loser_battleground_hex(self):
+        """Era 2 spoils expand should claim the exact loser-side battleground hex."""
+        factions = make_factions()
+        hm = HexMap()
+        wars = []
+        events = []
+
+        factions["mountain"].gold = 5
+        target_hex = (1, 0)
+        all_spoils = [{
+            "winner": "mountain",
+            "loser": "mesa",
+            "agenda_type": AgendaType.EXPAND,
+            "target_hex": target_hex,
+            "guided": False,
+        }]
+
+        finalize_all_spoils(
+            factions, hm, wars, events, all_spoils,
+            normal_trade_factions=[], era=Era.ERA_2,
+        )
+
+        assert hm.ownership.get(target_hex) == "mountain"
+        assert any(e["type"] == "expand_spoils" and e["hex"] == {"q": 1, "r": 0} for e in events)
+
+    def test_era2_spoils_expand_fails_if_battleground_hex_is_gone(self):
+        """Era 2 spoils expand should fail if the loser no longer owns the battleground hex."""
+        factions = make_factions()
+        hm = HexMap()
+        wars = []
+        events = []
+
+        factions["mountain"].gold = 5
+        target_hex = (1, 0)
+        hm.claim_hex(target_hex, "sand")
+        all_spoils = [{
+            "winner": "mountain",
+            "loser": "mesa",
+            "agenda_type": AgendaType.EXPAND,
+            "target_hex": target_hex,
+            "guided": False,
+        }]
+
+        finalize_all_spoils(
+            factions, hm, wars, events, all_spoils,
+            normal_trade_factions=[], era=Era.ERA_2,
+        )
+
+        assert hm.ownership.get(target_hex) == "sand"
+        failed = [e for e in events if e["type"] == "expand_failed"]
+        assert len(failed) == 1
+        assert failed[0]["faction"] == "mountain"
 
 
 class TestMultipleSpoilsPerFaction:

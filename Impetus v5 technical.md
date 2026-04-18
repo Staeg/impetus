@@ -1,67 +1,79 @@
 ## Impetus v5 technical
 
-* Setup (triggered only once at the start of the game)
-  * A hexagonal map of side length 5 is generated
-  * The map itself is made of hexes
-  * The middle hex of the map is empty
-  * All the hexes surrounding the middle hex are each controlled by a different Faction (starting positions are randomized each game)
-  * All the other hexes start empty
-  * Empty hexes are considered Neutral
-  * Each Faction begins with habitat-based Change modifiers:
-    * Mountain: Trade ×1, Steal ×1
-    * Mesa: Trade ×2
-    * Sand: Steal ×1, Expand ×1
-    * Plains: Expand ×2
-    * River: Trade ×1, Expand ×1
-    * Jungle: Steal ×2
-  * A single setup turn is played where each Faction draws and resolves a random Agenda card (players have no input during this turn)
-* Vagrant Phase
-  * Spirits choose their actions: if both Guidance and Idol placement are available, they must do both; otherwise they do whichever is available
-    * A Spirit cannot Guide a Faction that Worships them
-    * A Spirit can only place one Idol per vagrant stint (resets when they Guide or become Vagrant again)
-    * Idol placement is on any neutral hex anywhere on the map — there is no adjacency restriction
-  * After all Spirits have confirmed their actions, reveal them
-  * All Idols are placed
-  * All Factions with only 1 Spirit trying to Guide them become Guided by that Spirit and that Spirit's Influence is set to 3
-    * Worship changes are checked
-  * All Factions with \>1 Spirit trying to Guide them remain not Guided, and the Spirits remain Vagrant. Each contesting Spirit has that Faction added to their guidance cooldown set — they cannot target it in the next Vagrant phase. Cooldowns are cleared at the start of each Vagrant phase.
-* Agenda Phase
-  * All Spirits currently Guiding a Faction draw 1 \+ \[their Influence\] Agenda cards from their Faction's pool (sampled with replacement; duplicates possible) and choose 1 of them
-  * All choices are revealed and all non-Guided Factions draw a random Agenda card from their pool
-  * All Spirits currently Guiding a Faction lose 1 Influence
-  * Before resolution begins, interactive sub-choices are collected from guided spirits:
-    * Guided spirits playing **Change** each receive a drawn set of modifier cards and pick one (`change_choice` sub-phase). All picks are collected before any resolution runs.
-    * Guided spirits playing **Expand** who can afford the cost and have at least one reachable neutral hex each receive the list of valid hexes and pick one (`expand_choice` sub-phase). All picks are collected before any resolution runs.
-  * Agendas are resolved in order (but each step is simultaneous):
-    * Trade: \+1 gold, \+1 gold for every other Faction playing Trade this turn, \+1 gold for every Faction playing Expand this turn. \+1 Regard with each other Faction playing Trade (not Expand) this turn.
-    * Steal: \-1 Regard with and \-1 gold to all neighbors. \+1 gold to this Faction for each gold lost by neighbors. Then a War is declared with any neighboring Factions who have \-2 Regard or less with this Faction.
-    * Expand: spend gold equal to the number of this Faction's territories to claim a reachable neutral hex; if none are available or it lacks gold, \+1 gold instead.
-      * If the Faction is Guided, its Spirit chooses which hex to claim (interactive `expand_choice` sub-phase, resolved before non-Guided Expands but simultaneously with other Guided Expands). If two Spirits choose the same hex, both fail (contested — each receives the expand\_failed gold bonus). Unguided Factions target a random reachable hex (preferring Idol hexes).
-    * Change: draw a card from the Change modifier deck, then shuffle it back in.  
-      * If guided, the Spirit draws additional cards equal to their current Influence and chooses 1 among them.
-  * Any Spirits with 0 Influence currently Guiding a Faction are ejected; they replace one Agenda card in that Faction's Agenda pool with another of their choice (pool size stays the same)
-    * Worship changes are checked
-* War phase
-  * Each Faction's Power is snapshotted from its territory count at the start of the War Phase; all wars use this snapshot
-  * Any staged wars are resolved simultaneously \- each combatant rolls a 6-sided die and adds their snapshotted Power
-  * Gold changes from all wars (winner gains, loser/tie losses) are applied simultaneously after all wars are resolved
-  * Whoever is victorious draws a Spoils of War Agenda card from their Faction's pool. If the winning Faction is guided by a Spirit, the Spirit draws 1 \+ their Influence Spoils cards and chooses 1 among them.
-  * All Spoils of War are collected into a batch and resolved simultaneously in standard agenda order (Trade → Steal → Expand → Change)
-    * Spoils Expand claims a loser territory instead of a neutral hex but costs gold equal to territory count (same as normal Expand, including modifiers). If a Faction cannot afford it or no valid target exists, they receive the expand\_failed gold bonus instead. If two Spoils Expands target the same hex, the hex is contested and neither Faction gets it (both receive the gold consolation).
-    * Spoils Trade also benefits from Factions that played Expand normally this turn (gold bonus only, no regard bonus).
-  * Any undeclared-stage Wars become staged and a Battleground is selected
-    * **Battleground Selection**: `hex_map.get_border_hex_pairs(faction_a, faction_b)` supplies valid adjacent hex pairs. If neither faction is guided, a pair is chosen at random (existing behaviour). If exactly one faction is guided, its spirit receives a `battleground_choice` PHASE\_START with `mode: "full"` and the full pairs list; they select by `pair_index`. If both are guided, each receives `mode: "enemy_side"` with the list of the opposing faction's unique border hexes; they each select one hex, and if the two chosen hexes form a valid adjacent pair the server uses it, otherwise falls back to random. The `SUBMIT_BATTLEGROUND_CHOICE` message carries `choices: [{war_id, pair_index}]` (full mode) or `choices: [{war_id, hex: {q,r}}]` (enemy\_side mode). Spoils resolution follows after all battleground choices are finalized.
-* Scoring
-  * For each Faction that has any Spirit's Worship:
-    * That Spirit gains 5 Victory Points for all Wars won this turn per Battle Idol in that Faction’s territory
-    * That Spirit gains 2 Victory Points for each gold gained this turn per Affluence Idol in that Faction’s territory
-    * That Spirit gains 5 Victory Points for each new Territory gained this turn per Sprawl Idol in that Faction’s territory
-  * If any Spirit has 100 Victory Points, the game ends.  
-    * If there is a tie for most Victory Points at this moment, the victory is shared.  
-* Cleanup
-  * The Agenda pool is static \- cards are sampled with replacement and never consumed, so no reshuffling is needed.
+This file tracks the current cross-era gameplay implementation. Era 1 and Era 2 are implemented. Era 3 is still planned for the future and does not exist yet in runtime code.
 
-At the end of a turn in which a Faction loses its last Territory, it loses all of its Gold and gains a new hex anywhere on the game board. If the Faction is Guided, its Spirit chooses which neutral hex it reappears on (`respawn_choice` sub-phase, resolved after War spoils). If the Faction is unguided, the server picks a random neutral hex. The Faction continues to participate in all phases normally from its new position.
+### Setup
 
-Each step is resolved simultaneously. For example, if two neighboring Factions play Steal, they do not take any gold from each other even if one Faction has 0 gold and the other has 1, but they get \-2 Regard with each other.
-Similarly, if two Wars are resolved at the same time, their Spoils of War are batched and resolved simultaneously in the standard agenda order. If two Factions both win a War against the same Faction and draw Expand to conquer the same hex, the hex is contested and neither Faction gets it.
+- A hexagonal map of side length 5 is generated
+- The middle hex is empty
+- The six surrounding hexes are starting Faction territories
+- Other hexes start neutral
+- Factions begin with habitat-based Change modifiers
+- A single automated setup turn is played before players take control
+
+### Vagrant Phase
+
+- Spirits choose Guidance and Idol placement when both are available
+- A Spirit cannot guide a Faction that already Worships them
+- A Spirit can place only one Idol per vagrant stint
+- Idol placement is on any neutral hex with no adjacency restriction
+- If multiple Spirits target the same Faction, contests resolve by:
+  - unique habitat-affinity match
+  - otherwise unique race-affinity match
+  - otherwise failure with one-turn cooldown
+
+### Agenda Phase
+
+- Guided Spirits draw `1 + influence` Agendas in Era 1 and pick one
+- Unguided Factions draw a random Agenda
+- Guided Change and Expand sub-choices are collected before resolution
+- Resolution order is `Trade -> Steal -> Expand -> Change`
+- Expand failures grant the modified failed-Expand gold bonus
+
+### Worship
+
+- Worship can only be stolen by the Spirit currently guiding that Faction
+- The game checks for a Worship shift:
+  - when Guidance begins
+  - after every territory ownership change affecting that Faction
+  - immediately before Guidance ends
+- If the guiding Spirit has at least as many own Idols in that Faction's territory as the current Worship holder, Worship shifts to the guiding Spirit
+- On a tie, the guiding Spirit wins
+
+### Era 1 wars
+
+- Wars declared by Steal resolve in the same turn
+- If exactly one side is guided, that Spirit chooses the winner
+- If both or neither side is guided, the war resolves by d6 plus snapshotted Power
+- No gold changes are applied for winning or losing a war
+
+### Era 2 wars
+
+- Wars are declared during Steal, staged the same turn, and resolved on the following turn
+- If exactly one side is guided, that Spirit chooses the Battleground from the full set of border pairs
+- If both sides are guided, or neither side is guided, the Battleground is random
+- Each guiding Spirit chooses which side receives their extra support dice
+- `Battle Blessing` upgrades that support from 1 extra die to 3 extra dice
+
+### Spoils of War
+
+- Winners draw a Spoils Agenda from their pool
+- Guided Spirits with multiple draws choose their Spoils card
+- Era 1 guided Spoils Expand can require a territory choice
+- Era 2 Spoils Expand uses the loser's Battleground hex
+- If that exact Battleground hex is gone by the time Spoils resolves, the Expand fails and grants the modified failed-Expand gold bonus
+- Spoils resolve simultaneously in standard agenda order
+
+### Scoring
+
+- Battle Idol: 5 VP per Idol per War won
+- Affluence Idol: 2 VP per Idol per gold gained
+- Sprawl Idol: 5 VP per Idol per territory gained
+- Era 2 splits Idol value between Worship holder and Idol owner
+- Era 2 halves Affluence Idol output
+
+### Era progression
+
+- Reaching the Era 1 threshold transitions into Era 2 if Era 2 is enabled
+- The new Era 2 target becomes `highest_vp + (base_vp_target * 2)`
+- If the match started from simulated Era 1, VP resets to 0 and the Era 2 target becomes `base_vp_target * 2`

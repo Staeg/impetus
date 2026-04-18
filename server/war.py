@@ -25,13 +25,19 @@ class War:
         self.resolve_turn = resolve_turn
         self.is_staged = True
 
-    def resolve(self, power_a: int, power_b: int) -> dict:
-        """Resolve this war using a die roll + territory count.
+    def resolve(self, power_a: int, power_b: int,
+                bonus_dice_a: int = 0, bonus_dice_b: int = 0) -> dict:
+        """Resolve this war using die rolls plus territory count.
 
         Returns a result dict. Does NOT apply gold changes (none in Era 1).
         """
-        roll_a = random.randint(1, 6)
-        roll_b = random.randint(1, 6)
+        base_roll_a = random.randint(1, 6)
+        base_roll_b = random.randint(1, 6)
+        support_rolls_a = [random.randint(1, 6) for _ in range(max(0, bonus_dice_a))]
+        support_rolls_b = [random.randint(1, 6) for _ in range(max(0, bonus_dice_b))]
+
+        roll_a = base_roll_a + sum(support_rolls_a)
+        roll_b = base_roll_b + sum(support_rolls_b)
 
         total_a = roll_a + power_a
         total_b = roll_b + power_b
@@ -47,6 +53,10 @@ class War:
             "is_staged": self.is_staged,
             "roll_a": roll_a,
             "roll_b": roll_b,
+            "base_roll_a": base_roll_a,
+            "base_roll_b": base_roll_b,
+            "support_rolls_a": support_rolls_a,
+            "support_rolls_b": support_rolls_b,
             "power_a": power_a,
             "power_b": power_b,
             "total_a": total_a,

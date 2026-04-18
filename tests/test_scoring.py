@@ -147,3 +147,40 @@ class TestScoring:
 
         assert len(events) == 1
         assert events[0]["vp_gained"] == 5.0
+
+    def test_multiple_devotions_stack_with_usurper(self):
+        hm, factions, spirits = self._setup()
+        spirit = spirits["s1"]
+        faction = factions["river"]
+        faction.worship_spirit = "s1"
+        faction.gold_gained_this_turn = 18
+
+        river_idol = Idol(IdolType.AFFLUENCE, HexCoord(-1, 0), "s1")
+        hm.place_idol(river_idol)
+        spirit.idols.append(river_idol)
+        spirit.adaptation_effects = ["River Devotion", "Sand Devotion", "Usurper"]
+
+        events = calculate_scoring(factions, spirits, hm, era=Era.ERA_2)
+
+        assert len(events) == 1
+        assert events[0]["vp_gained"] == 27.0
+        assert any("* 0.5" in entry["line"] for entry in events[0]["contributions"])
+        assert any("* 3" in entry["line"] for entry in events[0]["contributions"])
+
+    def test_non_matching_devotions_both_halve(self):
+        hm, factions, spirits = self._setup()
+        spirit = spirits["s1"]
+        faction = factions["jungle"]
+        faction.worship_spirit = "s1"
+        faction.gold_gained_this_turn = 20
+
+        for _ in range(2):
+            idol = Idol(IdolType.AFFLUENCE, HexCoord(0, -1), "s1")
+            hm.place_idol(idol)
+            spirit.idols.append(idol)
+        spirit.adaptation_effects = ["River Devotion", "Sand Devotion", "Usurper"]
+
+        events = calculate_scoring(factions, spirits, hm, era=Era.ERA_2)
+
+        assert len(events) == 1
+        assert events[0]["vp_gained"] == 10.0

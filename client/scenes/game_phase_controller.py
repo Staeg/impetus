@@ -75,6 +75,16 @@ class GamePhaseController:
                     scene.tutorial.notify_action("ejection_submitted", {})
             return
 
+        if scene.phase == SubPhase.RESTRAIN_CHOICE:
+            if 0 <= scene.selected_restrain_index < len(scene.change_cards):
+                scene.app.network.send(C2S.SUBMIT_RESTRAIN_CHOICE, {
+                    "agenda_type": scene.change_cards[scene.selected_restrain_index],
+                })
+                scene.change_cards = []
+                scene.selected_restrain_index = -1
+                scene.has_submitted = True
+            return
+
         if scene.phase == SubPhase.SPOILS_CHOICE:
             if all(e.selected >= 0 for e in scene.spoils_entries):
                 scene.app.network.send(
@@ -201,7 +211,8 @@ class GamePhaseController:
     def _setup_restrain_choice_ui(self) -> None:
         scene = self.scene
         scene.change_cards = scene.phase_options.get("cards") or []
-        scene.submit_button = None
+        scene.selected_restrain_index = -1
+        scene.submit_button = Button(pygame.Rect(20, SCREEN_HEIGHT - 60, 156, 48), "Confirm", (60, 130, 60))
 
     def _setup_shaping_choice_ui(self) -> None:
         scene = self.scene

@@ -57,27 +57,22 @@ def get_ai_vagrant_action(game_state, spirit_id, excluded_factions=None) -> dict
     can_place = can_place and bool(idol_hexes)
 
     def choose_guide_target(candidates):
-        # Priority 1: factions where guiding would grant worship
-        worship_candidates = [
+        spirit = game_state.spirits.get(spirit_id)
+        usurp_candidates = [
             fid for fid in candidates
-            if _would_gain_worship(game_state, spirit_id, fid)
+            if game_state.factions[fid].worship_spirit is not None
+            and game_state.factions[fid].worship_spirit != spirit_id
+            and _would_gain_worship(game_state, spirit_id, fid)
         ]
-        pool = worship_candidates if worship_candidates else candidates
-        if worship_candidates:
-            # Priority 2: most total idols in territory
-            idol_counts = {
-                fid: len(game_state.hex_map.get_idols_in_territories(fid))
-                for fid in pool
-            }
-            max_idols = max(idol_counts.values())
-            pool = [fid for fid in pool if idol_counts[fid] == max_idols]
-            # Priority 3: factions that already worship another spirit
-            already_worshipped = [
-                fid for fid in pool
-                if game_state.factions[fid].worship_spirit is not None
-            ]
-            if already_worshipped:
-                pool = already_worshipped
+        pool = usurp_candidates if usurp_candidates else candidates
+        affinity_matches = []
+        if spirit:
+            for fid in pool:
+                faction = game_state.factions[fid]
+                if spirit.habitat_affinity == fid or spirit.race_affinity == faction.race:
+                    affinity_matches.append(fid)
+        if affinity_matches:
+            pool = affinity_matches
         return random.choice(pool)
 
     can_swell = options.get("can_swell", False)

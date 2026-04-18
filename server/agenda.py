@@ -43,7 +43,8 @@ def resolve_agendas(factions: dict, hex_map, agenda_choices: dict[str, AgendaTyp
                     guided_expand_choices: dict[str, tuple] = None,
                     normal_expand_factions: list[str] = None,
                     era: Era = Era.ERA_1,
-                    current_turn: int = 0):
+                    current_turn: int = 0,
+                    territory_change_callback=None):
     """Resolve all agenda choices in the correct order.
 
     Args:
@@ -95,7 +96,8 @@ def resolve_agendas(factions: dict, hex_map, agenda_choices: dict[str, AgendaTyp
                           expand_factions=all_expand_factions)
         elif agenda_type == AgendaType.EXPAND:
             _resolve_expand(factions, hex_map, playing_factions, events, is_spoils,
-                           spoils_conquests, type_counts, guided_expand_choices)
+                           spoils_conquests, type_counts, guided_expand_choices,
+                           territory_change_callback=territory_change_callback)
         elif agenda_type == AgendaType.CHANGE:
             _resolve_change(factions, hex_map, playing_factions, events, is_spoils, type_counts)
 
@@ -315,7 +317,8 @@ def _resolve_trade(factions, hex_map, playing_factions, events, is_spoils,
 
 def _resolve_expand(factions, hex_map, playing_factions, events, is_spoils,
                     spoils_conquests: dict = None, faction_counts=None,
-                    guided_expand_choices: dict = None):
+                    guided_expand_choices: dict = None,
+                    territory_change_callback=None):
     """Expand: spend gold equal to territory count to claim a neutral hex.
     If can't afford or no hexes available, +1 gold instead.
 
@@ -345,9 +348,12 @@ def _resolve_expand(factions, hex_map, playing_factions, events, is_spoils,
                 if not isinstance(targets, list):
                     targets = [targets]
                 for target in targets:
-                    if faction.gold >= cost:
+                    old_owner = hex_map.ownership.get(target)
+                    if faction.gold >= cost and old_owner is not None and old_owner != fid:
                         faction.gold -= cost
                         hex_map.claim_hex(target, fid)
+                        if territory_change_callback:
+                            territory_change_callback(old_owner, fid, target, events)
                         faction.territories_gained_this_turn += 1
                         events.append({
                             "type": "expand_spoils",
@@ -362,13 +368,17 @@ def _resolve_expand(factions, hex_map, playing_factions, events, is_spoils,
                             "faction": fid,
                             "gold_gained": expand_fail_bonus,
                             "is_spoils": True,
+                            "hex": {"q": target[0], "r": target[1]} if target else None,
                         })
                 continue
 
             target = hex_map.get_random_reachable_neutral(fid)
             if target is not None and faction.gold >= cost:
                 faction.gold -= cost
+                old_owner = hex_map.ownership.get(target)
                 hex_map.claim_hex(target, fid)
+                if territory_change_callback:
+                    territory_change_callback(old_owner, fid, target, events)
                 faction.territories_gained_this_turn += 1
                 events.append({
                     "type": "expand",
@@ -383,6 +393,7 @@ def _resolve_expand(factions, hex_map, playing_factions, events, is_spoils,
                     "faction": fid,
                     "gold_gained": expand_fail_bonus,
                     "is_spoils": True,
+                    "hex": {"q": target[0], "r": target[1]} if target else None,
                 })
         return
 
@@ -432,7 +443,10 @@ def _resolve_expand(factions, hex_map, playing_factions, events, is_spoils,
 
         if target is not None and faction.gold >= cost and fid not in contested_fids:
             faction.gold -= cost
+            old_owner = hex_map.ownership.get(target)
             hex_map.claim_hex(target, fid)
+            if territory_change_callback:
+                territory_change_callback(old_owner, fid, target, events)
             faction.territories_gained_this_turn += 1
             events.append({
                 "type": "expand",
@@ -446,6 +460,7 @@ def _resolve_expand(factions, hex_map, playing_factions, events, is_spoils,
                 "type": "expand_failed",
                 "faction": fid,
                 "gold_gained": expand_fail_bonus,
+                "hex": {"q": target[0], "r": target[1]} if target else None,
             }
             if fid in contested_fids:
                 evt["contested"] = True
@@ -490,8 +505,24 @@ def _pick_enemy_territory(hex_map, winner: str, loser: str):
     return random.choice(best)
 
 
+def _get_battleground_target(result: dict) -> tuple[int, int] | None:
+    """Return the loser-side battleground hex from a resolved Era 2 war."""
+    winner = result.get("winner")
+    loser = result.get("loser")
+    if not winner or not loser:
+        return None
+    if result.get("faction_a") == loser and result.get("battleground_a"):
+        hex_data = result["battleground_a"]
+        return (hex_data["q"], hex_data["r"])
+    if result.get("faction_b") == loser and result.get("battleground_b"):
+        hex_data = result["battleground_b"]
+        return (hex_data["q"], hex_data["r"])
+    return None
+
+
 def resolve_spoils(factions, hex_map, war_results, wars, events,
-                   normal_trade_factions: list[str], spirits: dict = None):
+                   normal_trade_factions: list[str], spirits: dict = None,
+                   era: Era = Era.ERA_1):
     """Collect spoils draws for all war winners.
 
     Guided spirits with multiple cards get a choice (returned in spoils_pending).
@@ -518,6 +549,7 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
             continue
         loser = result.get("loser")
         faction = factions[winner]
+        battleground_target = _get_battleground_target(result) if era == Era.ERA_2 else None
 
         if not faction.agenda_pool:
             events.append({"type": "spoils_wasted", "faction": winner})
@@ -543,7 +575,7 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
                     "winner": winner,
                     "loser": loser,
                     "agenda_type": spoils_type,
-                    "target_hex": None,
+                    "target_hex": battleground_target if spoils_type == AgendaType.EXPAND else None,
                     "guided": True,
                 })
                 events.append({
@@ -558,6 +590,7 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
                 "cards": cards,
                 "winner": winner,
                 "loser": loser,
+                "target_hex": battleground_target,
             })
             events.append({
                 "type": "spoils_choice",
@@ -576,7 +609,7 @@ def resolve_spoils(factions, hex_map, war_results, wars, events,
             "winner": winner,
             "loser": loser,
             "agenda_type": spoils_type,
-            "target_hex": None,
+            "target_hex": battleground_target if spoils_type == AgendaType.EXPAND else None,
             "guided": False,
         })
         events.append({
@@ -593,7 +626,8 @@ def finalize_all_spoils(factions, hex_map, wars, events,
                         normal_trade_factions: list[str],
                         normal_expand_factions: list[str] = None,
                         era: Era = Era.ERA_1,
-                        current_turn: int = 0):
+                        current_turn: int = 0,
+                        territory_change_callback=None):
     """Resolve all collected spoils agendas.
 
     all_spoils: list of {winner, loser, agenda_type, target_hex, guided} dicts.
@@ -626,6 +660,8 @@ def finalize_all_spoils(factions, hex_map, wars, events,
     # Assign targets to guided entries that don't have one yet
     for entry in guided_expand:
         if entry.get("target_hex") is None:
+            if era == Era.ERA_2:
+                continue
             entry["target_hex"] = _pick_enemy_territory(hex_map, entry["winner"], entry["loser"])
 
     # Snapshot territory counts per unique winner before any expand resolves.
@@ -669,14 +705,17 @@ def finalize_all_spoils(factions, hex_map, wars, events,
     for entry, (target, cost, expand_fail_bonus) in zip(guided_expand, guided_expand_costs):
         winner = entry["winner"]
         faction = factions[winner]
+        loser = entry["loser"]
         affordable = winner_gold_available.get(winner, 0) >= cost
-        if target is None or not affordable:
+        valid_target = target is not None and hex_map.ownership.get(target) == loser
+        if not valid_target or not affordable:
             faction.add_gold(expand_fail_bonus)
             events.append({
                 "type": "expand_failed",
                 "faction": winner,
                 "gold_gained": expand_fail_bonus,
                 "is_spoils": True,
+                "hex": {"q": target[0], "r": target[1]} if target else None,
             })
         elif (winner, target) in contested_pairs:
             faction.add_gold(expand_fail_bonus)
@@ -686,11 +725,15 @@ def finalize_all_spoils(factions, hex_map, wars, events,
                 "gold_gained": expand_fail_bonus,
                 "is_spoils": True,
                 "contested": True,
+                "hex": {"q": target[0], "r": target[1]} if target else None,
             })
         else:
             faction.gold -= cost
             winner_gold_available[winner] = winner_gold_available.get(winner, 0) - cost
+            old_owner = hex_map.ownership.get(target)
             hex_map.claim_hex(target, winner)
+            if territory_change_callback:
+                territory_change_callback(old_owner, winner, target, events)
             faction.territories_gained_this_turn += 1
             events.append({
                 "type": "expand_spoils",
@@ -709,11 +752,17 @@ def finalize_all_spoils(factions, hex_map, wars, events,
         expand_fail_bonus = 1 + expand_discount
         territory_count = len(hex_map.get_faction_territories(winner))
         cost = max(0, territory_count - expand_discount)
-        # Pick best adjacent loser territory still owned by loser
-        target = _pick_enemy_territory(hex_map, winner, loser)
-        if target is not None and faction.gold >= cost:
+        if era == Era.ERA_2:
+            target = entry.get("target_hex")
+        else:
+            # Pick best adjacent loser territory still owned by loser
+            target = _pick_enemy_territory(hex_map, winner, loser)
+        if target is not None and hex_map.ownership.get(target) == loser and faction.gold >= cost:
             faction.gold -= cost
+            old_owner = hex_map.ownership.get(target)
             hex_map.claim_hex(target, winner)
+            if territory_change_callback:
+                territory_change_callback(old_owner, winner, target, events)
             faction.territories_gained_this_turn += 1
             events.append({
                 "type": "expand_spoils",
@@ -728,6 +777,7 @@ def finalize_all_spoils(factions, hex_map, wars, events,
                 "faction": winner,
                 "gold_gained": expand_fail_bonus,
                 "is_spoils": True,
+                "hex": {"q": target[0], "r": target[1]} if target else None,
             })
 
     # Non-Expand: resolve in standard agenda order via resolve_agendas
@@ -753,4 +803,5 @@ def finalize_all_spoils(factions, hex_map, wars, events,
                        faction_counts=type_counts,
                        normal_expand_factions=normal_expand_factions,
                        era=era,
-                       current_turn=current_turn)
+                       current_turn=current_turn,
+                       territory_change_callback=territory_change_callback)

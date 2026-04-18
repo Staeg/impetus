@@ -1,19 +1,17 @@
-# Era 3 — Midnight
+# Era 3 - Midnight
 
-> **Placeholder.** Era 3 rules have not yet been designed.
+> **Planned, not implemented yet.** Era 3 does not exist in the current playable game.
 
-Era 3 begins once any player reaches the Era 2 VP threshold. VP totals carry over. The first player to reach Era 3's VP threshold wins the game.
-
----
+Era 3 is the intended final Era of the long-term design. It will begin after Era 2 once its transition rules are defined. VP handling, mechanics, and win conditions are still future work.
 
 ## Changes from Era 2
 
-*TBD — mechanisms to add and remove will be documented here.*
+TBD
 
 ## Turn structure
 
-*TBD*
+TBD
 
 ## Technical reference
 
-*TBD*
+See [Era 3 Technical.md](Era%203%20Technical.md) for the implementation placeholder.

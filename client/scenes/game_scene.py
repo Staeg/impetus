@@ -24,7 +24,7 @@ from client.faction_names import faction_full_name, update_faction_races
 from client.renderer.hex_renderer import HexRenderer
 from client.renderer.ui_renderer import (
     UIRenderer, Button, build_agenda_tooltip, build_modifier_tooltip,
-    draw_dotted_underline, _draw_text_in_rect, _wrap_text, render_rich_lines,
+    draw_dotted_underline, _draw_text_in_rect, _wrap_text, render_rich_lines, render_event_log_line,
 )
 from client.renderer.font_cache import get_font
 import client.theme as theme
@@ -249,9 +249,12 @@ class GameScene:
         self.has_submitted: bool = False
         self.spectator_mode: bool = False
         self.event_log: list[str] = []
+        self.event_log_meta: list[dict] = []
         self.event_log_scroll_offset: int = 0
         self.event_log_h_scroll_offset: int = 0
         self.event_log_enlarged: bool = False
+        self._event_log_cycle_log_idx: int | None = None
+        self._event_log_cycle_target_index: int = 0
         # Per-spirit influence values from last state update (for fade animation detection)
         self._influence_prev: dict[str, int] = {}
 
@@ -280,6 +283,7 @@ class GameScene:
         # Agenda state
         self.agenda_hand: list[dict] = []
         self.selected_agenda_index: int = -1
+        self.selected_restrain_index: int = -1
 
         # Change/ejection/spoils state
         self.change_cards: list[str] = []
@@ -391,6 +395,7 @@ class GameScene:
         self.hovered_vp_spirit_id: str | None = None
         self.hovered_text_faction_id: str | None = None
         self.hovered_text_faction_rect: pygame.Rect | None = None
+        self.hovered_event_log_tooltip: tuple[str, pygame.Rect] | None = None
 
         # Spirit panel state (which spirit's panel to show, or None)
         self.spirit_panel_spirit_id: str | None = None
@@ -408,6 +413,7 @@ class GameScene:
         self._battleground_arrow_rects: list[dict] = []
         # Ejection title keyword hover state
         self.ejection_keyword_rects: dict[str, list[pygame.Rect]] = {}
+        self.ejection_faction_rects: list[pygame.Rect] = []
         self.hovered_ejection_keyword: str | None = None
 
         # Change tracking for faction panel
@@ -718,6 +724,9 @@ class GameScene:
                     return
                 if self.tutorial.is_hard_blocking():
                     return  # block all game input
+            clicked_log_idx = self._get_clicked_event_log_index(click_pos)
+            if clicked_log_idx != self._event_log_cycle_log_idx:
+                self._reset_event_log_cycle()
             # Event log expand/collapse toggle (always accessible)
             if (self.ui_renderer.event_log_expand_rect and
                     self.ui_renderer.event_log_expand_rect.collidepoint(click_pos)):
@@ -782,9 +791,7 @@ class GameScene:
                             if self.phase == SubPhase.CHANGE_CHOICE:
                                 self._submit_card_choice(i, C2S.SUBMIT_CHANGE_CHOICE, "change_cards")
                             elif self.phase == SubPhase.RESTRAIN_CHOICE:
-                                self.app.network.send(C2S.SUBMIT_RESTRAIN_CHOICE, {"agenda_type": self.change_cards[i]})
-                                self.change_cards = []
-                                self.has_submitted = True
+                                self.selected_restrain_index = i
                             elif self.phase == SubPhase.SHAPING_CHOICE:
                                 self.app.network.send(C2S.SUBMIT_SHAPING_CHOICE, {"card_name": self.change_cards[i]})
                                 self.change_cards = []
@@ -895,6 +902,10 @@ class GameScene:
                         self.spirit_panel_spirit_id = sid
                     return
 
+            if any(rect.collidepoint(event.pos) for rect in self.ejection_faction_rects):
+                self._select_faction_from_text(self.ejection_faction)
+                return
+
             for rects in (self._spirit_panel_rects, self._persistent_spirit_panel_rects):
                 guidance_rect = rects.get("guidance")
                 if guidance_rect and guidance_rect.collidepoint(event.pos):
@@ -912,23 +923,9 @@ class GameScene:
                 if rect.collidepoint(event.pos):
                     self._select_faction_from_text(fid)
                     return
-            for fid, rects in self.ui_renderer.event_log_faction_rects.items():
-                if any(rect.collidepoint(event.pos) for rect in rects):
-                    for line_rect, log_idx in self.ui_renderer.event_log_line_rects:
-                        if line_rect.collidepoint(event.pos):
-                            self.highlighted_log_index = log_idx
-                            break
-                    self._select_faction_from_text(fid)
-                    return
-            for rect, log_idx in self.ui_renderer.event_log_line_rects:
-                if rect.collidepoint(event.pos):
-                    self.highlighted_log_index = None if self.highlighted_log_index == log_idx else log_idx
-                    text = self.event_log[log_idx] if 0 <= log_idx < len(self.event_log) else ""
-                    for faction_id in FACTION_NAMES:
-                        if faction_full_name(faction_id) in text:
-                            self._select_faction_from_text(faction_id)
-                            break
-                    return
+            if clicked_log_idx is not None:
+                self._handle_event_log_click(clicked_log_idx)
+                return
 
             # Click on spirit panel itself should not close it
             sp_rect = self._spirit_panel_rects.get("panel")
@@ -1149,9 +1146,9 @@ class GameScene:
             return
         if self.phase == Phase.VAGRANT_PHASE.value and self.hex_ownership.get(hex_coord) is None:
             if self.current_era == "era_1":
-                self._clear_panel_selection()
+                self._clear_focus_selection()
                 return
-            self._clear_panel_selection()
+            self._clear_focus_selection()
             # Neutral hex during vagrant phase: select for idol placement
             my_id = self.app.my_spirit_id
             q, r = hex_coord
@@ -1187,6 +1184,7 @@ class GameScene:
         self.selected_idol_type = None
         self.panel_faction = None
         self.selected_agenda_index = -1
+        self.selected_restrain_index = -1
         self.selected_ejection_remove_type = None
         self.selected_ejection_add_type = None
         self.ejection_pool = []
@@ -1206,6 +1204,7 @@ class GameScene:
         self.guidance_summary_keyword_rects = {}
         self.hovered_guidance_summary_keyword = None
         self.ejection_keyword_rects = {}
+        self.ejection_faction_rects = []
         self.hovered_ejection_keyword = None
         self.winner_choice_wars = []
         self.winner_selections = {}
@@ -1241,9 +1240,13 @@ class GameScene:
         self.game_over_data = None
         self._ingame_menu_open = False
         self._ingame_menu_confirm_exit = False
+        self.event_log = []
+        self.event_log_meta = []
+        self._reset_event_log_cycle()
         self._update_state_from_snapshot(payload)
         self.change_tracker.snapshot_and_reset(self.factions, self.spirits)
         self.event_log.append("Game started.")
+        self.event_log_meta.append({"factions": [], "spans": []})
         self.spectator_mode = self.app.my_spirit_id not in self.spirits
         # Activate tutorial overlay in tutorial mode
         if self.app.tutorial_mode and not self.spectator_mode:
@@ -1462,6 +1465,7 @@ class GameScene:
 
     def _handle_error(self, payload):
         self.event_log.append(f"Error: {payload.get('message', '?')}")
+        self.event_log_meta.append({"factions": [], "spans": []})
 
     def _setup_change_choice_ui(self):
         self.phase_controller._setup_change_choice_ui()
@@ -2141,10 +2145,15 @@ class GameScene:
     def _update_clickable_faction_hover(self, mouse_pos):
         self.hovered_text_faction_id = None
         self.hovered_text_faction_rect = None
+        self.hovered_event_log_tooltip = None
         for fid, rect in self.ribbon_faction_rects.items():
             if rect.collidepoint(mouse_pos):
                 self.hovered_text_faction_id = fid
                 self.hovered_text_faction_rect = rect
+                return
+        for tooltip, rect in self.ui_renderer.event_log_tooltip_rects:
+            if rect.collidepoint(mouse_pos):
+                self.hovered_event_log_tooltip = (tooltip, rect)
                 return
         for rect_map in (
             self.ui_renderer.panel_war_opponent_rects,
@@ -2156,6 +2165,11 @@ class GameScene:
                     self.hovered_text_faction_id = fid
                     self.hovered_text_faction_rect = rect
                     return
+        for rect in self.ejection_faction_rects:
+            if rect.collidepoint(mouse_pos):
+                self.hovered_text_faction_id = self.ejection_faction
+                self.hovered_text_faction_rect = rect
+                return
         for fid, rects in self.ui_renderer.event_log_faction_rects.items():
             for rect in rects:
                 if rect.collidepoint(mouse_pos):
@@ -2341,8 +2355,14 @@ class GameScene:
 
     def _log_event(self, event: dict):
         from client.scenes.event_logger import log_event
-        etype = log_event(event, self.event_log, self.spirits,
-                          self.app.my_spirit_id, self.faction_agendas_this_turn)
+        etype = log_event(
+            event,
+            self.event_log,
+            self.event_log_meta,
+            self.spirits,
+            self.app.my_spirit_id,
+            self.faction_agendas_this_turn,
+        )
         # Record change for faction panel delta display
         self.change_tracker.process_event(
             event, len(self.event_log) - 1, self.factions, self.spirits)
@@ -2419,6 +2439,40 @@ class GameScene:
 
         return f"{subject} {verb} {agenda}{guided_part}."
 
+    def _build_consolidated_agenda_meta(self, play_info: dict, resolution_event: dict) -> dict:
+        factions: list[str] = []
+        faction_id = play_info.get("faction")
+        if faction_id:
+            factions.append(faction_id)
+        for field in ("co_traders", "neighbors"):
+            for fid in resolution_event.get(field, []):
+                if fid and fid not in factions:
+                    factions.append(fid)
+        return {"factions": factions, "spans": []}
+
+    def _reset_event_log_cycle(self) -> None:
+        self._event_log_cycle_log_idx = None
+        self._event_log_cycle_target_index = 0
+
+    def _get_clicked_event_log_index(self, pos: tuple[int, int]) -> int | None:
+        for rect, log_idx in self.ui_renderer.event_log_line_rects:
+            if rect.collidepoint(pos):
+                return log_idx
+        return None
+
+    def _handle_event_log_click(self, log_idx: int) -> None:
+        self.highlighted_log_index = log_idx
+        meta = self.event_log_meta[log_idx] if 0 <= log_idx < len(self.event_log_meta) else {}
+        targets = list(meta.get("factions", []))
+        if not targets:
+            return
+        if self._event_log_cycle_log_idx != log_idx:
+            self._event_log_cycle_log_idx = log_idx
+            self._event_log_cycle_target_index = 0
+        else:
+            self._event_log_cycle_target_index = (self._event_log_cycle_target_index + 1) % len(targets)
+        self._select_faction_from_text(targets[self._event_log_cycle_target_index])
+
     def _log_events_batch(self, events: list[dict]):
         resolution_to_agenda = {
             "trade": "trade",
@@ -2471,6 +2525,7 @@ class GameScene:
             if pending and expected_agenda and pending.get("agenda") == expected_agenda:
                 line = self._build_consolidated_agenda_line(pending, event)
                 self.event_log.append(line)
+                self.event_log_meta.append(self._build_consolidated_agenda_meta(pending, event))
                 log_index = len(self.event_log) - 1
                 self.change_tracker.process_event(
                     event, log_index, self.factions, self.spirits)
@@ -2620,7 +2675,10 @@ class GameScene:
 
         # Parse wars for rendering (use display state if available)
         render_wars = []
-        for w in self.display_wars:
+        war_source = self.display_wars
+        if self._display_wars is not None and not self.wars and not self.orchestrator.should_hold_display_wars(self.phase):
+            war_source = self.wars
+        for w in war_source:
             if isinstance(w, dict):
                 war_obj = type('War', (), {
                     'war_id': w.get('war_id'),
@@ -2834,7 +2892,7 @@ class GameScene:
             _elog_x = _FACTION_PANEL_X
         self._event_log_render_rect = pygame.Rect(_elog_x, _event_log_y, _elog_w, _cur_event_log_h)
         self.ui_renderer.draw_event_log(
-            screen, self.event_log,
+            screen, self.event_log, self.event_log_meta,
             _elog_x, _event_log_y, _elog_w, _cur_event_log_h,
             scroll_offset=self.event_log_scroll_offset,
             highlight_log_idx=self.highlighted_log_index,
@@ -3023,6 +3081,14 @@ class GameScene:
                 self.hovered_text_faction_rect.centerx,
                 self.hovered_text_faction_rect.bottom,
                 below=True,
+            ))
+        if self.hovered_event_log_tooltip:
+            tooltip, rect = self.hovered_event_log_tooltip
+            self.tooltip_registry.offer(TooltipDescriptor(
+                tooltip,
+                _GUIDANCE_HOVER_REGIONS,
+                rect.centerx,
+                rect.top,
             ))
 
         if self.spoils_help_rect and self.spoils_help_rect.collidepoint(pygame.mouse.get_pos()):
@@ -3671,13 +3737,23 @@ class GameScene:
 
         modifiers = self._get_current_faction_modifiers()
         self.ui_renderer.draw_card_hand(
-            screen, hand, -1,
+            screen, hand, self.selected_restrain_index if self.phase == SubPhase.RESTRAIN_CHOICE else -1,
             start_x, start_y,
             modifiers=modifiers,
             card_images=agenda_card_images,
             show_preview_plus=self.phase == SubPhase.CHANGE_CHOICE,
             vertical=True,
         )
+        if self.phase == SubPhase.RESTRAIN_CHOICE and 0 <= self.selected_restrain_index < len(card_rects):
+            rect = card_rects[self.selected_restrain_index]
+            inset = 12
+            pygame.draw.line(screen, (220, 50, 50), (rect.left + inset, rect.top + inset), (rect.right - inset, rect.bottom - inset), 6)
+            pygame.draw.line(screen, (220, 50, 50), (rect.right - inset, rect.top + inset), (rect.left + inset, rect.bottom - inset), 6)
+        if self.phase == SubPhase.RESTRAIN_CHOICE and self.submit_button:
+            self.submit_button.enabled = self.selected_restrain_index >= 0
+            self.submit_button.tooltip = "Choose an Agenda to restrain first." if self.selected_restrain_index < 0 else None
+            self.submit_button.tooltip_always = self.selected_restrain_index < 0
+            self._draw_submit_button(screen)
 
     def _render_battleground_choice_ui(self, screen):
         if not self.battleground_choice_entries:
@@ -3762,14 +3838,45 @@ class GameScene:
         first_label_y = buttons_top - line_h - 8
         text_bottom_limit = first_label_y - 8
         text_y = max(96, text_bottom_limit - title_h)
-        self.ejection_keyword_rects = render_rich_lines(
-            screen, self.font, lines, text_x, text_y,
-            keywords=keywords,
-            hovered_keyword=self.hovered_ejection_keyword,
-            normal_color=theme.TEXT_HIGHLIGHT,
-            keyword_color=theme.TEXT_KEYWORD,
-            hovered_keyword_color=theme.TEXT_KEYWORD_HOV,
-        )
+        self.ejection_keyword_rects = {}
+        self.ejection_faction_rects = []
+        faction_name = faction_full_name(self.ejection_faction)
+        for line_idx, line in enumerate(lines):
+            tooltip_spans = []
+            for keyword in keywords:
+                start = 0
+                while True:
+                    pos = line.find(keyword, start)
+                    if pos < 0:
+                        break
+                    tooltip_spans.append({
+                        "start": pos,
+                        "end": pos + len(keyword),
+                        "kind": "tooltip",
+                        "tooltip": _INFLUENCE_TOOLTIP if keyword == "Influence" else _AGENDA_POOL_TOOLTIP,
+                    })
+                    start = pos + len(keyword)
+            spans = tooltip_spans + [{
+                "start": pos,
+                "end": pos + len(faction_name),
+                "kind": "faction",
+                "faction_id": self.ejection_faction,
+            } for pos in range(len(line)) if line.startswith(faction_name, pos)]
+            faction_rects, tooltip_rects = render_event_log_line(
+                screen,
+                self.font,
+                line,
+                text_x,
+                text_y + line_idx * line_h,
+                theme.TEXT_HIGHLIGHT,
+                spans=spans,
+            )
+            self.ejection_faction_rects.extend(faction_rects.get(self.ejection_faction, []))
+            for tooltip, rect in tooltip_rects:
+                self.ejection_keyword_rects.setdefault(
+                    "Influence" if tooltip == _INFLUENCE_TOOLTIP else "Agenda pool",
+                    [],
+                ).append(rect)
 
         # Section labels
         if self.remove_buttons:

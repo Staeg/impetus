@@ -101,6 +101,47 @@ class GameState:
         self.shaping_deck: list[str] = list(SHAPING_CARDS)
         self.adaptation_deck: list[str] = list(ADAPTATION_CARDS)
 
+    def _assign_affinities(self) -> None:
+        spirit_list = list(self.spirits.values())
+        player_count = len(spirit_list)
+        if not spirit_list:
+            return
+
+        faction_races = {fid: self.factions[fid].race for fid in self.factions}
+
+        if player_count <= 3:
+            habitats = random.sample(list(FACTION_NAMES), player_count)
+            remaining_factions = [fid for fid in FACTION_NAMES if fid not in habitats]
+            race_pool = [faction_races[fid] for fid in remaining_factions]
+            races = random.sample(race_pool, player_count)
+            random.shuffle(habitats)
+            random.shuffle(races)
+            pairs = list(zip(habitats, races))
+        elif player_count == 4:
+            covered = random.sample(list(FACTION_NAMES), 4)
+            habitats = covered[:]
+            races = [faction_races[fid] for fid in covered]
+            while True:
+                random.shuffle(habitats)
+                random.shuffle(races)
+                pairs = list(zip(habitats, races))
+                if all(faction_races[habitat] != race for habitat, race in pairs):
+                    break
+        else:
+            faction_combos = {(fid, faction_races[fid]) for fid in self.factions}
+            habitats = list(FACTION_NAMES)
+            races = list(RACES)
+            while True:
+                random.shuffle(habitats)
+                random.shuffle(races)
+                pairs = list(zip(habitats, races))
+                if all(pair not in faction_combos for pair in pairs):
+                    break
+
+        for spirit, (habitat, race) in zip(spirit_list, pairs):
+            spirit.habitat_affinity = habitat
+            spirit.race_affinity = race
+
     def setup_game(self, player_info: list[dict], vp_to_win: int = VP_TO_WIN,
                    enabled_eras: Optional[set[Era]] = None) -> tuple[GameStateSnapshot, list[tuple[list[dict], GameStateSnapshot]]]:
         """Initialize the game with the given players.
@@ -135,20 +176,7 @@ class GameState:
             spirit = Spirit(info["spirit_id"], info["name"])
             self.spirits[spirit.spirit_id] = spirit
 
-        # Assign affinities so each habitat and each race appears at most once
-        # across all spirits, and no pair exactly matches a faction combo.
-        faction_combos = {(fid, self.factions[fid].race) for fid in self.factions}
-        habitats = list(FACTION_NAMES)
-        races = list(RACES)
-        while True:
-            random.shuffle(habitats)
-            random.shuffle(races)
-            pairs = list(zip(habitats, races))
-            if all(pair not in faction_combos for pair in pairs):
-                break
-        for spirit, (habitat, race) in zip(self.spirits.values(), pairs):
-            spirit.habitat_affinity = habitat
-            spirit.race_affinity = race
+        self._assign_affinities()
 
         # Shuffle which faction starts at which position
         start_positions = list(FACTION_START_HEXES.values())
@@ -183,7 +211,8 @@ class GameState:
                 if at == AgendaType.EXPAND
             ]
             resolve_agendas(self.factions, self.hex_map, agenda_choices, self.wars, events,
-                           era=self.current_era, current_turn=turn_number)
+                           era=self.current_era, current_turn=turn_number,
+                           territory_change_callback=self._handle_territory_change)
             events.extend(self._resolve_war_phase())
             events.extend(self._resolve_scoring())
 
@@ -574,7 +603,7 @@ class GameState:
                     "faction": target_faction,
                 })
                 # Check worship
-                self._check_worship(faction, spirit, events)
+                self._evaluate_worship_for_guiding_spirit(target_faction, events)
             else:
                 # Multiple spirits contested — resolve via Affinities first
                 faction = self.factions[target_faction]
@@ -604,7 +633,7 @@ class GameState:
                         "spirit": winner_id,
                         "faction": target_faction,
                     })
-                    self._check_worship(faction, winner, events)
+                    self._evaluate_worship_for_guiding_spirit(target_faction, events)
                     losers = [sid for sid in spirit_ids if sid != winner_id]
                     if losers:
                         events.append({
@@ -625,7 +654,7 @@ class GameState:
                         "spirit": winner_id,
                         "faction": target_faction,
                     })
-                    self._check_worship(faction, winner, events)
+                    self._evaluate_worship_for_guiding_spirit(target_faction, events)
                     losers = [sid for sid in spirit_ids if sid != winner_id]
                     if losers:
                         events.append({
@@ -653,7 +682,7 @@ class GameState:
                                 "spirit": winner_id,
                                 "faction": target_faction,
                             })
-                            self._check_worship(faction, winner, events)
+                            self._evaluate_worship_for_guiding_spirit(target_faction, events)
                             continue
                     events.append({
                         "type": "guide_contested",
@@ -678,30 +707,53 @@ class GameState:
         self.phase = Phase.AGENDA_PHASE
         return events
 
-    def _check_worship(self, faction: Faction, spirit: Spirit, events: list):
-        """Check and update worship for a faction when a spirit guides or leaves."""
+    def _evaluate_worship_for_guiding_spirit(self, faction_id: str, events: list[dict]) -> None:
+        """Let the currently guiding spirit claim or steal Worship if they qualify.
+
+        Worship can only be stolen by the spirit currently guiding the faction.
+        This should be re-checked whenever the faction's territory changes, when
+        guidance begins, and immediately before guidance ends.
+        """
+        faction = self.factions[faction_id]
+        spirit_id = faction.guiding_spirit
+        if not spirit_id:
+            return
+
         if faction.worship_spirit is None:
-            faction.worship_spirit = spirit.spirit_id
+            faction.worship_spirit = spirit_id
             events.append({
                 "type": "worship_gained",
-                "spirit": spirit.spirit_id,
-                "faction": faction.faction_id,
+                "spirit": spirit_id,
+                "faction": faction_id,
             })
-        elif faction.worship_spirit != spirit.spirit_id:
-            # Compare idol counts
-            current_idols = self.hex_map.count_spirit_idols_in_faction(
-                faction.worship_spirit, faction.faction_id)
-            new_idols = self.hex_map.count_spirit_idols_in_faction(
-                spirit.spirit_id, faction.faction_id)
-            if new_idols >= current_idols:
-                old_spirit = faction.worship_spirit
-                faction.worship_spirit = spirit.spirit_id
-                events.append({
-                    "type": "worship_replaced",
-                    "spirit": spirit.spirit_id,
-                    "old_spirit": old_spirit,
-                    "faction": faction.faction_id,
-                })
+            return
+
+        if faction.worship_spirit == spirit_id:
+            return
+
+        current_idols = self.hex_map.count_spirit_idols_in_faction(
+            faction.worship_spirit, faction_id)
+        challenger_idols = self.hex_map.count_spirit_idols_in_faction(
+            spirit_id, faction_id)
+        if challenger_idols >= current_idols:
+            old_spirit = faction.worship_spirit
+            faction.worship_spirit = spirit_id
+            events.append({
+                "type": "worship_replaced",
+                "spirit": spirit_id,
+                "old_spirit": old_spirit,
+                "faction": faction_id,
+            })
+
+    def _handle_territory_change(self, old_owner: str | None, new_owner: str | None,
+                                 _hex_coord: tuple[int, int], events: list[dict]) -> None:
+        """Re-evaluate Worship for factions whose territory counts just changed."""
+        affected = []
+        for faction_id in (old_owner, new_owner):
+            if faction_id and faction_id not in affected:
+                affected.append(faction_id)
+        for faction_id in affected:
+            self._evaluate_worship_for_guiding_spirit(faction_id, events)
 
     def _check_respawns(self, events: list):
         """Check all factions for 0 territories and trigger a respawn."""
@@ -729,7 +781,9 @@ class GameState:
                 if neutral_hexes:
                     chosen = random.choice(neutral_hexes)
                     neutral_hexes.remove(chosen)
+                    old_owner = self.hex_map.ownership.get(chosen)
                     self.hex_map.claim_hex(chosen, fid)
+                    self._handle_territory_change(old_owner, fid, chosen, events)
                     events.append({
                         "type": "faction_respawned",
                         "faction": fid,
@@ -754,7 +808,9 @@ class GameState:
         if self.hex_map.ownership.get(hex_coord) is not None:
             return "Hex is not neutral", []
         faction_id = self.respawn_pending[spirit_id]
+        old_owner = self.hex_map.ownership.get(hex_coord)
         self.hex_map.claim_hex(hex_coord, faction_id)
+        self._handle_territory_change(old_owner, faction_id, hex_coord, events)
         del self.respawn_pending[spirit_id]
         events = [{
             "type": "faction_respawned",
@@ -1255,7 +1311,8 @@ class GameState:
                        self.wars, events,
                        guided_expand_choices=guided_expand_choices,
                        era=self.current_era,
-                       current_turn=self.turn)
+                       current_turn=self.turn,
+                       territory_change_callback=self._handle_territory_change)
 
         # Add visual change events for guided change factions.
         # The modifier was already applied; this puts them in the
@@ -1273,7 +1330,7 @@ class GameState:
         self.expand_chosen.clear()
 
         if self.is_era2():
-            for fid, agenda_type in agenda_choices.items():
+            for fid in agenda_choices:
                 faction = self.factions[fid]
                 if not faction.guiding_spirit:
                     continue
@@ -1362,12 +1419,11 @@ class GameState:
 
         for spirit in spirits_to_eject:
             faction = self.factions[spirit.guided_faction]
+            self._evaluate_worship_for_guiding_spirit(faction.faction_id, events)
             faction.guiding_spirit = None
             faction.guidance_step = ""
             faction.restrained_agenda = None
             faction.queued_agendas = []
-            # Check worship on leaving
-            self._check_worship(faction, spirit, events)
             spirit.become_vagrant()
             events.append({
                 "type": "ejected",
@@ -1431,19 +1487,21 @@ class GameState:
                 if self.war_support_pending:
                     return events
 
-            support_bonus: dict[tuple[str, str], int] = {}
+            support_dice: dict[tuple[str, str], int] = {}
             for entries in self.war_support_pending.values():
                 for entry in entries:
                     target = entry.get("support_target")
                     if target:
                         multiplier = 3 if "Battle Blessing" in self.spirits[entry["spirit"]].adaptation_effects else 1
-                        support_bonus[(entry["war_id"], target)] = support_bonus.get((entry["war_id"], target), 0) + multiplier
+                        support_dice[(entry["war_id"], target)] = support_dice.get((entry["war_id"], target), 0) + multiplier
             self.war_support_pending.clear()
 
             for war in wars_to_resolve:
                 result = war.resolve(
-                    power_snapshot[war.faction_a] + support_bonus.get((war.war_id, war.faction_a), 0),
-                    power_snapshot[war.faction_b] + support_bonus.get((war.war_id, war.faction_b), 0),
+                    power_snapshot[war.faction_a],
+                    power_snapshot[war.faction_b],
+                    bonus_dice_a=support_dice.get((war.war_id, war.faction_a), 0),
+                    bonus_dice_b=support_dice.get((war.war_id, war.faction_b), 0),
                 )
                 dice_results.append(result)
                 events.append({"type": "war_resolved", **result})
@@ -1507,12 +1565,14 @@ class GameState:
                     expanded_results.append(mirrored)
             raw_pending, self.auto_spoils_choices = resolve_spoils(
                 self.factions, self.hex_map, expanded_results, self.wars,
-                events, self.normal_trade_factions, spirits=self.spirits)
+                events, self.normal_trade_factions, spirits=self.spirits,
+                era=self.current_era)
             # Convert plain dicts from resolve_spoils into SpoilsPendingEntry objects
             self.spoils_pending = {
                 spirit_id: [
                     SpoilsPendingEntry(
                         winner=d["winner"], loser=d["loser"], cards=d["cards"],
+                        expand_target=d.get("target_hex"),
                     )
                     for d in entries
                 ]
@@ -1576,14 +1636,7 @@ class GameState:
         return None, events
 
     def _resolve_scoring(self) -> list[dict]:
-        # Check worship for all guided factions before scoring
         events = []
-        for fid, faction in self.factions.items():
-            if faction.guiding_spirit:
-                spirit = self.spirits.get(faction.guiding_spirit)
-                if spirit:
-                    self._check_worship(faction, spirit, events)
-
         events.extend(calculate_scoring(self.factions, self.spirits, self.hex_map, era=self.current_era))
 
         # Check for winner
@@ -1723,7 +1776,7 @@ class GameState:
                 pending.stage = SubPhase.CHANGE_CHOICE
                 pending.change_cards = change_cards
                 change_needed = True
-            elif chosen == AgendaType.EXPAND:
+            elif chosen == AgendaType.EXPAND and self.current_era != Era.ERA_2:
                 # Spirit must choose which adjacent enemy territory to conquer
                 enemy_territories = self.hex_map.get_adjacent_enemy_territories(pending.winner, pending.loser)
                 if enemy_territories:
@@ -1738,7 +1791,7 @@ class GameState:
                     "winner": pending.winner,
                     "loser": pending.loser,
                     "agenda_type": pending.chosen_card,
-                    "target_hex": None,
+                    "target_hex": pending.expand_target if pending.chosen_card == AgendaType.EXPAND else None,
                     "guided": True,
                 })
             del self.spoils_pending[spirit_id]
@@ -1857,7 +1910,8 @@ class GameState:
                                batch, self.normal_trade_factions,
                                normal_expand_factions=self.normal_expand_factions,
                                era=self.current_era,
-                               current_turn=self.turn)
+                               current_turn=self.turn,
+                               territory_change_callback=self._handle_territory_change)
         self.auto_spoils_choices = []
         self._check_respawns(events)
         if not self.respawn_pending:

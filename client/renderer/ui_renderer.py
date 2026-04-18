@@ -348,6 +348,58 @@ def render_clickable_faction_lines(surface: "pygame.Surface", font: "pygame.font
     return {fid: rects for fid, rects in faction_rects.items() if rects}
 
 
+def render_event_log_line(surface: "pygame.Surface", font: "pygame.font.Font",
+                          line: str, x: int, y: int, normal_color: tuple,
+                          spans: list[dict] | None = None) -> tuple[dict[str, list[pygame.Rect]], list[tuple[str, pygame.Rect]]]:
+    """Render a single event-log line with interactive faction and tooltip spans."""
+    spans = sorted(spans or [], key=lambda item: (item["start"], item["end"]))
+    line_h = font.get_linesize()
+    faction_rects: dict[str, list[pygame.Rect]] = {}
+    tooltip_rects: list[tuple[str, pygame.Rect]] = []
+    cursor_x = x
+    pos = 0
+
+    for span in spans:
+        start = max(pos, span["start"])
+        end = span["end"]
+        if start > pos:
+            text = line[pos:start]
+            surf = font.render(text, True, normal_color)
+            surface.blit(surf, (cursor_x, y))
+            cursor_x += surf.get_width()
+        if end <= start:
+            continue
+        text = line[start:end]
+        kind = span.get("kind")
+        if kind == "faction":
+            faction_id = span.get("faction_id")
+            color = tuple(FACTION_COLORS.get(faction_id, normal_color))
+            surf = font.render(text, True, color)
+            surface.blit(surf, (cursor_x, y))
+            rect = pygame.Rect(cursor_x, y, surf.get_width(), line_h)
+            faction_rects.setdefault(faction_id, []).append(rect)
+            draw_dotted_underline(surface, cursor_x, y + line_h - 2, surf.get_width(), color)
+        elif kind == "tooltip":
+            color = theme.TEXT_KEYWORD
+            surf = font.render(text, True, color)
+            surface.blit(surf, (cursor_x, y))
+            rect = pygame.Rect(cursor_x, y, surf.get_width(), line_h)
+            tooltip_rects.append((span.get("tooltip", text), rect))
+            draw_dotted_underline(surface, cursor_x, y + line_h - 2, surf.get_width(), color)
+        else:
+            surf = font.render(text, True, normal_color)
+            surface.blit(surf, (cursor_x, y))
+        cursor_x += surf.get_width()
+        pos = end
+
+    if pos < len(line):
+        tail = line[pos:]
+        surf = font.render(tail, True, normal_color)
+        surface.blit(surf, (cursor_x, y))
+
+    return faction_rects, tooltip_rects
+
+
 def draw_multiline_tooltip(surface: "pygame.Surface", font: "pygame.font.Font",
                            text: str, anchor_x: int, anchor_y: int,
                            max_width: int = 350, below: bool = False):
@@ -474,6 +526,7 @@ class UIRenderer:
         self.panel_war_rect: pygame.Rect | None = None
         self.panel_war_opponent_rects: dict[str, pygame.Rect] = {}
         self.event_log_faction_rects: dict[str, list[pygame.Rect]] = {}
+        self.event_log_tooltip_rects: list[tuple[str, pygame.Rect]] = []
         self.event_log_line_rects: list[tuple[pygame.Rect, int]] = []
         self.panel_faction_id: str | None = None
         self.faction_panel_rect: pygame.Rect | None = None
@@ -1252,16 +1305,16 @@ class UIRenderer:
         dy += 18
 
         progress_line_y = dy
-        if is_era2 and guided_faction:
+        if is_era2:
             faction_data = factions.get(guided_faction, {})
-            step = faction_data.get("guidance_step", "")
+            step = faction_data.get("guidance_step", "") if guided_faction else ""
             step_map = {
-                GUIDANCE_STEP_RESTRAIN: ("Cycle", "1/4 Restrain"),
-                GUIDANCE_STEP_SHAPE: ("Cycle", "2/4 Shape"),
-                GUIDANCE_STEP_ADAPT: ("Cycle", "3/4 Adapt"),
-                GUIDANCE_STEP_EJECT: ("Cycle", "4/4 Eject"),
+                GUIDANCE_STEP_RESTRAIN: ("Cycle", "Restrain"),
+                GUIDANCE_STEP_SHAPE: ("Cycle", "Shape"),
+                GUIDANCE_STEP_ADAPT: ("Cycle", "Adapt"),
+                GUIDANCE_STEP_EJECT: ("Cycle", "Eject"),
             }
-            label, value = step_map.get(step, ("Cycle", "Between turns"))
+            label, value = step_map.get(step, ("Cycle", "Vagrant"))
             label_surf = self.small_font.render(f"{label}: ", True, theme.TEXT_NORMAL)
             value_surf = self.small_font.render(value, True, theme.TEXT_HIGHLIGHT)
             surface.blit(label_surf, (x + 10, dy))
@@ -1589,6 +1642,7 @@ class UIRenderer:
         return rects
 
     def draw_event_log(self, surface: pygame.Surface, events: list[str],
+                       event_meta: list[dict] | None,
                        x: int, y: int, width: int, height: int,
                        scroll_offset: int = 0,
                        highlight_log_idx: int = None,
@@ -1596,6 +1650,7 @@ class UIRenderer:
                        enlarged: bool = False):
         """Draw scrollable event log."""
         self.event_log_faction_rects = {}
+        self.event_log_tooltip_rects = []
         self.event_log_line_rects = []
         panel_rect = pygame.Rect(x, y, width, height)
         pygame.draw.rect(surface, (20, 20, 30), panel_rect, border_radius=4)
@@ -1647,16 +1702,19 @@ class UIRenderer:
                 event_color = (255, 240, 150)
             else:
                 event_color = (160, 160, 180)
-            faction_rects = render_clickable_faction_lines(
+            meta = event_meta[abs_index] if event_meta and abs_index < len(event_meta) else {}
+            faction_rects, tooltip_rects = render_event_log_line(
                 surface,
                 self.small_font,
-                [event_text],
+                event_text,
                 x + 8 - h_scroll_offset,
                 dy,
-                normal_color=event_color,
+                event_color,
+                spans=meta.get("spans", []),
             )
             for fid, rects in faction_rects.items():
                 self.event_log_faction_rects.setdefault(fid, []).extend(rects)
+            self.event_log_tooltip_rects.extend(tooltip_rects)
             dy += 16
 
         surface.set_clip(None)

@@ -5,6 +5,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from shared.constants import Phase, AgendaType, IdolType, ChangeModifierTarget, Era
+from shared.models import HexCoord
 from server.game_state import GameState
 from server.server import GameServer, GameRoom
 from server import ai
@@ -60,6 +61,30 @@ class TestGameStateSetup:
     def test_spirits_created(self):
         gs = make_game(4)
         assert len(gs.spirits) == 4
+
+    def test_two_player_affinities_do_not_complete_any_faction_combo(self):
+        gs = make_game(2)
+        faction_races = {fid: faction.race for fid, faction in gs.factions.items()}
+        habitats = {spirit.habitat_affinity for spirit in gs.spirits.values()}
+        races = {spirit.race_affinity for spirit in gs.spirits.values()}
+        assert all(not (fid in habitats and race in races) for fid, race in faction_races.items())
+
+    def test_three_player_affinities_do_not_complete_any_faction_combo(self):
+        gs = make_game(3)
+        faction_races = {fid: faction.race for fid, faction in gs.factions.items()}
+        habitats = {spirit.habitat_affinity for spirit in gs.spirits.values()}
+        races = {spirit.race_affinity for spirit in gs.spirits.values()}
+        assert all(not (fid in habitats and race in races) for fid, race in faction_races.items())
+
+    def test_four_player_affinities_cover_exactly_four_factions(self):
+        gs = make_game(4)
+        habitats = {spirit.habitat_affinity for spirit in gs.spirits.values()}
+        races = {spirit.race_affinity for spirit in gs.spirits.values()}
+        faction_races = {fid: faction.race for fid, faction in gs.factions.items()}
+        covered = {fid for fid, race in faction_races.items() if fid in habitats and race in races}
+        assert len(covered) == 4
+        for spirit in gs.spirits.values():
+            assert faction_races[spirit.habitat_affinity] != spirit.race_affinity
 
     def test_all_spirits_vagrant(self):
         gs = make_game()
@@ -552,6 +577,26 @@ class TestAgendaPhase:
         assert err is None
 
 
+class TestAIChoices:
+    def test_ai_prefers_usurping_affinity_target(self):
+        gs = make_game(2)
+        clear_affinities(gs)
+        spirit = gs.spirits["spirit_0"]
+        spirit.habitat_affinity = "mountain"
+        gs.factions["mountain"].worship_spirit = "spirit_1"
+        gs.factions["plains"].worship_spirit = "spirit_1"
+        action = ai.get_ai_vagrant_action(gs, "spirit_0")
+        assert action["guide_target"] == "mountain"
+
+    def test_ai_prefers_affinity_when_no_usurp_is_available(self):
+        gs = make_game(2)
+        clear_affinities(gs)
+        spirit = gs.spirits["spirit_0"]
+        spirit.habitat_affinity = "plains"
+        action = ai.get_ai_vagrant_action(gs, "spirit_0")
+        assert action["guide_target"] == "plains"
+
+
 class TestSnapshot:
     def test_snapshot_serialization(self):
         gs = make_game(2)
@@ -655,3 +700,140 @@ class TestWinnerChoice:
         assert len(war_events) == 1
         assert war_events[0]["winner"] == "mesa"
         assert war_events[0]["forced"] is True
+
+
+class TestEra2WarSupport:
+    def _make_staged_war(self):
+        from server.war import War
+
+        gs = GameState()
+        players = [{"spirit_id": "spirit_0", "name": "Player 0"},
+                   {"spirit_id": "spirit_1", "name": "Player 1"}]
+        gs.setup_game(players)
+        gs.current_era = Era.ERA_2
+        gs.phase = Phase.WAR_PHASE
+        gs.turn = 3
+
+        gs.spirits["spirit_0"].guide_faction("mountain")
+        gs.factions["mountain"].guiding_spirit = "spirit_0"
+        gs.spirits["spirit_1"].guide_faction("mesa")
+        gs.factions["mesa"].guiding_spirit = "spirit_1"
+
+        war = War("mountain", "mesa", declared_turn=2, resolve_turn=3)
+        war.stage((1, -1), (1, 0), 3)
+        gs.wars = [war]
+        return gs, war
+
+    def test_era2_support_adds_extra_dice_not_power(self, monkeypatch):
+        gs, war = self._make_staged_war()
+        gs.war_support_pending = {
+            "spirit_0": [{
+                "spirit": "spirit_0",
+                "war_id": war.war_id,
+                "faction_a": "mountain",
+                "faction_b": "mesa",
+                "support_target": "mountain",
+            }],
+        }
+        rolls = iter([2, 4, 5])
+        monkeypatch.setattr("random.randint", lambda a, b: next(rolls))
+
+        events = gs._resolve_war_phase()
+
+        war_event = next(e for e in events if e["type"] == "war_resolved")
+        assert war_event["power_a"] == 1
+        assert war_event["power_b"] == 1
+        assert war_event["base_roll_a"] == 2
+        assert war_event["base_roll_b"] == 4
+        assert war_event["support_rolls_a"] == [5]
+        assert war_event["roll_a"] == 7
+        assert war_event["roll_b"] == 4
+
+    def test_battle_blessing_adds_three_support_dice(self, monkeypatch):
+        gs, war = self._make_staged_war()
+        gs.spirits["spirit_0"].adaptation_effects.append("Battle Blessing")
+        gs.war_support_pending = {
+            "spirit_0": [{
+                "spirit": "spirit_0",
+                "war_id": war.war_id,
+                "faction_a": "mountain",
+                "faction_b": "mesa",
+                "support_target": "mountain",
+            }],
+        }
+        rolls = iter([1, 5, 2, 3, 4])
+        monkeypatch.setattr("random.randint", lambda a, b: next(rolls))
+
+        events = gs._resolve_war_phase()
+
+        war_event = next(e for e in events if e["type"] == "war_resolved")
+        assert war_event["base_roll_a"] == 1
+        assert war_event["base_roll_b"] == 5
+        assert war_event["support_rolls_a"] == [2, 3, 4]
+        assert war_event["roll_a"] == 10
+        assert war_event["roll_b"] == 5
+
+
+class TestWorshipRework:
+    def test_worship_transfers_on_guidance_begin(self):
+        gs = make_game(2)
+        neutral = list(gs.hex_map.get_neutral_hexes())
+        faction = gs.factions["mountain"]
+        faction.worship_spirit = "spirit_1"
+        mountain_hex = next(iter(gs.hex_map.get_faction_territories("mountain")))
+        idol = gs.spirits["spirit_0"].place_idol(IdolType.BATTLE, HexCoord(*mountain_hex))
+        gs.hex_map.place_idol(idol)
+
+        gs.submit_action("spirit_0", {
+            "guide_target": "mountain",
+            "idol_type": "battle",
+            "idol_q": neutral[0][0],
+            "idol_r": neutral[0][1],
+        })
+        gs.submit_action("spirit_1", {
+            "guide_target": "plains",
+            "idol_type": "affluence",
+            "idol_q": neutral[1][0],
+            "idol_r": neutral[1][1],
+        })
+
+        events = gs.resolve_current_phase()
+
+        assert faction.worship_spirit == "spirit_0"
+        assert any(e["type"] == "worship_replaced" and e["faction"] == "mountain" for e in events)
+
+    def test_worship_rechecks_when_territory_changes(self):
+        gs = make_game(2)
+        faction = gs.factions["mountain"]
+        faction.worship_spirit = "spirit_1"
+        gs.spirits["spirit_0"].guide_faction("mountain")
+        faction.guiding_spirit = "spirit_0"
+
+        target_hex = next(iter(gs.hex_map.get_reachable_neutral_hexes("mountain")))
+        idol = gs.spirits["spirit_0"].place_idol(IdolType.BATTLE, HexCoord(*target_hex))
+        gs.hex_map.place_idol(idol)
+
+        events = []
+        gs.hex_map.claim_hex(target_hex, "mountain")
+        gs._handle_territory_change(None, "mountain", target_hex, events)
+
+        assert faction.worship_spirit == "spirit_0"
+        assert any(e["type"] == "worship_replaced" for e in events)
+
+    def test_worship_rechecks_right_before_guidance_ends(self):
+        gs = make_game(2)
+        faction = gs.factions["mountain"]
+        faction.worship_spirit = "spirit_1"
+        gs.spirits["spirit_0"].guide_faction("mountain")
+        faction.guiding_spirit = "spirit_0"
+        mountain_hex = next(iter(gs.hex_map.get_faction_territories("mountain")))
+        idol = gs.spirits["spirit_0"].place_idol(IdolType.BATTLE, HexCoord(*mountain_hex))
+        gs.hex_map.place_idol(idol)
+        gs.spirits["spirit_0"].influence = 0
+
+        events = []
+        gs._process_ejections(events)
+
+        assert faction.worship_spirit == "spirit_0"
+        assert gs.spirits["spirit_0"].is_vagrant is True
+        assert any(e["type"] == "worship_replaced" for e in events)
