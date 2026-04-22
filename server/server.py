@@ -6,6 +6,7 @@ import traceback
 import uuid
 import string
 import random
+import time
 from typing import Optional
 try:
     import websockets
@@ -35,6 +36,8 @@ class PlayerSession:
         self.ready = False
         self.connected = True
         self.is_spectator = False
+        self.reconnect_token = uuid.uuid4().hex
+        self.disconnected_at: float | None = None
 
 
 class GameRoom:
@@ -47,10 +50,11 @@ class GameRoom:
         self.vp_to_win: int = VP_TO_WIN
         self.ai_player_count: int = 0
         self.ai_spirit_ids: set[str] = set()
-        self.tutorial_mode: bool = False
         self.play_era1: bool = True
         self.play_era2: bool = True
+        self.disconnect_kick_votes: dict[str, set[str]] = {}
         self._submission_event: asyncio.Event = asyncio.Event()
+        self.game_loop_task: asyncio.Task | None = None
 
     def signal_submission(self) -> None:
         """Wake the game loop to check if all submissions are in."""
@@ -61,6 +65,18 @@ class GameRoom:
         await self._submission_event.wait()
         self._submission_event.clear()
 
+    async def stop_game_loop(self) -> None:
+        """Cancel the room's background phase loop, if one is running."""
+        task = self.game_loop_task
+        self.game_loop_task = None
+        if not task or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
     def add_player(self, session: PlayerSession):
         self.players[session.spirit_id] = session
 
@@ -69,6 +85,7 @@ class GameRoom:
             if self.started:
                 # Keep for reconnection, just mark disconnected
                 self.players[spirit_id].connected = False
+                self.players[spirit_id].disconnected_at = time.monotonic()
             else:
                 # Pre-game: fully remove from lobby
                 del self.players[spirit_id]
@@ -82,6 +99,8 @@ class GameRoom:
         if spirit_id in self.players:
             self.players[spirit_id].ws = ws
             self.players[spirit_id].connected = True
+            self.players[spirit_id].disconnected_at = None
+            self.disconnect_kick_votes.pop(spirit_id, None)
 
     def can_start(self) -> bool:
         human = [p for p in self.players.values() if not p.is_spectator]
@@ -95,6 +114,63 @@ class GameRoom:
 
     def connected_players(self) -> list[PlayerSession]:
         return [p for p in self.players.values() if p.connected]
+
+    def remaining_human_voters(self, target_spirit_id: str) -> list[str]:
+        return [
+            session.spirit_id
+            for session in self.players.values()
+            if (
+                session.spirit_id != target_spirit_id
+                and session.connected
+                and not session.is_spectator
+                and session.spirit_id not in self.ai_spirit_ids
+            )
+        ]
+
+    def can_vote_kick(self, target_spirit_id: str, voter_spirit_id: str) -> bool:
+        session = self.players.get(target_spirit_id)
+        if not session or session.connected or target_spirit_id in self.ai_spirit_ids:
+            return False
+        if voter_spirit_id not in self.remaining_human_voters(target_spirit_id):
+            return False
+        if session.disconnected_at is None:
+            return False
+        return (time.monotonic() - session.disconnected_at) >= 30.0
+
+    def register_kick_vote(self, target_spirit_id: str, voter_spirit_id: str) -> bool:
+        votes = self.disconnect_kick_votes.setdefault(target_spirit_id, set())
+        before = len(votes)
+        votes.add(voter_spirit_id)
+        return len(votes) != before
+
+    def should_replace_with_ai(self, target_spirit_id: str) -> bool:
+        required = set(self.remaining_human_voters(target_spirit_id))
+        if not required:
+            return False
+        votes = self.disconnect_kick_votes.get(target_spirit_id, set())
+        return required.issubset(votes)
+
+    def build_presence_payload(self) -> dict:
+        now = time.monotonic()
+        players = []
+        for session in self.players.values():
+            disconnected_seconds = 0
+            if session.disconnected_at is not None:
+                disconnected_seconds = max(0, int(now - session.disconnected_at))
+            voters = sorted(self.disconnect_kick_votes.get(session.spirit_id, set()))
+            required_voters = self.remaining_human_voters(session.spirit_id)
+            players.append({
+                "spirit_id": session.spirit_id,
+                "name": session.player_name,
+                "connected": session.connected,
+                "is_spectator": session.is_spectator,
+                "is_ai": session.spirit_id in self.ai_spirit_ids,
+                "disconnected_seconds": disconnected_seconds,
+                "kick_voters": voters,
+                "required_voters": required_voters,
+                "kick_available": self.can_vote_kick(session.spirit_id, required_voters[0]) if required_voters else False,
+            })
+        return {"players": players}
 
     async def broadcast(self, message: str, exclude: str = None):
         for session in self.connected_players():
@@ -125,6 +201,17 @@ class GameServer:
             code = ''.join(random.choices(string.ascii_uppercase, k=4))
             if code not in self.rooms:
                 return code
+
+    def _find_rejoinable_session(self, room: GameRoom, player_name: str) -> tuple[str, PlayerSession] | tuple[None, None]:
+        target_name = player_name.strip().casefold()
+        for sid, session in room.players.items():
+            if (
+                session.player_name.strip().casefold() == target_name
+                and not session.connected
+                and sid not in room.ai_spirit_ids
+            ):
+                return sid, session
+        return None, None
 
     async def handle_connection(self, ws: ServerConnection):
         print(f"[server] New connection from {ws.remote_address}")
@@ -166,16 +253,26 @@ class GameServer:
                 if room:
                     room.remove_player(spirit_id)
                     if not room.players:
+                        await room.stop_game_loop()
                         del self.rooms[room_code]
+                    elif room.started:
+                        player_name = room.players.get(spirit_id).player_name if spirit_id in room.players else spirit_id
+                        await self._broadcast_system_message(room, f"{player_name} disconnected.", exclude=spirit_id)
+                        await self._broadcast_presence_state(room)
                     else:
                         await self._broadcast_lobby_state(room)
             if ws in self.ws_to_room:
                 del self.ws_to_room[ws]
 
     async def _handle_join(self, ws, payload) -> tuple[Optional[str], Optional[str]]:
-        player_name = payload.get("player_name", "Unknown")
+        player_name = str(payload.get("player_name", "Unknown")).strip()
         room_code = payload.get("room_code")
+        if room_code is not None:
+            room_code = str(room_code).strip().upper()
         create_room = payload.get("create_room")
+        if create_room is not None:
+            create_room = str(create_room).strip().upper()
+        reconnect_token = payload.get("reconnect_token", "")
 
         if room_code:
             # Join existing room
@@ -184,16 +281,15 @@ class GameServer:
                 await ws.send(create_message(S2C.ERROR, {"message": f"Room {room_code} not found"}))
                 return None, None
             if room.started:
-                # Try reconnect
-                for sid, session in room.players.items():
-                    if session.player_name == player_name and not session.connected:
-                        room.reconnect_player(sid, ws)
-                        # Send current game state
-                        if room.game_state:
-                            snapshot = room.game_state.get_snapshot()
-                            await ws.send(create_message(S2C.GAME_START, snapshot.to_dict()))
-                        return room_code, sid
-                await ws.send(create_message(S2C.ERROR, {"message": "Game already started"}))
+                # Rejoin an in-progress game by selecting the same player name.
+                sid, session = self._find_rejoinable_session(room, player_name)
+                if sid and session:
+                    room.reconnect_player(sid, ws)
+                    await self._send_current_state_to_player(room, sid)
+                    await self._broadcast_system_message(room, f"{session.player_name} rejoined the game.", exclude=sid)
+                    await self._broadcast_presence_state(room)
+                    return room_code, sid
+                await ws.send(create_message(S2C.ERROR, {"message": "Game already started and this session cannot be rejoined."}))
                 return None, None
             # Reject if at human player cap (spectators don't count toward cap)
             if room.human_player_count() >= 5:
@@ -230,6 +326,7 @@ class GameServer:
         if not room.host_spirit_id:
             room.host_spirit_id = spirit_id
 
+        await self._send_session_info(room, spirit_id)
         await ws.send(create_message(S2C.LOBBY_STATE, {
             "room_code": room_code,
             "spirit_id": spirit_id,
@@ -259,6 +356,271 @@ class GameServer:
             "all_ready": room.can_start(),
         }))
 
+    async def _send_session_info(self, room: GameRoom, spirit_id: str) -> None:
+        session = room.players.get(spirit_id)
+        if not session:
+            return
+        await room.send_to(spirit_id, create_message(S2C.SESSION_INFO, {
+            "room_code": room.room_code,
+            "spirit_id": session.spirit_id,
+            "player_name": session.player_name,
+            "reconnect_token": session.reconnect_token,
+        }))
+
+    async def _broadcast_presence_state(self, room: GameRoom) -> None:
+        if not room.started:
+            return
+        await room.broadcast(create_message(S2C.PRESENCE_STATE, room.build_presence_payload()))
+
+    async def _broadcast_system_message(self, room: GameRoom, text: str, exclude: str | None = None) -> None:
+        await room.broadcast(create_message(S2C.SYSTEM_MESSAGE, {"message": text}), exclude=exclude)
+
+    async def _replace_player_with_ai(self, room: GameRoom, spirit_id: str) -> None:
+        session = room.players.get(spirit_id)
+        gs = room.game_state
+        if not session or not gs or spirit_id in room.ai_spirit_ids:
+            return
+        original_name = session.player_name
+        room.ai_spirit_ids.add(spirit_id)
+        gs.ai_spirit_ids.add(spirit_id)
+        session.reconnect_token = ""
+        if spirit_id in gs.spirits and not gs.spirits[spirit_id].name.endswith(" (AI)"):
+            ai_name = f"{gs.spirits[spirit_id].name} (AI)"
+            gs.spirits[spirit_id].name = ai_name
+            session.player_name = ai_name
+        room.disconnect_kick_votes.pop(spirit_id, None)
+        await self._broadcast_system_message(room, f"{original_name} was replaced by AI.")
+        await self._broadcast_phase_result(room, [{
+            "type": "system_message",
+            "message": f"{original_name} is now controlled by AI.",
+        }])
+        await self._broadcast_presence_state(room)
+        await self._sync_ai_takeover(room)
+
+    async def _sync_ai_takeover(self, room: GameRoom) -> None:
+        gs = room.game_state
+        if not gs:
+            return
+        if gs.respawn_pending or gs.winner_choice_pending or gs.spoils_pending or gs.ejection_pending or gs.war_support_pending:
+            await self._auto_resolve_phases(room)
+            return
+        if gs.battleground_pending:
+            await self._send_battleground_options(room)
+            return
+        if gs.restrain_pending:
+            await self._handle_restrain_choices(room)
+            return
+        if gs.shaping_pending:
+            await self._handle_shaping_choices(room)
+            return
+        if gs.adaptation_pending:
+            await self._handle_adaptation_choices(room)
+            return
+        if gs.expand_pending:
+            for sid in list(room.ai_spirit_ids):
+                if sid in gs.expand_pending:
+                    faction_id = gs.expand_pending[sid]
+                    allow_enemy = "Special Military Operations" in gs.factions[faction_id].shaping_effects
+                    reachable = list(gs.hex_map.get_expand_targets(faction_id, allow_enemy=allow_enemy))
+                    if reachable:
+                        chosen = ai.get_ai_expand_choice(reachable, gs.hex_map, sid)
+                        gs.submit_expand_choice(sid, chosen[0], chosen[1])
+            if gs.has_pending_expand_choices():
+                await broadcast_waiting_for(room, list(gs.expand_pending.keys()))
+            else:
+                await self._handle_change_choices_after_expand(room)
+            return
+        if gs.change_pending:
+            await self._handle_change_choices_after_expand(room)
+            return
+        if gs.phase in (Phase.VAGRANT_PHASE, Phase.AGENDA_PHASE):
+            await self._resolve_ai_inputs(room)
+            return
+
+    async def _send_current_state_to_player(self, room: GameRoom, spirit_id: str) -> None:
+        gs = room.game_state
+        if not gs:
+            return
+        await self._send_session_info(room, spirit_id)
+        await room.send_to(spirit_id, create_message(S2C.GAME_START, gs.get_snapshot().to_dict()))
+        await room.send_to(spirit_id, create_message(S2C.PRESENCE_STATE, room.build_presence_payload()))
+        await self._send_current_prompt(room, spirit_id)
+        await room.send_to(spirit_id, create_message(S2C.WAITING_FOR, {
+            "players_remaining": self._current_waiting_for(room),
+        }))
+
+    def _current_waiting_for(self, room: GameRoom) -> list[str]:
+        gs = room.game_state
+        if not gs:
+            return []
+        if gs.respawn_pending:
+            return [sid for sid in gs.respawn_pending.keys() if sid not in room.ai_spirit_ids]
+        if gs.war_support_pending:
+            return [sid for sid in gs.war_support_pending.keys() if sid not in room.ai_spirit_ids]
+        if gs.winner_choice_pending:
+            return [sid for sid in gs.winner_choice_pending.keys() if sid not in room.ai_spirit_ids]
+        if gs.spoils_pending:
+            return [sid for sid in gs.spoils_pending.keys() if sid not in room.ai_spirit_ids]
+        if gs.battleground_pending:
+            return [sid for sid in gs.battleground_pending.keys() if sid not in room.ai_spirit_ids]
+        if gs.ejection_pending:
+            return [sid for sid in gs.ejection_pending.keys() if sid not in room.ai_spirit_ids]
+        if gs.restrain_pending:
+            return [sid for sid in gs.restrain_pending.keys() if sid not in room.ai_spirit_ids]
+        if gs.shaping_pending:
+            return [sid for sid in gs.shaping_pending.keys() if sid not in room.ai_spirit_ids]
+        if gs.adaptation_pending:
+            return [sid for sid in gs.adaptation_pending.keys() if sid not in room.ai_spirit_ids]
+        if gs.expand_pending:
+            return [sid for sid in gs.expand_pending.keys() if sid not in room.ai_spirit_ids]
+        if gs.change_pending:
+            return [sid for sid in gs.change_pending.keys() if sid not in room.ai_spirit_ids]
+        return [sid for sid in gs.get_spirits_needing_input() if sid not in room.ai_spirit_ids]
+
+    async def _send_current_prompt(self, room: GameRoom, spirit_id: str) -> None:
+        gs = room.game_state
+        if not gs or spirit_id not in gs.spirits or spirit_id in room.ai_spirit_ids:
+            return
+
+        if spirit_id in gs.respawn_pending:
+            neutral = [{"q": h[0], "r": h[1]} for h in sorted(gs.hex_map.get_neutral_hexes())]
+            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
+                "phase": SubPhase.RESPAWN_CHOICE,
+                "turn": gs.turn,
+                "options": {"faction": gs.respawn_pending[spirit_id], "hexes": neutral},
+            }))
+            return
+        if spirit_id in gs.war_support_pending:
+            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
+                "phase": SubPhase.WAR_SUPPORT_CHOICE,
+                "turn": gs.turn,
+                "options": {"choices": gs.war_support_pending[spirit_id]},
+            }))
+            return
+        if spirit_id in gs.winner_choice_pending:
+            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
+                "phase": SubPhase.WINNER_CHOICE,
+                "turn": gs.turn,
+                "options": {"choices": gs.winner_choice_pending[spirit_id]},
+            }))
+            return
+        if spirit_id in gs.spoils_pending:
+            pending_list = gs.spoils_pending[spirit_id]
+            change_pendings = [p for p in pending_list if p.stage == SubPhase.CHANGE_CHOICE]
+            if change_pendings:
+                await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
+                    "phase": SubPhase.SPOILS_CHANGE_CHOICE,
+                    "turn": gs.turn,
+                    "options": {"choices": [
+                        {"cards": [c.value for c in p.change_cards], "loser": p.loser}
+                        for p in change_pendings
+                    ]},
+                }))
+                return
+            expand_pendings = [p for p in pending_list if p.stage == SubPhase.SPOILS_EXPAND_CHOICE]
+            if expand_pendings:
+                await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
+                    "phase": SubPhase.SPOILS_EXPAND_CHOICE,
+                    "turn": gs.turn,
+                    "options": {"choices": [
+                        {
+                            "loser": p.loser,
+                            "available_hexes": [{"q": h[0], "r": h[1]} for h in p.expand_hexes],
+                        }
+                        for p in expand_pendings
+                    ]},
+                }))
+                return
+            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
+                "phase": SubPhase.SPOILS_CHOICE,
+                "turn": gs.turn,
+                "options": {"choices": [
+                    {"cards": [c.value for c in p.cards], "loser": p.loser}
+                    for p in pending_list
+                ]},
+            }))
+            return
+        if spirit_id in gs.battleground_pending:
+            choice_entries = []
+            for entry in gs.battleground_pending[spirit_id]:
+                choice_entries.append({
+                    "war_id": entry["war_id"],
+                    "faction_a": entry["faction_a"],
+                    "faction_b": entry["faction_b"],
+                    "pairs": [
+                        {
+                            "a": {"q": pair[0][0], "r": pair[0][1]},
+                            "b": {"q": pair[1][0], "r": pair[1][1]},
+                        }
+                        for pair in entry["pairs"]
+                    ],
+                })
+            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
+                "phase": SubPhase.BATTLEGROUND_CHOICE,
+                "turn": gs.turn,
+                "options": {"choices": choice_entries},
+            }))
+            return
+        if spirit_id in gs.ejection_pending:
+            faction = gs.factions[gs.ejection_pending[spirit_id]]
+            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
+                "phase": SubPhase.EJECTION_CHOICE,
+                "turn": gs.turn,
+                "options": {
+                    "faction": gs.ejection_pending[spirit_id],
+                    "agenda_pool": [c.agenda_type.value for c in faction.agenda_pool],
+                    "agenda_types": [at.value for at in AgendaType],
+                },
+            }))
+            return
+        if spirit_id in gs.restrain_pending:
+            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
+                "phase": SubPhase.RESTRAIN_CHOICE,
+                "turn": gs.turn,
+                "options": {"cards": [card.value for card in gs.restrain_pending[spirit_id]]},
+            }))
+            return
+        if spirit_id in gs.shaping_pending:
+            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
+                "phase": SubPhase.SHAPING_CHOICE,
+                "turn": gs.turn,
+                "options": {"cards": gs.shaping_pending[spirit_id]},
+            }))
+            return
+        if spirit_id in gs.adaptation_pending:
+            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
+                "phase": SubPhase.ADAPTATION_CHOICE,
+                "turn": gs.turn,
+                "options": {"cards": gs.adaptation_pending[spirit_id]},
+            }))
+            return
+        if spirit_id in gs.expand_pending:
+            faction_id = gs.expand_pending[spirit_id]
+            allow_enemy = "Special Military Operations" in gs.factions[faction_id].shaping_effects
+            reachable = gs.hex_map.get_expand_targets(faction_id, allow_enemy=allow_enemy)
+            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
+                "phase": SubPhase.EXPAND_CHOICE,
+                "turn": gs.turn,
+                "options": {
+                    "faction": faction_id,
+                    "hexes": [{"q": h[0], "r": h[1]} for h in sorted(reachable)],
+                },
+            }))
+            return
+        if spirit_id in gs.change_pending:
+            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
+                "phase": SubPhase.CHANGE_CHOICE,
+                "turn": gs.turn,
+                "options": {"cards": [c.value for c in gs.change_pending[spirit_id]]},
+            }))
+            return
+        if gs.needs_input(spirit_id) and spirit_id not in gs.pending_actions:
+            await room.send_to(spirit_id, create_message(S2C.PHASE_START, {
+                "phase": gs.phase.value,
+                "turn": gs.turn,
+                "options": gs.get_phase_options(spirit_id),
+            }))
+
     async def _handle_game_message(self, room_code: str, spirit_id: str,
                                     msg_type: str, payload: dict):
         room = self.rooms.get(room_code)
@@ -270,6 +632,27 @@ class GameServer:
             if session and not session.is_spectator:
                 session.ready = not session.ready
                 await self._broadcast_lobby_state(room)
+
+        elif msg_type == C2S.VOTE_KICK_DISCONNECTED:
+            target_spirit_id = payload.get("target_spirit_id", "")
+            if not room.started:
+                await room.send_to(spirit_id, create_message(S2C.ERROR, {
+                    "message": "Kick votes are only available after the game starts.",
+                }))
+                return
+            if not room.can_vote_kick(target_spirit_id, spirit_id):
+                await room.send_to(spirit_id, create_message(S2C.ERROR, {
+                    "message": "That player cannot be kicked yet.",
+                }))
+                return
+            room.register_kick_vote(target_spirit_id, spirit_id)
+            target = room.players.get(target_spirit_id)
+            target_name = target.player_name if target else target_spirit_id
+            await self._broadcast_system_message(room, f"{room.players[spirit_id].player_name} voted to replace {target_name} with AI.")
+            await self._broadcast_presence_state(room)
+            if room.should_replace_with_ai(target_spirit_id):
+                await self._replace_player_with_ai(room, target_spirit_id)
+            return
 
         elif msg_type == C2S.START_GAME:
             if spirit_id != room.host_spirit_id:
@@ -296,8 +679,6 @@ class GameServer:
                 if room.human_player_count() + ai_count > 5:
                     ai_count = max(0, 5 - room.human_player_count())
                 room.ai_player_count = ai_count
-            if "tutorial_mode" in payload:
-                room.tutorial_mode = bool(payload["tutorial_mode"])
             if "play_era1" in payload or "play_era2" in payload:
                 next_era1 = bool(payload.get("play_era1", room.play_era1))
                 next_era2 = bool(payload.get("play_era2", room.play_era2))
@@ -338,7 +719,6 @@ class GameServer:
                 else:
                     await self._broadcast_waiting(room)
                     room.signal_submission()
-                    # In tutorial mode AIs wait for humans; trigger their submissions now
                     await self._resolve_ai_inputs(room)
 
         elif msg_type == C2S.SUBMIT_AGENDA_CHOICE:
@@ -630,7 +1010,6 @@ class GameServer:
                 player_info.append({"spirit_id": ai_sid, "name": name})
 
         room.game_state = GameState()
-        room.game_state.tutorial_mode = room.tutorial_mode
         room.game_state.ai_spirit_ids = set(room.ai_spirit_ids)
         enabled_eras = set()
         if room.play_era1:
@@ -647,6 +1026,7 @@ class GameServer:
 
         # Send initial state (pre-setup) so client starts with just starting hexes
         await room.broadcast(create_message(S2C.GAME_START, initial_snapshot.to_dict()))
+        await self._broadcast_presence_state(room)
 
         # Send each automated turn with its own post-turn snapshot so the
         # client's animation system can diff hex ownership correctly.
@@ -659,7 +1039,7 @@ class GameServer:
             }))
 
         await self._auto_resolve_phases(room)
-        asyncio.create_task(self._run_game_loop(room))
+        room.game_loop_task = asyncio.create_task(self._run_game_loop(room))
 
     def _simulate_until_era2(self, room: GameRoom) -> list[tuple[list[dict], object]]:
         """Run a full AI-controlled Era 1 until Era 2 is reached."""
@@ -785,17 +1165,23 @@ class GameServer:
     async def _run_game_loop(self, room: GameRoom):
         """Drive VAGRANT and AGENDA phase transitions using event-based waiting."""
         gs = room.game_state
-        await self._send_phase_options(room)
-        while gs.phase != Phase.GAME_OVER:
-            await room.wait_for_submission()
-            if not gs.all_inputs_received():
-                continue  # Spurious wakeup; wait for next signal
-            if gs.phase == Phase.VAGRANT_PHASE:
-                events = gs.resolve_current_phase()
-                await self._broadcast_phase_result(room, events)
-                await self._auto_resolve_phases(room)
-            elif gs.phase == Phase.AGENDA_PHASE:
-                await self._handle_agenda_resolution(room)
+        try:
+            await self._send_phase_options(room)
+            while gs.phase != Phase.GAME_OVER:
+                await room.wait_for_submission()
+                if not gs.all_inputs_received():
+                    continue  # Spurious wakeup; wait for next signal
+                if gs.phase == Phase.VAGRANT_PHASE:
+                    events = gs.resolve_current_phase()
+                    await self._broadcast_phase_result(room, events)
+                    await self._auto_resolve_phases(room)
+                elif gs.phase == Phase.AGENDA_PHASE:
+                    await self._handle_agenda_resolution(room)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if room.game_loop_task is asyncio.current_task():
+                room.game_loop_task = None
 
     async def _send_phase_options(self, room: GameRoom):
         gs = room.game_state
@@ -813,40 +1199,16 @@ class GameServer:
     async def _resolve_ai_inputs(self, room: GameRoom):
         """Submit actions on behalf of AI spirits and trigger resolution if complete."""
         gs = room.game_state
-        if room.tutorial_mode and gs.phase == Phase.VAGRANT_PHASE:
-            # In tutorial mode: wait for all human players to submit before assigning
-            # AI factions, so we can exclude human choices and prevent contention.
-            human_spirit_ids = set(gs.spirits.keys()) - room.ai_spirit_ids
-            humans_pending = [
-                sid for sid in human_spirit_ids
-                if gs.needs_input(sid) and sid not in gs.pending_actions
-            ]
-            if humans_pending:
-                return  # Wait for humans to submit first
-            # Collect human-chosen factions so AIs avoid them
-            taken: set[str] = set()
-            for sid in human_spirit_ids:
-                gt = gs.pending_actions.get(sid, {}).get("guide_target")
-                if gt:
-                    taken.add(gt)
-            for sid in sorted(list(room.ai_spirit_ids)):
-                if gs.needs_input(sid) and sid not in gs.pending_actions:
-                    action = ai.get_ai_vagrant_action(gs, sid, excluded_factions=taken)
-                    if action.get("guide_target"):
-                        taken.add(action["guide_target"])
-                    if action:
-                        gs.submit_action(sid, action)
-        else:
-            for sid in list(room.ai_spirit_ids):
-                if gs.needs_input(sid) and sid not in gs.pending_actions:
-                    if gs.phase == Phase.VAGRANT_PHASE:
-                        action = ai.get_ai_vagrant_action(gs, sid)
-                    elif gs.phase == Phase.AGENDA_PHASE:
-                        action = ai.get_ai_agenda_choice(gs, sid)
-                    else:
-                        continue
-                    if action:
-                        gs.submit_action(sid, action)
+        for sid in list(room.ai_spirit_ids):
+            if gs.needs_input(sid) and sid not in gs.pending_actions:
+                if gs.phase == Phase.VAGRANT_PHASE:
+                    action = ai.get_ai_vagrant_action(gs, sid)
+                elif gs.phase == Phase.AGENDA_PHASE:
+                    action = ai.get_ai_agenda_choice(gs, sid)
+                else:
+                    continue
+                if action:
+                    gs.submit_action(sid, action)
         await self._broadcast_waiting(room)
         room.signal_submission()
 

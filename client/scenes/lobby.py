@@ -87,8 +87,6 @@ class LobbyScene:
         self.play_era2 = True
         self.all_ready = False
         self.error_message = ""
-        self._tutorial_ready_sent = False
-        self._tutorial_start_sent = False
         self._tip_phrase_rect = pygame.Rect(0, 0, 0, 0)
         self._vp_phrase_rect = pygame.Rect(0, 0, 0, 0)
         self.era1_checkbox_rect = pygame.Rect(_CX - 36, _ERA_ROW_Y + 22, 18, 18)
@@ -240,29 +238,22 @@ class LobbyScene:
                 self.play_era2 = bool(payload["play_era2"])
             if "all_ready" in payload:
                 self.all_ready = payload["all_ready"]
-            # Tutorial mode: auto-ready and auto-start
-            if self.app.tutorial_mode:
-                if "spirit_id" in payload and not self._tutorial_ready_sent:
-                    self._tutorial_ready_sent = True
-                    self.app.network.send(C2S.READY)
-                if self.all_ready and self._is_host() and not self._tutorial_start_sent:
-                    self._tutorial_start_sent = True
-                    self.app.network.send(C2S.START_GAME)
         elif msg_type == S2C.ERROR:
             self.error_message = payload.get("message", "Unknown error")
             print(f"[lobby] Error: {self.error_message}")
             # If we never successfully joined a room, return to menu
             if not self.room_code:
-                self.app.network.disconnect()
                 menu = self.app.scenes["menu"]
+                host, port = self.app.server_host, self.app.server_port
+                room_code = menu.host_code if menu.active_flow == "host_multiplayer" else menu.room_code
+                self.app.clear_saved_multiplayer_rejoin(menu.player_name, room_code, host, port)
+                self.app.network.disconnect()
                 menu.error_message = self.error_message
                 # Reset lobby for next attempt
                 self.players = []
                 self.spectators = []
                 self.my_spirit_id = ""
                 self.error_message = ""
-                self._tutorial_ready_sent = False
-                self._tutorial_start_sent = False
                 self.app.set_scene("menu")
 
     def update(self, dt):
@@ -372,10 +363,6 @@ class LobbyScene:
             draw_dotted_underline(screen, self._vp_phrase_rect.x, self._vp_phrase_rect.bottom - 1, self._vp_phrase_rect.width)
             era_title = self.small_font.render("Play Eras", True, (160, 160, 140))
             screen.blit(era_title, (_CX - era_title.get_width() // 2, era_y + 2))
-            era_disp = self.small_font.render(
-                f"Play Eras: {'Era 1' if self.play_era1 else ''}{' + ' if self.play_era1 and self.play_era2 else ''}{'Era 2' if self.play_era2 else ''}",
-                True, (160, 160, 140))
-            screen.blit(era_disp, (_CX - era_disp.get_width() // 2, era_y + 24))
             ai_disp = self.small_font.render(f"AI Players: {self.ai_player_count}", True, (160, 160, 140))
             screen.blit(ai_disp, (_CX - ai_disp.get_width() // 2, ai_y + 8))
 

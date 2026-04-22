@@ -1,17 +1,15 @@
 """WebSocket client: background thread, message queue, reconnection."""
 
 import asyncio
-import json
 import threading
 import queue
-import time
 from typing import Optional
 try:
     import websockets
 except ImportError:
     websockets = None  # type: ignore
 
-from shared.protocol import create_message, parse_message
+from shared.protocol import create_message, parse_message, C2S
 
 
 class NetworkClient:
@@ -26,6 +24,7 @@ class NetworkClient:
         self._connected = False
         self._uri = ""
         self._should_stop = False
+        self._rejoin_payload: dict | None = None
 
     def connect(self, host: str, port: int):
         self._uri = f"ws://{host}:{port}"
@@ -47,6 +46,9 @@ class NetworkClient:
                     self._connected = True
                     retry_delay = 1
                     print(f"[net] Connected to {self._uri}")
+                    if self._rejoin_payload:
+                        await ws.send(create_message(C2S.JOIN_GAME, self._rejoin_payload))
+                        print("[net] Sent automatic rejoin payload")
                     # Flush any messages queued before connection was ready
                     while not self._outgoing.empty():
                         try:
@@ -109,8 +111,15 @@ class NetworkClient:
     def connected(self) -> bool:
         return self._connected
 
+    def set_rejoin_payload(self, payload: dict | None) -> None:
+        self._rejoin_payload = dict(payload) if payload else None
+
+    def clear_rejoin_payload(self) -> None:
+        self._rejoin_payload = None
+
     def disconnect(self):
         self._should_stop = True
+        self.clear_rejoin_payload()
         if self._ws and self._loop:
             asyncio.run_coroutine_threadsafe(self._ws.close(), self._loop)
         self._connected = False

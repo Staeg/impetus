@@ -1,13 +1,15 @@
 """Tests for game state machine."""
 
+import asyncio
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from shared.constants import Phase, AgendaType, IdolType, ChangeModifierTarget, Era
 from shared.models import HexCoord
+from shared.protocol import parse_message, S2C
 from server.game_state import GameState
-from server.server import GameServer, GameRoom
+from server.server import GameServer, GameRoom, PlayerSession
 from server import ai
 
 
@@ -43,6 +45,16 @@ def advance_to_vagrant(gs, max_iter=20):
                 gs.submit_winner_choice(sid, choices)
             continue
         gs.resolve_current_phase()
+
+
+class DummyWs:
+    remote_address = ("test", 0)
+
+    def __init__(self):
+        self.sent = []
+
+    async def send(self, message: str):
+        self.sent.append(parse_message(message))
 
 
 class TestGameStateSetup:
@@ -837,3 +849,90 @@ class TestWorshipRework:
         assert faction.worship_spirit == "spirit_0"
         assert gs.spirits["spirit_0"].is_vagrant is True
         assert any(e["type"] == "worship_replaced" for e in events)
+
+
+class TestReconnectAndDisconnectFlow:
+    def test_kick_vote_requires_disconnect_delay_and_unanimity(self):
+        room = GameRoom("ABCD")
+        target = PlayerSession(DummyWs(), "Alice", "alice")
+        voter_a = PlayerSession(DummyWs(), "Bob", "bob")
+        voter_b = PlayerSession(DummyWs(), "Cara", "cara")
+        room.add_player(target)
+        room.add_player(voter_a)
+        room.add_player(voter_b)
+        room.started = True
+        room.remove_player("alice")
+
+        assert room.can_vote_kick("alice", "bob") is False
+
+        room.players["alice"].disconnected_at -= 31
+
+        assert room.can_vote_kick("alice", "bob") is True
+        assert room.register_kick_vote("alice", "bob") is True
+        assert room.should_replace_with_ai("alice") is False
+
+        assert room.register_kick_vote("alice", "cara") is True
+        assert room.should_replace_with_ai("alice") is True
+
+    def test_reconnect_join_matches_disconnected_player_name_and_sends_sync_messages(self):
+        async def run_test():
+            server = GameServer()
+            room = GameRoom("ABCD")
+            room.started = True
+            gs = GameState()
+            gs.setup_game([
+                {"spirit_id": "alice", "name": "Alice"},
+                {"spirit_id": "bob", "name": "Bob"},
+            ])
+            room.game_state = gs
+            session = PlayerSession(DummyWs(), "Alice", "alice")
+            session.connected = False
+            room.add_player(session)
+            room.add_player(PlayerSession(DummyWs(), "Bob", "bob"))
+            server.rooms["ABCD"] = room
+
+            ws = DummyWs()
+            room_code, spirit_id = await server._handle_join(ws, {
+                "player_name": "Alice",
+                "room_code": "ABCD",
+            })
+
+            assert room_code == "ABCD"
+            assert spirit_id == "alice"
+            sent_types = [msg_type for msg_type, _ in ws.sent]
+            assert S2C.SESSION_INFO in sent_types
+            assert S2C.GAME_START in sent_types
+            assert S2C.WAITING_FOR in sent_types
+
+        asyncio.run(run_test())
+
+    def test_reconnect_join_rejects_wrong_player_name_for_disconnected_session(self):
+        async def run_test():
+            server = GameServer()
+            room = GameRoom("ABCD")
+            room.started = True
+            gs = GameState()
+            gs.setup_game([
+                {"spirit_id": "alice", "name": "Alice"},
+                {"spirit_id": "bob", "name": "Bob"},
+            ])
+            room.game_state = gs
+            session = PlayerSession(DummyWs(), "Alice", "alice")
+            session.connected = False
+            room.add_player(session)
+            room.add_player(PlayerSession(DummyWs(), "Bob", "bob"))
+            server.rooms["ABCD"] = room
+
+            ws = DummyWs()
+            room_code, spirit_id = await server._handle_join(ws, {
+                "player_name": "Carol",
+                "room_code": "ABCD",
+            })
+
+            assert room_code is None
+            assert spirit_id is None
+            assert ws.sent == [
+                (S2C.ERROR, {"message": "Game already started and this session cannot be rejoined."})
+            ]
+
+        asyncio.run(run_test())

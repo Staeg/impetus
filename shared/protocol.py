@@ -25,6 +25,7 @@ class C2S:
     SUBMIT_RESPAWN_CHOICE        = "submit_respawn_choice"
     SUBMIT_BATTLEGROUND_CHOICE   = "submit_battleground_choice"
     SUBMIT_WAR_SUPPORT_CHOICE    = "submit_war_support_choice"
+    VOTE_KICK_DISCONNECTED       = "vote_kick_disconnected"
 
 
 class S2C:
@@ -36,6 +37,9 @@ class S2C:
     PHASE_RESULT = "phase_result"
     GAME_OVER    = "game_over"
     ERROR        = "error"
+    SESSION_INFO = "session_info"
+    PRESENCE_STATE = "presence_state"
+    SYSTEM_MESSAGE = "system_message"
 
 
 class SubPhase:

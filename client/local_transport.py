@@ -124,5 +124,7 @@ class LocalTransport:
             if self._task and not self._task.done():
                 self._task.cancel()
         else:
-            if self._loop and not self._loop.is_closed():
-                self._loop.call_soon_threadsafe(self._loop.stop)
+            if self._thread and self._thread.is_alive():
+                self._thread.join(timeout=2.0)
+            self._loop = None
+            self._thread = None

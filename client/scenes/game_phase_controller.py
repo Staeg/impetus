@@ -43,8 +43,7 @@ class GamePhaseController:
                 scene.app.network.send(C2S.SUBMIT_VAGRANT_ACTION, payload)
                 scene._clear_selection()
                 scene.has_submitted = True
-                if scene.tutorial:
-                    scene.tutorial.notify_action("vagrant_submitted", {})
+                scene._tutorial_notify("vagrant_submitted", payload.copy())
             return
 
         if scene.phase == Phase.AGENDA_PHASE.value:
@@ -54,8 +53,7 @@ class GamePhaseController:
                 })
                 scene._clear_selection()
                 scene.has_submitted = True
-                if scene.tutorial:
-                    scene.tutorial.notify_action("agenda_submitted", {})
+                scene._tutorial_notify("agenda_submitted", {"agenda_index": scene.selected_agenda_index})
             return
 
         if scene.phase == SubPhase.EJECTION_CHOICE:
@@ -71,8 +69,13 @@ class GamePhaseController:
                 scene._clear_selection()
                 scene.ejection_pending = False
                 scene.has_submitted = True
-                if scene.tutorial:
-                    scene.tutorial.notify_action("ejection_submitted", {})
+                scene._tutorial_notify(
+                    "ejection_submitted",
+                    {
+                        "remove_type": scene.selected_ejection_remove_type,
+                        "add_type": scene.selected_ejection_add_type,
+                    },
+                )
             return
 
         if scene.phase == SubPhase.RESTRAIN_CHOICE:
@@ -87,20 +90,24 @@ class GamePhaseController:
 
         if scene.phase == SubPhase.SPOILS_CHOICE:
             if all(e.selected >= 0 for e in scene.spoils_entries):
+                card_indices = [e.selected for e in scene.spoils_entries]
                 scene.app.network.send(
                     C2S.SUBMIT_SPOILS_CHOICE,
-                    {"card_indices": [e.selected for e in scene.spoils_entries]},
+                    {"card_indices": card_indices},
                 )
+                scene._tutorial_notify("spoils_choice_submitted", {"card_indices": card_indices})
                 scene.spoils_entries = []
                 scene.has_submitted = True
             return
 
         if scene.phase == SubPhase.SPOILS_CHANGE_CHOICE:
             if all(e.selected >= 0 for e in scene.spoils_change_entries):
+                card_indices = [e.selected for e in scene.spoils_change_entries]
                 scene.app.network.send(
                     C2S.SUBMIT_SPOILS_CHANGE_CHOICE,
-                    {"card_indices": [e.selected for e in scene.spoils_change_entries]},
+                    {"card_indices": card_indices},
                 )
+                scene._tutorial_notify("spoils_change_submitted", {"card_indices": card_indices})
                 scene.spoils_change_entries = []
                 scene.has_submitted = True
             return
@@ -119,6 +126,7 @@ class GamePhaseController:
             if scene.selected_hex:
                 q, r = scene.selected_hex
                 scene.app.network.send(C2S.SUBMIT_RESPAWN_CHOICE, {"q": q, "r": r})
+                scene._tutorial_notify("respawn_choice_submitted", {"hex": scene.selected_hex})
                 scene.respawn_choice_hexes = set()
                 scene.respawn_choice_faction = ""
                 scene.selected_hex = None
@@ -164,17 +172,16 @@ class GamePhaseController:
         scene.has_submitted = False
         action = scene.phase_options.get("action", "none")
 
-        if scene.tutorial:
-            if scene.phase == Phase.VAGRANT_PHASE.value and action == "choose":
-                scene.tutorial.notify_game_event("vagrant_phase_started", {"turn": scene.turn})
-            elif scene.phase == Phase.AGENDA_PHASE.value and action == "choose_agenda":
-                hand = scene.phase_options.get("hand", [])
-                scene.tutorial.notify_game_event(
-                    "agenda_phase_started",
-                    {"turn": scene.turn, "draw_count": len(hand)},
-                )
-            elif scene.phase == SubPhase.EJECTION_CHOICE:
-                scene.tutorial.notify_game_event("ejection_phase_started", {"turn": scene.turn})
+        if scene.phase == Phase.VAGRANT_PHASE.value and action == "choose":
+            scene._tutorial_notify("vagrant_phase_started", {"turn": scene.turn})
+        elif scene.phase == Phase.AGENDA_PHASE.value and action == "choose_agenda":
+            hand = scene.phase_options.get("hand", [])
+            scene._tutorial_notify(
+                "agenda_phase_started",
+                {"turn": scene.turn, "draw_count": len(hand)},
+            )
+        elif scene.phase == SubPhase.EJECTION_CHOICE:
+            scene._tutorial_notify("ejection_phase_started", {"turn": scene.turn})
 
         sub_phase_setup = {
             SubPhase.RESTRAIN_CHOICE: self._setup_restrain_choice_ui,
@@ -200,13 +207,12 @@ class GamePhaseController:
     def _setup_change_choice_ui(self) -> None:
         scene = self.scene
         scene.change_cards = scene.phase_options.get("cards") or []
-        if scene.tutorial:
-            my_spirit = scene.spirits.get(scene.app.my_spirit_id, {})
-            influence = my_spirit.get("influence", 0)
-            scene.tutorial.notify_game_event(
-                "change_drawn",
-                {"influence": influence, "card_count": len(scene.change_cards)},
-            )
+        my_spirit = scene.spirits.get(scene.app.my_spirit_id, {})
+        influence = my_spirit.get("influence", 0)
+        scene._tutorial_notify(
+            "change_drawn",
+            {"influence": influence, "card_count": len(scene.change_cards)},
+        )
 
     def _setup_restrain_choice_ui(self) -> None:
         scene = self.scene
@@ -226,8 +232,7 @@ class GamePhaseController:
 
     def _setup_spoils_choice_ui(self) -> None:
         scene = self.scene
-        if scene.tutorial:
-            scene.tutorial.notify_game_event("guided_spoils_drawn", {})
+        scene._tutorial_notify("guided_spoils_drawn", {})
         choices = scene.phase_options.get("choices", [])
         if choices:
             scene.spoils_entries = [

@@ -4,5 +4,21 @@
     1280,
     800
   ],
-  "display_mode": "borderless"
+  "display_mode": "borderless",
+  "multiplayer_rejoins": {
+    "1": {
+      "player_name": "1",
+      "room_code": "W",
+      "reconnect_token": "30849ed9171a40adb057efb264d349c0",
+      "server_host": "localhost",
+      "server_port": 8765
+    },
+    "2": {
+      "player_name": "2",
+      "room_code": "E",
+      "reconnect_token": "2f33a290920e42ddb6e98f8aa0bbb577",
+      "server_host": "localhost",
+      "server_port": 8765
+    }
+  }
 }

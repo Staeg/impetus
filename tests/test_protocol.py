@@ -37,6 +37,10 @@ class TestProtocol:
         """C2S and S2C values are plain strings; equality with string literals works."""
         assert C2S.JOIN_GAME == "join_game"
         assert S2C.LOBBY_STATE == "lobby_state"
+        assert C2S.VOTE_KICK_DISCONNECTED == "vote_kick_disconnected"
+        assert S2C.SESSION_INFO == "session_info"
+        assert S2C.PRESENCE_STATE == "presence_state"
+        assert S2C.SYSTEM_MESSAGE == "system_message"
 
     def test_parse_returns_str(self):
         msg = create_message(S2C.GAME_START, {})

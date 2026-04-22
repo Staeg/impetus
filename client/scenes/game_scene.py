@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 import math
-import time
 from typing import Any
 import pygame
 from dataclasses import dataclass
@@ -12,7 +11,7 @@ from shared.constants import (
     BATTLE_IDOL_VP, AFFLUENCE_IDOL_VP, SPRAWL_IDOL_VP, SPREAD_IDOL_VP,
 )
 from shared.protocol import C2S, S2C, SubPhase
-from shared.hex_utils import axial_to_pixel
+from shared.hex_utils import axial_to_pixel, hex_vertices
 from shared.era_data import (
     GUIDANCE_STEP_RESTRAIN,
     GUIDANCE_STEP_SHAPE,
@@ -38,7 +37,7 @@ from client.input_actions import map_game_input
 from client.scenes.animation_orchestrator import AnimationOrchestrator
 from client.scenes.change_tracker import FactionChangeTracker
 from client.scenes.game_phase_controller import GamePhaseController
-from client.tutorial import TutorialManager
+from client.scenes.subphase_state import should_preserve_subphase
 from client.renderer.popup_manager import (
     PopupManager, HoverRegion, TooltipDescriptor, TooltipRegistry,
     set_ui_rects, _WEIGHT_TEXT, _WEIGHT_NON_TEXT,
@@ -339,6 +338,10 @@ class GameScene:
         self._ingame_menu_item_rects: list[tuple[str, pygame.Rect]] = []
         self._ingame_confirm_yes_rect: pygame.Rect | None = None
         self._ingame_confirm_no_rect: pygame.Rect | None = None
+        self.disconnected_players: list[dict] = []
+        self.disconnect_kick_buttons: dict[str, Button] = {}
+        self.status_banner_message: str | None = None
+        self.status_banner_timer: float = 0.0
 
         # UI buttons
         self.action_buttons: list[Button] = []
@@ -426,10 +429,8 @@ class GameScene:
         self._font = None
         self._small_font = None
 
-        # Tutorial overlay (active in tutorial mode)
-        self.tutorial: TutorialManager | None = None
-        self._tutorial_anim_notified: bool = False
-        self._tutorial_last_step: int = -1
+        self.tutorial_feedback_message: str | None = None
+        self._tutorial_context: dict[str, Any] = {"inspection_tags": set()}
 
         # Queued PHASE_RESULT payloads — processed one at a time as animations finish
         self._phase_result_queue: list[dict] = []
@@ -450,6 +451,8 @@ class GameScene:
             S2C.WAITING_FOR:  self._handle_waiting_for,
             S2C.GAME_OVER:    self._handle_game_over,
             S2C.ERROR:        self._handle_error,
+            S2C.PRESENCE_STATE: self._handle_presence_state,
+            S2C.SYSTEM_MESSAGE: self._handle_system_message,
         }
         self._apply_viewport_layout()
 
@@ -481,6 +484,258 @@ class GameScene:
         if self._small_font is None:
             self._small_font = get_font(13)
         return self._small_font
+
+    def set_tutorial_feedback(self, message: str | None) -> None:
+        self.tutorial_feedback_message = message
+
+    def get_tutorial_context(self) -> dict[str, Any]:
+        return self._tutorial_context
+
+    def clear_tutorial_state(self) -> None:
+        self.tutorial_feedback_message = None
+        self._tutorial_context = {"inspection_tags": set()}
+
+    def get_tutorial_overlay_layout(self) -> dict[str, Any]:
+        avoid_rects: list[pygame.Rect] = []
+        if self.agenda_hand:
+            avoid_rects.extend(self._calc_left_choice_card_rects(len(self.agenda_hand)))
+        if self.change_cards:
+            avoid_rects.extend(self._calc_left_choice_card_rects(len(self.change_cards)))
+        for panel_cards in self.spoils_card_rects:
+            avoid_rects.extend(panel_cards)
+        avoid_rects.extend(self.remove_buttons[i].rect for i in range(len(self.remove_buttons)))
+        avoid_rects.extend(self.action_buttons[i].rect for i in range(len(self.action_buttons)))
+        if self.phase == Phase.VAGRANT_PHASE.value:
+            avoid_rects.extend(btn.rect for btn in self.faction_buttons)
+            avoid_rects.extend(btn.rect for btn in self.idol_buttons)
+            if self.submit_button:
+                selection_rect = pygame.Rect(
+                    18,
+                    max(_RIBBON_BOTTOM_Y + 12, self.submit_button.rect.top - 34),
+                    max(260, _HEX_MAP_LEFT_X - 36),
+                    28,
+                )
+                avoid_rects.append(selection_rect)
+        if self.submit_button:
+            preferred = pygame.Rect(
+                18,
+                self.submit_button.rect.top - 158,
+                430,
+                136,
+            )
+        else:
+            preferred = pygame.Rect(18, 108, 430, 136)
+        candidates = [
+            preferred,
+            pygame.Rect(18, 108, 430, 136),
+            pygame.Rect(_FACTION_PANEL_X, 108, min(430, _PANEL_W), 136),
+        ]
+        message_rect = candidates[-1]
+        top_limit = _RIBBON_BOTTOM_Y + 10
+        for candidate in candidates:
+            if candidate.top < top_limit:
+                continue
+            if any(candidate.colliderect(rect.inflate(14, 14)) for rect in avoid_rects):
+                continue
+            message_rect = candidate
+            break
+        return {"message_rect": message_rect}
+
+    def draw_tutorial_highlights(self, screen: pygame.Surface, highlights: list[Any]) -> None:
+        if screen.get_width() < 32 or screen.get_height() < 32:
+            return
+        pulse = 0.7 + 0.3 * math.sin(pygame.time.get_ticks() / 180.0)
+        for spec in highlights:
+            accent = spec.accent
+            if spec.kind == "faction":
+                self._draw_tutorial_rects(screen, accent, pulse, self._faction_highlight_rects(spec.value))
+                faction_hexes = {
+                    hex_coord
+                    for hex_coord, owner in self.hex_ownership.items()
+                    if owner == spec.value
+                }
+                self._draw_tutorial_hexes(screen, accent, pulse, faction_hexes)
+            elif spec.kind == "neutral_hexes":
+                neutral_hexes = {
+                    hex_coord
+                    for hex_coord, owner in self.hex_ownership.items()
+                    if owner is None
+                }
+                self._draw_tutorial_hexes(screen, accent, pulse, neutral_hexes)
+            elif spec.kind == "idol_tokens":
+                self._draw_tutorial_idols(screen, accent, pulse)
+            elif spec.kind == "idol_type":
+                rects = [btn.rect for btn in self.idol_buttons if btn.text.lower() == str(spec.value).title().lower()]
+                self._draw_tutorial_rects(screen, accent, pulse, rects)
+            elif spec.kind == "agenda_type":
+                rects = []
+                if self.agenda_hand:
+                    for index, rect in enumerate(self._calc_left_choice_card_rects(len(self.agenda_hand))):
+                        if self.agenda_hand[index].get("agenda_type") == spec.value:
+                            rects.append(rect)
+                self._draw_tutorial_rects(screen, accent, pulse, rects)
+            elif spec.kind == "selectable_hexes":
+                self._draw_tutorial_hexes(screen, accent, pulse, self._tutorial_selectable_hexes(str(spec.value)))
+            elif spec.kind == "submit_button":
+                rects = [self.submit_button.rect] if self.submit_button else []
+                self._draw_tutorial_rects(screen, accent, pulse, rects)
+            elif spec.kind == "change_cards":
+                rects = self._calc_left_choice_card_rects(len(self.change_cards)) if self.change_cards else []
+                self._draw_tutorial_rects(screen, accent, pulse, rects)
+            elif spec.kind == "winner_choices":
+                self._draw_tutorial_rects(screen, accent, pulse, [btn["rect"] for btn in self.winner_choice_buttons])
+            elif spec.kind == "spoils_cards":
+                self._draw_tutorial_rects(
+                    screen,
+                    accent,
+                    pulse,
+                    [rect for panel_cards in self.spoils_card_rects for rect in panel_cards],
+                )
+            elif spec.kind == "spoils_change_cards":
+                self._draw_tutorial_rects(
+                    screen,
+                    accent,
+                    pulse,
+                    [rect for panel_cards in self.spoils_card_rects for rect in panel_cards],
+                )
+            elif spec.kind == "ejection_remove_buttons":
+                self._draw_tutorial_rects(screen, accent, pulse, [btn.rect for btn in self.remove_buttons])
+            elif spec.kind == "ejection_add_buttons":
+                self._draw_tutorial_rects(screen, accent, pulse, [btn.rect for btn in self.action_buttons])
+            elif spec.kind == "panel_counter":
+                self._draw_tutorial_rects(screen, accent, pulse, self._panel_counter_rects(spec.value))
+            elif spec.kind == "war" and self.wars:
+                self.hex_renderer.draw_war_glow_arrows(
+                    screen,
+                    self.wars,
+                    self.hex_ownership,
+                    self.input_handler,
+                    SCREEN_WIDTH,
+                    SCREEN_HEIGHT,
+                    pulse=pulse,
+                )
+
+    def _panel_counter_rects(self, counter_name: str) -> list[pygame.Rect]:
+        if counter_name == "worship" and self.ui_renderer.panel_worship_rect:
+            return [self.ui_renderer.panel_worship_rect]
+        if counter_name == "influence":
+            rect = self._persistent_spirit_panel_rects.get("influence")
+            return [rect] if rect else []
+        if counter_name == "guidance":
+            rect = self._persistent_spirit_panel_rects.get("guidance")
+            return [rect] if rect else []
+        return []
+
+    def _faction_highlight_rects(self, faction_id: str) -> list[pygame.Rect]:
+        rects: list[pygame.Rect] = []
+        ribbon_rect = self.ribbon_faction_rects.get(faction_id)
+        if ribbon_rect:
+            rects.append(ribbon_rect)
+        for btn, fid in zip(self.faction_buttons, self.faction_button_ids):
+            if fid == faction_id:
+                rects.append(btn.rect)
+        if self.panel_faction == faction_id and self.ui_renderer.faction_panel_rect:
+            rects.append(self.ui_renderer.faction_panel_rect)
+        return rects
+
+    def _tutorial_selectable_hexes(self, selector: str) -> set[tuple[int, int]]:
+        if selector == "idol":
+            return {
+                hex_coord
+                for hex_coord, owner in self.hex_ownership.items()
+                if owner is None
+            }
+        if selector == "expand":
+            return set(self.expand_choice_hexes)
+        if selector == "respawn":
+            return set(self.respawn_choice_hexes)
+        if selector == "spoils_expand":
+            return set(self.spoils_expand_selectable_hexes)
+        return set()
+
+    def _draw_tutorial_rects(
+        self,
+        screen: pygame.Surface,
+        accent: tuple[int, int, int],
+        pulse: float,
+        rects: list[pygame.Rect],
+    ) -> None:
+        for rect in rects:
+            if rect.width <= 0 or rect.height <= 0:
+                continue
+            pad_x = 6 if rect.width <= 180 else 8
+            pad_y = 4 if rect.height <= 40 else 6
+            glow_rect = rect.inflate(pad_x * 2, pad_y * 2)
+            radius = max(8, min(18, glow_rect.height // 2))
+            overlay = pygame.Surface((glow_rect.width, glow_rect.height), pygame.SRCALPHA)
+            alpha = int(28 + 30 * pulse)
+            pygame.draw.rect(overlay, (*accent, alpha), overlay.get_rect(), border_radius=radius)
+            screen.blit(overlay, glow_rect.topleft)
+            pygame.draw.rect(screen, accent, glow_rect, 2, border_radius=radius)
+
+    def _draw_tutorial_hexes(
+        self,
+        screen: pygame.Surface,
+        accent: tuple[int, int, int],
+        pulse: float,
+        hexes: set[tuple[int, int]],
+    ) -> None:
+        if SCREEN_WIDTH < 32 or SCREEN_HEIGHT < 32:
+            return
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        border_width = 2 + int(round(pulse * 2))
+        for q, r in hexes:
+            verts = hex_vertices(q, r, HEX_SIZE)
+            screen_verts = [
+                self.input_handler.world_to_screen(vx, vy, SCREEN_WIDTH, SCREEN_HEIGHT)
+                for vx, vy in verts
+            ]
+            pygame.draw.polygon(overlay, (*accent, 34), screen_verts)
+            pygame.draw.polygon(screen, accent, screen_verts, border_width)
+        screen.blit(overlay, (0, 0))
+
+    def _draw_tutorial_idols(
+        self,
+        screen: pygame.Surface,
+        accent: tuple[int, int, int],
+        pulse: float,
+    ) -> None:
+        if not self.display_idols:
+            return
+        spirit_index_map = {sid: i for i, sid in enumerate(sorted(self.spirits.keys()))}
+        ring_width = 2 + int(round(pulse * 2))
+        for idol in self.display_idols:
+            owner_spirit = getattr(idol, "owner_spirit", None)
+            player_idx = spirit_index_map.get(owner_spirit, 0)
+            ix, iy = self.hex_renderer.get_idol_slot_screen(
+                idol.position.q,
+                idol.position.r,
+                player_idx,
+                self.input_handler,
+                SCREEN_WIDTH,
+                SCREEN_HEIGHT,
+            )
+            pygame.draw.circle(screen, accent, (ix, iy), self.hex_renderer.get_idol_radius() + 8, ring_width)
+
+    def _tutorial_runtime(self):
+        return getattr(self.app, "tutorial_runtime", None)
+
+    def _tutorial_notify(self, event_type: str, payload: dict[str, Any] | None = None) -> None:
+        runtime = self._tutorial_runtime()
+        if runtime:
+            runtime.handle_semantic_event(event_type, payload or {})
+
+    def _tutorial_guard(self, action_kind: str, payload: dict[str, Any] | None = None) -> bool:
+        runtime = self._tutorial_runtime()
+        if not runtime:
+            return True
+        allowed, message = runtime.can_perform(action_kind, payload or {}, self)
+        if not allowed:
+            self._hex_error_message = message or "That action is locked for this tutorial step."
+            self._hex_error_timer = 2.0
+            runtime.set_feedback(message or "That action is locked for this tutorial step.")
+            return False
+        return True
 
     def _update_state_from_snapshot(self, data: dict, suppress_animations: bool = False):
         """Update local state from a game state snapshot dict."""
@@ -627,7 +882,7 @@ class GameScene:
 
         if action and action.kind == "cancel":
             if self.game_over:
-                self.app.set_scene("menu")
+                self.app.leave_game_to_menu()
                 return
             self.popup_manager.handle_escape()
 
@@ -678,17 +933,27 @@ class GameScene:
             self._update_guided_hex_hover(mouse_pos)
             # Popup keyword hover
             self.popup_manager.update_hover(mouse_pos)
-            # Tutorial: notify when player hovers something with a tooltip
-            if self.tutorial and (self.hovered_card_tooltip or self.hovered_idol
-                                  or self.hovered_pool_faction or self.hovered_ribbon_war_fid):
-                self.tutorial.notify_action("tooltip_hovered", {})
+            for button in self.disconnect_kick_buttons.values():
+                button.update(mouse_pos)
 
         if action and action.kind == "primary_click":
             click_pos = action.payload
+            for player in self.disconnected_players:
+                spirit_id = player.get("spirit_id")
+                button = self.disconnect_kick_buttons.get(spirit_id)
+                if not spirit_id or not button:
+                    continue
+                if button.clicked(click_pos):
+                    if int(player.get("disconnected_seconds", 0)) < 30 or not self._can_vote_kick(player):
+                        return
+                    self.app.network.send(C2S.VOTE_KICK_DISCONNECTED, {
+                        "target_spirit_id": spirit_id,
+                    })
+                    return
             # In-game menu: confirm exit dialog takes priority
             if self._ingame_menu_confirm_exit:
                 if self._ingame_confirm_yes_rect and self._ingame_confirm_yes_rect.collidepoint(click_pos):
-                    self.app.set_scene("menu")
+                    self.app.leave_game_to_menu()
                     return
                 if self._ingame_confirm_no_rect and self._ingame_confirm_no_rect.collidepoint(click_pos):
                     self._ingame_menu_confirm_exit = False
@@ -714,16 +979,9 @@ class GameScene:
                 # Click outside menu: close it
                 self._ingame_menu_open = False
 
-            # Tutorial input gate: let tutorial consume/block clicks first
-            if self.tutorial:
-                consumed = self.tutorial.handle_click(click_pos)
-                if self.tutorial.return_to_menu_requested:
-                    self.app.set_scene("menu")
-                    return
-                if consumed:
-                    return
-                if self.tutorial.is_hard_blocking():
-                    return  # block all game input
+            runtime = self._tutorial_runtime()
+            if runtime and runtime.handle_click(click_pos):
+                return
             clicked_log_idx = self._get_clicked_event_log_index(click_pos)
             if clicked_log_idx != self._event_log_cycle_log_idx:
                 self._reset_event_log_cycle()
@@ -736,7 +994,7 @@ class GameScene:
             if not (self.spectator_mode and not self.game_over):
                 # Check submit button
                 if self.submit_button and self.submit_button.clicked(event.pos):
-                    if not (self.tutorial and self.tutorial.is_blocking_submit()):
+                    if self._tutorial_guard("submit", {"phase": self.phase}):
                         self._submit_action()
                     return
 
@@ -747,6 +1005,7 @@ class GameScene:
                         if self.selected_ejection_add_type == chosen_remove:
                             return
                         self.selected_ejection_remove_type = chosen_remove
+                        self._tutorial_notify("ejection_remove_selected", {"agenda_type": chosen_remove})
                         return
 
                 # Check action buttons
@@ -758,19 +1017,23 @@ class GameScene:
                 # Check faction buttons
                 for btn, fid in zip(self.faction_buttons, self.faction_button_ids):
                     if btn.clicked(event.pos):
+                        if not self._tutorial_guard("select_faction", {"faction": fid}):
+                            return
                         self._handle_faction_select(fid)
-                        # Notify guidance_selected for step 6 gate
-                        if self.tutorial and btn.enabled:
-                            self.tutorial.notify_action("guidance_selected", {"faction": fid})
+                        self._tutorial_notify("select_faction", {"faction": fid})
                         return
 
                 # Check idol type buttons
                 for btn in self.idol_buttons:
                     if btn.clicked(event.pos):
+                        if not self._tutorial_guard("select_idol", {"idol_type": btn.text.lower()}):
+                            return
                         if self.current_era == "era_1":
                             self._begin_idol_drag(btn)
+                            self._tutorial_notify("select_idol", {"idol_type": btn.text.lower()})
                             return
                         self._handle_idol_select(btn.text.lower())
+                        self._tutorial_notify("select_idol", {"idol_type": btn.text.lower()})
                         return
 
                 if self._is_mouse_over_selected_preview(event.pos):
@@ -781,15 +1044,21 @@ class GameScene:
                 if self.agenda_hand:
                     for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.agenda_hand))):
                         if rect.collidepoint(event.pos):
+                            if not self._tutorial_guard("select_agenda", {"agenda_index": i, "agenda": self.agenda_hand[i].get("agenda_type", "")}):
+                                return
                             self.selected_agenda_index = i
+                            self._tutorial_notify("select_agenda", {"agenda_index": i, "agenda": self.agenda_hand[i].get("agenda_type", "")})
                             return
 
                 # Check change card clicks
                 if self.change_cards:
                     for i, rect in enumerate(self._calc_left_choice_card_rects(len(self.change_cards))):
                         if rect.collidepoint(event.pos):
+                            if self.phase == SubPhase.CHANGE_CHOICE and not self._tutorial_guard("select_change_card", {"card_index": i, "card": self.change_cards[i]}):
+                                return
                             if self.phase == SubPhase.CHANGE_CHOICE:
                                 self._submit_card_choice(i, C2S.SUBMIT_CHANGE_CHOICE, "change_cards")
+                                self._tutorial_notify("change_choice_selected", {"card_index": i, "card": self.change_cards[i]})
                             elif self.phase == SubPhase.RESTRAIN_CHOICE:
                                 self.selected_restrain_index = i
                             elif self.phase == SubPhase.SHAPING_CHOICE:
@@ -811,15 +1080,21 @@ class GameScene:
                     for entry, rects in zip(self.spoils_entries, self.spoils_card_rects):
                         for i, rect in enumerate(rects):
                             if rect.collidepoint(event.pos):
+                                if not self._tutorial_guard("select_spoils_card", {"card_index": i, "card": entry.cards[i]}):
+                                    return
                                 entry.selected = i
                                 entry.expanded = True
+                                self._tutorial_notify("spoils_choice_selected", {"card_index": i, "card": entry.cards[i]})
                                 return
 
                 # Winner choice buttons
                 if self.phase == SubPhase.WINNER_CHOICE and self.winner_choice_buttons:
                     for btn in self.winner_choice_buttons:
                         if btn["rect"].collidepoint(event.pos):
+                            if not self._tutorial_guard("select_winner", {"war_id": btn["war_id"], "winner": btn["faction"]}):
+                                return
                             self.winner_selections[btn["war_id"]] = btn["faction"]
+                            self._tutorial_notify("winner_choice_selected", {"war_id": btn["war_id"], "winner": btn["faction"]})
                             return
 
                 if self.phase == SubPhase.BATTLEGROUND_CHOICE and self.battleground_choice_buttons:
@@ -861,8 +1136,11 @@ class GameScene:
                     for entry, rects in zip(self.spoils_change_entries, self.spoils_card_rects):
                         for i, rect in enumerate(rects):
                             if rect.collidepoint(event.pos):
+                                if not self._tutorial_guard("select_spoils_change_card", {"card_index": i, "card": entry.cards[i]}):
+                                    return
                                 entry.selected = i
                                 entry.expanded = True
+                                self._tutorial_notify("spoils_change_selected", {"card_index": i, "card": entry.cards[i]})
                                 return
 
             # Check change delta chip clicks (faction panel)
@@ -880,8 +1158,6 @@ class GameScene:
                             # scroll_offset=0 shows last entries; we want log_idx visible
                             offset = total - log_idx - visible_count
                             self.event_log_scroll_offset = max(0, min(offset, total - visible_count))
-                    if self.tutorial:
-                        self.tutorial.notify_action("delta_clicked", {})
                     return
 
             # Idol tooltip: click spirit names to toggle that spirit's panel
@@ -975,12 +1251,8 @@ class GameScene:
             if self.popup_manager.has_popups():
                 self.popup_manager.handle_right_click(
                     action.payload, self.small_font, SCREEN_WIDTH)
-                if self.tutorial:
-                    self.tutorial.notify_action("tooltip_unfrozen", {})
             else:
-                pinned = self._try_pin_hovered_tooltip(action.payload)
-                if self.tutorial and pinned:
-                    self.tutorial.notify_action("tooltip_frozen", {})
+                self._try_pin_hovered_tooltip(action.payload)
 
         if action and action.kind == "primary_release" and self.dragging_idol:
             self._finish_idol_drag(action.payload)
@@ -991,6 +1263,7 @@ class GameScene:
             if self.selected_ejection_remove_type == chosen_add:
                 return
             self.selected_ejection_add_type = chosen_add
+            self._tutorial_notify("ejection_add_selected", {"agenda_type": chosen_add})
             return
 
     def _handle_faction_select(self, faction_id: str):
@@ -998,8 +1271,8 @@ class GameScene:
         self.panel_faction = faction_id
         self.spirit_panel_spirit_id = None
         self.faction_panel_scroll_offset = 0
-        if self.tutorial:
-            self.tutorial.notify_action("faction_selected", {"faction": faction_id})
+        self._tutorial_notify("focus_faction", {"faction": faction_id})
+        self._tutorial_notify("inspect_faction", {"faction": faction_id})
 
     def _select_faction_from_text(self, faction_id: str):
         self.panel_faction = faction_id
@@ -1010,10 +1283,9 @@ class GameScene:
             blocked = set(self.phase_options.get("worship_blocked", []))
             if faction_id in available and faction_id not in blocked:
                 self.selected_faction = faction_id
-                if self.tutorial:
-                    self.tutorial.notify_action("guidance_selected", {"faction": faction_id})
-        if self.tutorial:
-            self.tutorial.notify_action("faction_selected", {"faction": faction_id})
+                self._tutorial_notify("select_faction", {"faction": faction_id})
+        self._tutorial_notify("focus_faction", {"faction": faction_id})
+        self._tutorial_notify("inspect_faction", {"faction": faction_id})
 
     def _clear_focus_selection(self):
         self.panel_faction = None
@@ -1132,17 +1404,26 @@ class GameScene:
     def _handle_hex_click(self, hex_coord: tuple[int, int]):
         if self.phase == SubPhase.SPOILS_EXPAND_CHOICE:
             if hex_coord in self.spoils_expand_selectable_hexes:
+                if not self._tutorial_guard("select_hex", {"hex": hex_coord, "kind": "spoils_expand"}):
+                    return
                 idx = min(self.spoils_expand_display_index, len(self.spoils_expand_choices) - 1)
                 self.spoils_expand_selections[idx] = hex_coord
                 self.selected_hex = hex_coord
+                self._tutorial_notify("spoils_expand_choice_selected", {"hex": hex_coord})
             return
         if self.phase == SubPhase.EXPAND_CHOICE:
             if hex_coord in self.expand_choice_hexes:
+                if not self._tutorial_guard("select_hex", {"hex": hex_coord, "kind": "expand"}):
+                    return
                 self.selected_hex = hex_coord
+                self._tutorial_notify("expand_choice_selected", {"hex": hex_coord})
             return
         if self.phase == SubPhase.RESPAWN_CHOICE:
             if hex_coord in self.respawn_choice_hexes:
+                if not self._tutorial_guard("select_hex", {"hex": hex_coord, "kind": "respawn"}):
+                    return
                 self.selected_hex = hex_coord
+                self._tutorial_notify("respawn_choice_selected", {"hex": hex_coord})
             return
         if self.phase == Phase.VAGRANT_PHASE.value and self.hex_ownership.get(hex_coord) is None:
             if self.current_era == "era_1":
@@ -1162,12 +1443,27 @@ class GameScene:
                 self._hex_error_message = "Hex already contains one of your Idols!"
                 self._hex_error_timer = 2.0
                 return
+            if not self._tutorial_guard("select_hex", {"hex": hex_coord, "kind": "idol"}):
+                return
             self.selected_hex = hex_coord
+            self._tutorial_notify("select_hex", {"hex": hex_coord, "kind": "idol"})
         else:
             owner = self.hex_ownership.get(hex_coord)
             if owner:
+                self._tutorial_context.setdefault("inspection_tags", set()).add("owned")
+                if any(
+                    isinstance(idol, dict)
+                    and idol.get("position", {}).get("q") == hex_coord[0]
+                    and idol.get("position", {}).get("r") == hex_coord[1]
+                    for idol in self.all_idols
+                ):
+                    self._tutorial_context["inspection_tags"].add("idol")
+                    self._tutorial_notify("inspect_idol", {"hex": hex_coord, "owner": owner})
+                self._tutorial_notify("inspect_hex", {"hex": hex_coord, "owner": owner})
                 self._select_faction_from_text(owner)
             else:
+                self._tutorial_context.setdefault("inspection_tags", set()).add("neutral")
+                self._tutorial_notify("inspect_hex", {"hex": hex_coord, "owner": None})
                 self._clear_focus_selection()
 
     def _submit_action(self):
@@ -1240,6 +1536,10 @@ class GameScene:
         self.game_over_data = None
         self._ingame_menu_open = False
         self._ingame_menu_confirm_exit = False
+        self.disconnected_players = []
+        self.disconnect_kick_buttons = {}
+        self.status_banner_message = None
+        self.status_banner_timer = 0.0
         self.event_log = []
         self.event_log_meta = []
         self._reset_event_log_cycle()
@@ -1248,13 +1548,11 @@ class GameScene:
         self.event_log.append("Game started.")
         self.event_log_meta.append({"factions": [], "spans": []})
         self.spectator_mode = self.app.my_spirit_id not in self.spirits
-        # Activate tutorial overlay in tutorial mode
-        if self.app.tutorial_mode and not self.spectator_mode:
-            self.tutorial = TutorialManager()
-            self.tutorial.activate()
-            self._tutorial_anim_notified = False
-        else:
-            self.tutorial = None
+        self.clear_tutorial_state()
+        runtime = self._tutorial_runtime()
+        if runtime and not self.spectator_mode:
+            runtime.attach_scene(self)
+        self._tutorial_notify("game_started", {"turn": self.turn})
 
     def _handle_phase_start(self, payload):
         phase = payload.get("phase", "")
@@ -1271,7 +1569,6 @@ class GameScene:
             and (
                 self.orchestrator.has_animations_playing()
                 or self._phase_result_queue
-                or (self.tutorial and self.tutorial.is_blocking_phase_ui())
             )
         )
         if should_defer:
@@ -1281,14 +1578,34 @@ class GameScene:
             self.turn = payload.get("turn", self.turn)
             self.phase_options = payload.get("options", {})
             self._setup_phase_ui()
+            self._tutorial_notify("phase_start", {"phase": self.phase, "turn": self.turn, "options": self.phase_options})
 
     def _handle_waiting_for(self, payload):
         self.waiting_for = payload.get("players_remaining", [])
 
+    def _handle_presence_state(self, payload):
+        players = payload.get("players", [])
+        self.disconnected_players = [
+            player for player in players
+            if (
+                not player.get("connected", True)
+                and not player.get("is_spectator", False)
+                and not player.get("is_ai", False)
+            )
+        ]
+        self._rebuild_disconnect_kick_buttons()
+
+    def _handle_system_message(self, payload):
+        message = payload.get("message", "")
+        if not message:
+            return
+        self.event_log.append(message)
+        self.event_log_meta.append({"factions": [], "spans": []})
+        self.status_banner_message = message
+        self.status_banner_timer = 5.0
+
     def _handle_phase_result(self, payload):
         """Queue PHASE_RESULT for sequential processing in update()."""
-        if self.tutorial:
-            self.tutorial.notify_game_event("phase_result_received", {})
         self._phase_result_queue.append(payload)
 
     def _process_phase_result(self, payload):
@@ -1324,21 +1641,18 @@ class GameScene:
         if "state" in payload:
             self._update_state_from_snapshot(payload["state"], suppress_animations=suppress_animations)
         # Preserve sub-phases while this player still has cards to choose
-        if active_sub_phase == SubPhase.CHANGE_CHOICE and self.change_cards:
-            self.phase = active_sub_phase
-        elif active_sub_phase == SubPhase.SPOILS_CHOICE and self.spoils_entries:
-            self.phase = active_sub_phase
-        elif active_sub_phase == SubPhase.SPOILS_CHANGE_CHOICE and self.spoils_change_entries:
-            self.phase = active_sub_phase
-        elif active_sub_phase == SubPhase.EJECTION_CHOICE and self.ejection_pending:
-            self.phase = active_sub_phase
-        elif active_sub_phase == SubPhase.WINNER_CHOICE and self.winner_choice_wars:
-            self.phase = active_sub_phase
-        elif active_sub_phase == SubPhase.SPOILS_EXPAND_CHOICE and self.spoils_expand_choices:
-            self.phase = active_sub_phase
-        elif active_sub_phase == SubPhase.EXPAND_CHOICE and self.expand_choice_hexes:
-            self.phase = active_sub_phase
-        elif active_sub_phase == SubPhase.RESPAWN_CHOICE and self.respawn_choice_hexes:
+        if should_preserve_subphase(active_sub_phase, {
+            "change_cards": self.change_cards,
+            "spoils_entries": self.spoils_entries,
+            "spoils_change_entries": self.spoils_change_entries,
+            "spoils_expand_choices": self.spoils_expand_choices,
+            "winner_choice_wars": self.winner_choice_wars,
+            "battleground_choice_entries": self.battleground_choice_entries,
+            "war_support_entries": self.war_support_entries,
+            "ejection_pending": self.ejection_pending,
+            "expand_choice_hexes": self.expand_choice_hexes,
+            "respawn_choice_hexes": self.respawn_choice_hexes,
+        }):
             self.phase = active_sub_phase
         if has_vagrant_resolution and not suppress_animations:
             self._queue_vagrant_resolution_animations(events)
@@ -1441,23 +1755,7 @@ class GameScene:
         # Clear previews after processing phase results
         self.preview_guidance = None
         self.preview_idol = None
-
-    def _refire_tutorial_phase_events(self):
-        """Re-fire phase events for steps that became pending while already in the relevant phase."""
-        if not self.tutorial or not self.tutorial._step_pending_show:
-            return
-        idx = self.tutorial.step_idx
-        action = self.phase_options.get("action", "none")
-        # Steps 8 and 10 trigger on agenda_phase_started; may already be in that phase
-        if idx in (8, 10) and self.phase == Phase.AGENDA_PHASE.value and action == "choose_agenda":
-            hand = self.phase_options.get("hand", [])
-            self.tutorial.notify_game_event("agenda_phase_started", {
-                "turn": self.turn,
-                "draw_count": len(hand),
-            })
-        # Step 14 triggers on ejection_phase_started
-        elif idx == 14 and self.phase == SubPhase.EJECTION_CHOICE:
-            self.tutorial.notify_game_event("ejection_phase_started", {"turn": self.turn})
+        self._tutorial_notify("phase_result_applied", {"events": events, "phase": self.phase, "turn": self.turn})
 
     def _handle_game_over(self, payload):
         # Game-over event will be in the PHASE_RESULT events; transition scene
@@ -1466,6 +1764,40 @@ class GameScene:
     def _handle_error(self, payload):
         self.event_log.append(f"Error: {payload.get('message', '?')}")
         self.event_log_meta.append({"factions": [], "spans": []})
+
+    def _can_vote_kick(self, player: dict) -> bool:
+        my_spirit_id = self.app.my_spirit_id
+        if not my_spirit_id or my_spirit_id == player.get("spirit_id"):
+            return False
+        if float(player.get("disconnected_seconds", 0)) < 30.0:
+            return False
+        if my_spirit_id in set(player.get("kick_voters", [])):
+            return False
+        return my_spirit_id in set(player.get("required_voters", []))
+
+    def _rebuild_disconnect_kick_buttons(self) -> None:
+        self.disconnect_kick_buttons = {}
+        if not self.disconnected_players:
+            return
+        panel_rect = self._disconnect_panel_rect()
+        row_y = panel_rect.y + 34
+        for player in self.disconnected_players:
+            button = Button(
+                pygame.Rect(panel_rect.right - 106, row_y + 4, 92, 28),
+                "Vote Kick",
+                (120, 76, 60),
+            )
+            self.disconnect_kick_buttons[player["spirit_id"]] = button
+            row_y += 42
+
+    def _disconnect_panel_rect(self) -> pygame.Rect:
+        panel_width = 280
+        panel_height = 42 + 42 * max(1, len(self.disconnected_players))
+        return pygame.Rect(SCREEN_WIDTH - panel_width - 16, 52, panel_width, panel_height)
+
+    def _advance_disconnect_presence(self, dt: float) -> None:
+        for player in self.disconnected_players:
+            player["disconnected_seconds"] = float(player.get("disconnected_seconds", 0.0)) + dt
 
     def _setup_change_choice_ui(self):
         self.phase_controller._setup_change_choice_ui()
@@ -1497,6 +1829,7 @@ class GameScene:
                 return
             choices.append({"war_id": wc["war_id"], "winner": sel})
         self.app.network.send(C2S.SUBMIT_WINNER_CHOICE, {"choices": choices})
+        self._tutorial_notify("winner_choice_submitted", {"choices": choices})
         self.winner_choice_wars = []
         self.winner_selections = {}
         self.winner_choice_buttons = []
@@ -1521,6 +1854,7 @@ class GameScene:
             return
         choices = [{"hex": {"q": sel[0], "r": sel[1]}} for sel in self.spoils_expand_selections]
         self.app.network.send(C2S.SUBMIT_SPOILS_EXPAND_CHOICE, {"choices": choices})
+        self._tutorial_notify("spoils_expand_submitted", {"choices": choices})
         self.spoils_expand_choices = []
         self.spoils_expand_selections = []
         self.spoils_expand_selectable_hexes = set()
@@ -2374,14 +2708,11 @@ class GameScene:
         elif etype == "guide_contested":
             if self.app.my_spirit_id in event.get("spirits", []):
                 self.preview_guidance = None
-            if self.tutorial:
-                self.tutorial.notify_game_event("guide_contested", event)
+            self._tutorial_notify("guide_contested", event)
         elif etype == "war_declared":
-            if self.tutorial:
-                self.tutorial.notify_game_event("war_declared", event)
+            self._tutorial_notify("war_declared", event)
         elif etype == "faction_respawned":
-            if self.tutorial:
-                self.tutorial.notify_game_event("faction_respawned", event)
+            self._tutorial_notify("faction_respawned", event)
 
     @staticmethod
     def _format_faction_list(factions: list[str]) -> str:
@@ -2544,6 +2875,13 @@ class GameScene:
                 import copy
                 self._display_idols = copy.deepcopy(self.all_idols)
                 self._pending_idol_reveal_delay = None
+        if self.status_banner_timer > 0.0:
+            self.status_banner_timer = max(0.0, self.status_banner_timer - dt)
+            if self.status_banner_timer == 0.0:
+                self.status_banner_message = None
+        if self.disconnected_players:
+            self._advance_disconnect_presence(dt)
+            self._rebuild_disconnect_kick_buttons()
         # Incrementally reveal hexes, gold, and wars as animations become active
         if self._display_hex_ownership is not None:
             self.orchestrator.apply_hex_reveals(self._display_hex_ownership)
@@ -2558,40 +2896,20 @@ class GameScene:
         # immediately since is_all_done() stays True after they are processed.
         # Must run before try_show_deferred_phase_ui so snapshots can't overwrite
         # a PHASE_START that was deferred because the queue was non-empty.
-        if not (self.tutorial and self.tutorial.is_blocking_animations()):
-            while not self.orchestrator.has_animations_playing() and self._phase_result_queue and not self._pending_game_over:
-                payload = self._phase_result_queue.pop(0)
-                game_over_event = next(
-                    (e for e in payload.get("events", []) if e.get("type") == "game_over"),
-                    None,
-                )
-                self._process_phase_result(payload)
-                if game_over_event:
-                    self._pending_game_over = game_over_event
-                    break
-        # Tutorial: step tracking + animation-done notification.
-        # Must run BEFORE try_show_deferred_phase_ui so that block_phase_ui can be
-        # set by animations_done (step 10) before the next phase is shown.
-        if self.tutorial:
-            if self.tutorial.step_idx != self._tutorial_last_step:
-                self._tutorial_last_step = self.tutorial.step_idx
-                self._tutorial_anim_notified = False
-                self._refire_tutorial_phase_events()
-            block_ui = self.tutorial.is_blocking_phase_ui()
-            anim_idle = (
-                not self.orchestrator.has_animations_playing()
-                and not self._phase_result_queue
-                and (not self.orchestrator.deferred_phase_start or block_ui)
+        while not self.orchestrator.has_animations_playing() and self._phase_result_queue and not self._pending_game_over:
+            payload = self._phase_result_queue.pop(0)
+            game_over_event = next(
+                (e for e in payload.get("events", []) if e.get("type") == "game_over"),
+                None,
             )
-            if anim_idle:
-                if not self._tutorial_anim_notified:
-                    self._tutorial_anim_notified = True
-                    self.tutorial.notify_game_event(
-                        "animations_done", {"phase": self.phase, "turn": self.turn})
-            else:
-                self._tutorial_anim_notified = False
-        if not (self.tutorial and self.tutorial.is_blocking_phase_ui()):
-            self.orchestrator.try_show_deferred_phase_ui(self)
+            self._process_phase_result(payload)
+            if game_over_event:
+                self._pending_game_over = game_over_event
+                break
+        runtime = self._tutorial_runtime()
+        if runtime:
+            runtime.update(dt)
+        self.orchestrator.try_show_deferred_phase_ui(self)
         # Clear display state when all animations are done
         if self._display_hex_ownership is not None and not self.orchestrator.has_animations_playing():
             self._clear_display_state()
@@ -2752,13 +3070,6 @@ class GameScene:
             highlighted_war_pairs=self._get_highlighted_war_pairs(),
         )
 
-        # Tutorial war-arrow glow (drawn on top of hex grid, under UI panels)
-        if self.tutorial and self.tutorial.highlight_war_arrows and render_wars:
-            pulse = 0.5 + 0.5 * math.sin(time.monotonic() * 3.0)
-            self.hex_renderer.draw_war_glow_arrows(
-                screen, render_wars, hex_own,
-                self.input_handler, SCREEN_WIDTH, SCREEN_HEIGHT, pulse=pulse)
-
         # Draw world-space effect animations (border text + arrows)
         self.orchestrator.render_effect_animations(screen, screen_space_only=False, small_font=self.small_font)
 
@@ -2915,8 +3226,7 @@ class GameScene:
         if self.phase == Phase.VAGRANT_PHASE.value:
             self._render_vagrant_ui(screen)
         elif self.phase == Phase.AGENDA_PHASE.value:
-            if not (self.tutorial and self.tutorial.hide_phase_ui):
-                self._render_agenda_ui(screen)
+            self._render_agenda_ui(screen)
         elif self.phase in (SubPhase.CHANGE_CHOICE, SubPhase.RESTRAIN_CHOICE,
                             SubPhase.SHAPING_CHOICE, SubPhase.ADAPTATION_CHOICE):
             self._render_change_ui(screen)
@@ -3144,39 +3454,18 @@ class GameScene:
             surf.set_alpha(int(alpha))
             screen.blit(surf, surf.get_rect(center=(SCREEN_WIDTH // 2, 108)))
 
+        if self.status_banner_message and self.status_banner_timer > 0.0:
+            self._render_status_banner(screen)
+        if self.disconnected_players:
+            self._render_disconnect_panel(screen)
+
         # Final scores panel (drawn after everything else so it's always visible)
         if self.game_over:
             self._render_game_over_panel(screen)
 
-        # Tutorial overlay (drawn after game-over panel, before tooltips)
-        if self.tutorial:
-            tut_rects = {
-                "faction_info": pygame.Rect(_FACTION_PANEL_X, 102, _PANEL_W, _cur_faction_panel_h),
-                "spirit_panel": pygame.Rect(
-                    _FACTION_PANEL_X, _spirit_panel_y, _PANEL_W, _SPIRIT_PANEL_MAX_H),
-                "event_log": pygame.Rect(
-                    _FACTION_PANEL_X, _event_log_y, _PANEL_W, _cur_event_log_h),
-            }
-            for fid, r in self.ribbon_faction_rects.items():
-                tut_rects[f"ribbon_{fid}"] = r
-            for btn, fid in zip(self.faction_buttons, self.faction_button_ids):
-                tut_rects[f"guidance_btn_{fid}"] = btn.rect
-            for fid, r in self.pool_icon_rects.items():
-                tut_rects[f"pool_icons_{fid}"] = r
-            if self.agenda_hand:
-                card_rects = self._calc_left_choice_card_rects(len(self.agenda_hand))
-                tut_rects["agenda_cards_area"] = pygame.Rect(
-                    card_rects[0].x, card_rects[0].y,
-                    card_rects[0].w, card_rects[-1].bottom - card_rects[0].y,
-                )
-                for i, r in enumerate(card_rects):
-                    tut_rects[f"agenda_card_{i}"] = r
-            for fid, r in self.ribbon_war_rects.items():
-                tut_rects[f"ribbon_war_{fid}"] = r
-            if self.ui_renderer.panel_war_rect:
-                tut_rects["panel_war"] = self.ui_renderer.panel_war_rect
-            self.tutorial.exposed_rects = tut_rects
-            self.tutorial.render(screen, self.font, self.small_font)
+        runtime = self._tutorial_runtime()
+        if runtime:
+            runtime.render_overlay(screen, self.font, self.small_font)
 
         # Render the single active tooltip (suppressed when popups are open)
         self.tooltip_registry.render(screen, self.small_font, self.popup_manager)
@@ -3186,6 +3475,53 @@ class GameScene:
 
         # In-game menu button and dropdown (always on top)
         self._render_ingame_menu(screen)
+
+    def _render_status_banner(self, screen: pygame.Surface) -> None:
+        if not self.status_banner_message:
+            return
+        surf = self.small_font.render(self.status_banner_message, True, (245, 232, 190))
+        rect = surf.get_rect()
+        bg_rect = pygame.Rect(0, 0, rect.width + 28, rect.height + 12)
+        bg_rect.midtop = (SCREEN_WIDTH // 2, 48)
+        pygame.draw.rect(screen, (44, 36, 30), bg_rect, border_radius=10)
+        pygame.draw.rect(screen, (189, 155, 90), bg_rect, 1, border_radius=10)
+        screen.blit(surf, surf.get_rect(center=bg_rect.center))
+
+    def _render_disconnect_panel(self, screen: pygame.Surface) -> None:
+        panel_rect = self._disconnect_panel_rect()
+        pygame.draw.rect(screen, (24, 26, 35), panel_rect, border_radius=10)
+        pygame.draw.rect(screen, (125, 96, 78), panel_rect, 2, border_radius=10)
+        title = self.small_font.render("Disconnected Players", True, (226, 216, 196))
+        screen.blit(title, (panel_rect.x + 12, panel_rect.y + 10))
+
+        row_y = panel_rect.y + 34
+        for player in self.disconnected_players:
+            elapsed = int(player.get("disconnected_seconds", 0))
+            remaining = max(0, 30 - elapsed)
+            voters = set(player.get("kick_voters", []))
+            required_voters = set(player.get("required_voters", []))
+            eligible = self._can_vote_kick(player)
+            button = self.disconnect_kick_buttons.get(player.get("spirit_id"))
+
+            name = self.small_font.render(player.get("name", "?"), True, (210, 210, 220))
+            status_text = f"{elapsed}s offline"
+            if player.get("required_voters"):
+                status_text += f"  {len(voters)}/{len(required_voters)} votes"
+            status = self.small_font.render(status_text, True, (144, 152, 170))
+            screen.blit(name, (panel_rect.x + 12, row_y))
+            screen.blit(status, (panel_rect.x + 12, row_y + 16))
+
+            if button:
+                if remaining > 0:
+                    button.text = f"Kick in {remaining}s"
+                elif self.app.my_spirit_id in voters:
+                    button.text = "Voted"
+                elif eligible:
+                    button.text = "Vote Kick"
+                else:
+                    button.text = "Waiting"
+                button.draw(screen, self.small_font)
+            row_y += 42
 
     def _render_game_over_panel(self, screen: pygame.Surface):
         """Draw the final scores panel on the left side of the screen."""
@@ -3438,19 +3774,9 @@ class GameScene:
     )
 
     def _draw_submit_button(self, screen):
-        """Draw the submit button, applying tutorial-blocking override if active.
-
-        Call this after setting submit_button.enabled/tooltip for the current phase.
-        If the tutorial is currently blocking submit, the button is greyed out with
-        a "Follow the tutorial for now!" hover tooltip regardless of game-state.
-        Also handles tooltip rendering so call sites don't need to repeat it.
-        """
+        """Draw the submit button and register its tooltip when appropriate."""
         if not self.submit_button:
             return
-        if self.tutorial and self.tutorial.is_blocking_submit():
-            self.submit_button.enabled = False
-            self.submit_button.tooltip = "Follow the tutorial for now!"
-            self.submit_button.tooltip_always = True
         self.submit_button.draw(screen, self.font)
         if (self.submit_button.tooltip and self.submit_button.hovered
                 and (not self.submit_button.enabled or self.submit_button.tooltip_always)):
